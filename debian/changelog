@@ -1,5 +1,6 @@
 btrfs-progs (4.5.2-1) unstable; urgency=medium
 
+  [ Dimitri John Ledkov ]
   * Thanks for NMU of package rename.
   * New upstream release 4.5.2.
   * Upload using dgit.
@@ -11,6 +12,10 @@ btrfs-progs (4.5.2-1) unstable; urgency=medium
     initramfs. Thus won't fix Closes: #801192
   * No sponsorship required Closes: #823474
   * Add Provides btrfs-tools-udeb to the -progs-udeb package.
+
+  [ Ben Hutchings ]
+  * Show only errors from boot-time "btrfs scan" if "quiet" is
+    used. Closes: #812722
 
  -- Dimitri John Ledkov <xnox@debian.org>  Tue, 10 May 2016 09:59:51 +0100
 
