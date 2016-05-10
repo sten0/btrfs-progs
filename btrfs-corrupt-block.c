@@ -162,7 +162,7 @@ static int corrupt_keys_in_block(struct btrfs_root *root, u64 bytenr)
 {
 	struct extent_buffer *eb;
 
-	eb = read_tree_block(root, bytenr, root->leafsize, 0);
+	eb = read_tree_block(root, bytenr, root->nodesize, 0);
 	if (!extent_buffer_uptodate(eb))
 		return -EIO;;
 
@@ -289,7 +289,7 @@ static void btrfs_corrupt_extent_tree(struct btrfs_trans_handle *trans,
 		struct extent_buffer *next;
 
 		next = read_tree_block(root, btrfs_node_blockptr(eb, i),
-				       root->leafsize,
+				       root->nodesize,
 				       btrfs_node_ptr_generation(eb, i));
 		if (!extent_buffer_uptodate(next))
 			continue;
@@ -700,7 +700,7 @@ static int corrupt_metadata_block(struct btrfs_root *root, u64 block,
 		return -EINVAL;
 	}
 
-	eb = read_tree_block(root, block, root->leafsize, 0);
+	eb = read_tree_block(root, block, root->nodesize, 0);
 	if (!extent_buffer_uptodate(eb)) {
 		fprintf(stderr, "Couldn't read in tree block %s\n", field);
 		return -EINVAL;
@@ -1012,7 +1012,7 @@ out:
 	return ret;
 
 }
-int main(int ac, char **av)
+int main(int argc, char **argv)
 {
 	struct cache_tree root_cache;
 	struct btrfs_key key;
@@ -1069,7 +1069,7 @@ int main(int ac, char **av)
 			{ NULL, 0, NULL, 0 }
 		};
 
-		c = getopt_long(ac, av, "l:c:b:eEkuUi:f:x:m:K:IDdr:C:",
+		c = getopt_long(argc, argv, "l:c:b:eEkuUi:f:x:m:K:IDdr:C:",
 				long_options, NULL);
 		if (c < 0)
 			break;
@@ -1141,11 +1141,10 @@ int main(int ac, char **av)
 				print_usage(c != GETOPT_VAL_HELP);
 		}
 	}
-	set_argv0(av);
-	ac = ac - optind;
-	if (check_argc_min(ac, 1))
+	set_argv0(argv);
+	if (check_argc_min(argc - optind, 1))
 		print_usage(1);
-	dev = av[optind];
+	dev = argv[optind];
 
 	radix_tree_init();
 	cache_tree_init(&root_cache);

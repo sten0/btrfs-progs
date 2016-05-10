@@ -11,7 +11,7 @@ SYNOPSIS
 
 DESCRIPTION
 -----------
-The primary purpose of the balance feature is to spread block groups accross
+The primary purpose of the balance feature is to spread block groups across
 all devices so they match constraints defined by the respective profiles. See
 `mkfs.btrfs`(8) section 'PROFILES' for more details.
 The scope of the balancing process can be further tuned by use of filters that
@@ -67,6 +67,12 @@ resume interrupted balance
 start the balance operation according to the specified filters, no filters
 will rewrite the entire filesystem. The process runs in the foreground.
 +
+NOTE: the balance command without filters will basically rewrite everything
+in the filesystem. The run time is potentially very long, depending on the
+filesystem size. To prevent starting a full balance by accident, the user is
+warned and has a few seconds to cancel the operation before it starts. The
+warning and delay can be skipped with '--full-balance' option.
++
 `Options`
 +
 -d[<filters>]::::
@@ -93,7 +99,7 @@ moving data from single to RAID1). This functionality is accessed through the
 '-d', '-m' or '-s' options to btrfs balance start, which filter on data,
 metadata and system blocks respectively.
 
-A filter has the following stucture: 'type'[='params'][,'type'=...]
+A filter has the following structure: 'type'[='params'][,'type'=...]
 
 The available types are:
 
@@ -106,7 +112,7 @@ are a list of profile names separated by "'|'" (pipe).
 Balances only block groups with usage under the given percentage. The
 value of 0 is allowed and will clean up completely unused block groups, this
 should not require any new work space allocated. You may want to use 'usage=0'
-in case balance is returnin ENOSPC and your filesystem is not too full.
+in case balance is returning ENOSPC and your filesystem is not too full.
 +
 The argument may be a single value or a range. The single value 'N' means 'at
 most N percent used', equivalent to '..N' range syntax. Kernels prior to 4.4
@@ -147,7 +153,7 @@ only the single value format.  The range minimum and maximum are inclusive.
 
 *stripes=<range>*::
 Balance only block groups which have the given number of stripes. The parameter
-is a range specified as 'start..end'. Makes sense fo block group profiles that
+is a range specified as 'start..end'. Makes sense for block group profiles that
 utilize striping, ie. RAID0/10/5/6.  The range minimum and maximum are
 inclusive.
 
@@ -192,7 +198,7 @@ command:
 
 An example of a filter that does not require workspace is 'usage=0'. This will
 scan through all unused block groups of a given type and will reclaim the
-space. Ater that it might be possible to run other filters.
+space. After that it might be possible to run other filters.
 
 **CONVERSIONS ON MULTIPLE DEVICES**
 
