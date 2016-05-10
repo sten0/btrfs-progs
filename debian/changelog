@@ -12,6 +12,7 @@ btrfs-progs (4.5.2-1) unstable; urgency=medium
     initramfs. Thus won't fix Closes: #801192
   * No sponsorship required Closes: #823474
   * Add Provides btrfs-tools-udeb to the -progs-udeb package.
+  * Enable verbose build.
 
   [ Ben Hutchings ]
   * Show only errors from boot-time "btrfs scan" if "quiet" is
