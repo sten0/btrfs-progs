@@ -31,6 +31,9 @@
 #include "disk-io.h"
 #include "commands.h"
 #include "btrfs-list.h"
+#include "cmds-inspect-dump-tree.h"
+#include "cmds-inspect-dump-super.h"
+#include "cmds-inspect-tree-stats.h"
 
 static const char * const inspect_cmd_group_usage[] = {
 	"btrfs inspect-internal <command> <args>",
@@ -51,7 +54,7 @@ static int __ino_to_path_fd(u64 inum, int fd, int verbose, const char *prepend)
 
 	ret = ioctl(fd, BTRFS_IOC_INO_PATHS, &ipa);
 	if (ret < 0) {
-		printf("ioctl ret=%d, error: %s\n", ret, strerror(errno));
+		error("ino paths ioctl: %s", strerror(errno));
 		goto out;
 	}
 
@@ -190,7 +193,7 @@ static int cmd_inspect_logical_resolve(int argc, char **argv)
 
 	ret = ioctl(fd, BTRFS_IOC_LOGICAL_INO, &loi);
 	if (ret < 0) {
-		printf("ioctl ret=%d, error: %s\n", ret, strerror(errno));
+		error("logical ino ioctl: %s", strerror(errno));
 		goto out;
 	}
 
@@ -266,22 +269,23 @@ static int cmd_inspect_subvolid_resolve(int argc, char **argv)
 	char path[PATH_MAX];
 	DIR *dirstream = NULL;
 
-	if (check_argc_exact(argc, 3))
+	clean_args_no_options(argc, argv, cmd_inspect_subvolid_resolve_usage);
+
+	if (check_argc_exact(argc - optind, 2))
 		usage(cmd_inspect_subvolid_resolve_usage);
 
-	fd = btrfs_open_dir(argv[2], &dirstream, 1);
+	fd = btrfs_open_dir(argv[optind + 1], &dirstream, 1);
 	if (fd < 0) {
 		ret = -ENOENT;
 		goto out;
 	}
 
-	subvol_id = arg_strtou64(argv[1]);
+	subvol_id = arg_strtou64(argv[optind]);
 	ret = btrfs_subvolid_resolve(fd, path, sizeof(path), subvol_id);
 
 	if (ret) {
-		fprintf(stderr,
-			"%s: btrfs_subvolid_resolve(subvol_id %llu) failed with ret=%d\n",
-			argv[0], (unsigned long long)subvol_id, ret);
+		error("resolving subvolid %llu error %d",
+			(unsigned long long)subvol_id, ret);
 		goto out;
 	}
 
@@ -290,7 +294,7 @@ static int cmd_inspect_subvolid_resolve(int argc, char **argv)
 
 out:
 	close_file_or_dir(fd, dirstream);
-	return ret ? 1 : 0;
+	return !!ret;
 }
 
 static const char* const cmd_inspect_rootid_usage[] = {
@@ -306,10 +310,12 @@ static int cmd_inspect_rootid(int argc, char **argv)
 	u64 rootid;
 	DIR *dirstream = NULL;
 
-	if (check_argc_exact(argc, 2))
+	clean_args_no_options(argc, argv, cmd_inspect_rootid_usage);
+
+	if (check_argc_exact(argc - optind, 1))
 		usage(cmd_inspect_rootid_usage);
 
-	fd = btrfs_open_dir(argv[1], &dirstream, 1);
+	fd = btrfs_open_dir(argv[optind], &dirstream, 1);
 	if (fd < 0) {
 		ret = -ENOENT;
 		goto out;
@@ -317,8 +323,7 @@ static int cmd_inspect_rootid(int argc, char **argv)
 
 	ret = lookup_ino_rootid(fd, &rootid);
 	if (ret) {
-		fprintf(stderr, "%s: rootid failed with ret=%d\n",
-			argv[0], ret);
+		error("rootid failed with ret=%d", ret);
 		goto out;
 	}
 
@@ -516,9 +521,7 @@ static int print_min_dev_size(int fd, u64 devid)
 
 		ret = ioctl(fd, BTRFS_IOC_TREE_SEARCH, &args);
 		if (ret < 0) {
-			fprintf(stderr,
-				"Error invoking tree search ioctl: %s\n",
-				strerror(errno));
+			error("tree search ioctl: %s", strerror(errno));
 			ret = 1;
 			goto out;
 		}
@@ -554,7 +557,7 @@ static int print_min_dev_size(int fd, u64 devid)
 				ret = add_dev_extent(&holes, last_pos,
 						     sh->offset - 1, 1);
 			if (ret) {
-				fprintf(stderr, "Error: %s\n", strerror(-ret));
+				error("add device extent: %s", strerror(-ret));
 				ret = 1;
 				goto out;
 			}
@@ -634,6 +637,12 @@ const struct cmd_group inspect_cmd_group = {
 			0 },
 		{ "min-dev-size", cmd_inspect_min_dev_size,
 			cmd_inspect_min_dev_size_usage, NULL, 0 },
+		{ "dump-tree", cmd_inspect_dump_tree,
+				cmd_inspect_dump_tree_usage, NULL, 0 },
+		{ "dump-super", cmd_inspect_dump_super,
+				cmd_inspect_dump_super_usage, NULL, 0 },
+		{ "tree-stats", cmd_inspect_tree_stats,
+				cmd_inspect_tree_stats_usage, NULL, 0 },
 		NULL_CMD_STRUCT
 	}
 };

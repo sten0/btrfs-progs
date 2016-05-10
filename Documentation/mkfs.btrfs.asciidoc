@@ -230,7 +230,7 @@ Other terms commonly used:
 *block group*::
 *chunk*::
 a logical range of space of a given profile, stores data, metadata or both;
-sometimes the terms are used interchangably
+sometimes the terms are used interchangeably
 +
 A typical size of metadata block group is 256MiB (filesystem smaller than
 50GiB) and 1GiB (larger than 50GiB), for data it's 1GiB. The system block group
@@ -254,7 +254,7 @@ There are the following block group types available:
 .2+^.<h| Profile   3+^.^h| Redundancy           .2+^.<h| Min/max devices
       ^.^h| Copies   ^.^h| Parity     ^.<h| Striping
 | single  | 1            |                |            | 1/any
-| DUP     | 2 / 1 device |                |            | 1/1 ^(see note)^
+| DUP     | 2 / 1 device |                |            | 1/any ^(see note)^
 | RAID0   |              |                | 1 to N     | 2/any
 | RAID1   | 2            |                |            | 2/any
 | RAID10  | 2            |                | 1 to N     | 4/any
@@ -263,8 +263,8 @@ There are the following block group types available:
 |=============================================================
 
 'Note:' DUP may exist on more than 1 device if it starts on a single device and
-another one is added, but *mkfs.btrfs* will not let you create DUP on multiple
-devices.
+another one is added. Since version 4.5.1, *mkfs.btrfs* will let you create DUP
+on multiple devices.
 
 DUP PROFILES ON A SINGLE DEVICE
 -------------------------------
@@ -274,7 +274,7 @@ the logical blocks to 2 physical locations. Whether there are really 2
 physical copies highly depends on the underlying device type.
 
 For example, a SSD drive can remap the blocks internally to a single copy thus
-deduplicating them. This negates the purpose of increased redunancy and just
+deduplicating them. This negates the purpose of increased redundancy and just
 wastes space.
 
 The duplicated data/metadata may still be useful to statistically improve the

@@ -37,7 +37,7 @@
 #include "cmds-fi-usage.h"
 #include "list_sort.h"
 #include "disk-io.h"
-
+#include "cmds-fi-du.h"
 
 /*
  * for btrfs fi show, we maintain a hash of fsids we've already printed.
@@ -58,7 +58,14 @@ static int is_seen_fsid(u8 *fsid)
 	int slot = hash % SEEN_FSID_HASH_SIZE;
 	struct seen_fsid *seen = seen_fsid_hash[slot];
 
-	return seen ? 1 : 0;
+	while (seen) {
+		if (memcmp(seen->fsid, fsid, BTRFS_FSID_SIZE) == 0)
+			return 1;
+
+		seen = seen->next;
+	}
+
+	return 0;
 }
 
 static int add_seen_fsid(u8 *fsid)
@@ -197,10 +204,12 @@ static int cmd_filesystem_df(int argc, char **argv)
 
 	unit_mode = get_unit_mode_from_arg(&argc, argv, 1);
 
-	if (argc != 2 || argv[1][0] == '-')
+	clean_args_no_options(argc, argv, cmd_filesystem_df_usage);
+
+	if (check_argc_exact(argc - optind, 1))
 		usage(cmd_filesystem_df_usage);
 
-	path = argv[1];
+	path = argv[optind];
 
 	fd = btrfs_open_dir(path, &dirstream, 1);
 	if (fd < 0)
@@ -455,14 +464,14 @@ static int btrfs_scan_kernel(void *search, unsigned unit_mode)
 
 	memset(label, 0, sizeof(label));
 	while ((mnt = getmntent(f)) != NULL) {
+		free(dev_info_arg);
+		dev_info_arg = NULL;
 		if (strcmp(mnt->mnt_type, "btrfs"))
 			continue;
 		ret = get_fs_info(mnt->mnt_dir, &fs_info_arg,
 				&dev_info_arg);
-		if (ret) {
-			kfree(dev_info_arg);
+		if (ret)
 			goto out;
-		}
 
 		/* skip all fs already shown as mounted fs */
 		if (is_seen_fsid(fs_info_arg.fsid))
@@ -474,14 +483,11 @@ static int btrfs_scan_kernel(void *search, unsigned unit_mode)
 			ret = get_label_unmounted(
 				(const char *)dev_info_arg->path, label);
 
-		if (ret) {
-			kfree(dev_info_arg);
+		if (ret)
 			goto out;
-		}
+
 		if (search && !match_search_item_kernel(fs_info_arg.fsid,
 					mnt->mnt_dir, label, search)) {
-			kfree(dev_info_arg);
-			dev_info_arg = NULL;
 			continue;
 		}
 
@@ -495,11 +501,10 @@ static int btrfs_scan_kernel(void *search, unsigned unit_mode)
 		}
 		if (fd != -1)
 			close(fd);
-		kfree(dev_info_arg);
-		dev_info_arg = NULL;
 	}
 
 out:
+	free(dev_info_arg);
 	endmntent(f);
 	return !found;
 }
@@ -718,7 +723,7 @@ static int map_seed_devices(struct list_head *all_uuids)
 		/*
 		 * open_ctree_* detects seed/sprout mapping
 		 */
-		fs_info = open_ctree_fs_info(device->name, 0, 0,
+		fs_info = open_ctree_fs_info(device->name, 0, 0, 0,
 						OPEN_CTREE_PARTIAL);
 		if (!fs_info)
 			continue;
@@ -918,16 +923,17 @@ static int cmd_filesystem_sync(int argc, char **argv)
 	char	*path;
 	DIR	*dirstream = NULL;
 
-	if (check_argc_exact(argc, 2))
+	clean_args_no_options(argc, argv, cmd_filesystem_sync_usage);
+
+	if (check_argc_exact(argc - optind, 1))
 		usage(cmd_filesystem_sync_usage);
 
-	path = argv[1];
+	path = argv[optind];
 
 	fd = btrfs_open_dir(path, &dirstream, 1);
 	if (fd < 0)
 		return 1;
 
-	printf("FSSync '%s'\n", path);
 	res = ioctl(fd, BTRFS_IOC_SYNC);
 	e = errno;
 	close_file_or_dir(fd, dirstream);
@@ -1178,11 +1184,13 @@ static int cmd_filesystem_resize(int argc, char **argv)
 	DIR	*dirstream = NULL;
 	struct stat st;
 
-	if (check_argc_exact(argc, 3))
+	clean_args_no_options(argc, argv, cmd_filesystem_resize_usage);
+
+	if (check_argc_exact(argc - optind, 2))
 		usage(cmd_filesystem_resize_usage);
 
-	amount = argv[1];
-	path = argv[2];
+	amount = argv[optind];
+	path = argv[optind + 1];
 
 	len = strlen(amount);
 	if (len == 0 || len >= BTRFS_VOL_NAME_MAX) {
@@ -1247,16 +1255,19 @@ static const char * const cmd_filesystem_label_usage[] = {
 
 static int cmd_filesystem_label(int argc, char **argv)
 {
-	if (check_argc_min(argc, 2) || check_argc_max(argc, 3))
+	clean_args_no_options(argc, argv, cmd_filesystem_label_usage);
+
+	if (check_argc_min(argc - optind, 1) ||
+			check_argc_max(argc - optind, 2))
 		usage(cmd_filesystem_label_usage);
 
-	if (argc > 2) {
-		return set_label(argv[1], argv[2]);
+	if (argc - optind > 1) {
+		return set_label(argv[optind], argv[optind + 1]);
 	} else {
 		char label[BTRFS_LABEL_SIZE];
 		int ret;
 
-		ret = get_label(argv[1], label);
+		ret = get_label(argv[optind], label);
 		if (!ret)
 			fprintf(stdout, "%s\n", label);
 
@@ -1270,6 +1281,7 @@ static const char filesystem_cmd_group_info[] =
 const struct cmd_group filesystem_cmd_group = {
 	filesystem_cmd_group_usage, filesystem_cmd_group_info, {
 		{ "df", cmd_filesystem_df, cmd_filesystem_df_usage, NULL, 0 },
+		{ "du", cmd_filesystem_du, cmd_filesystem_du_usage, NULL, 0 },
 		{ "show", cmd_filesystem_show, cmd_filesystem_show_usage, NULL,
 			0 },
 		{ "sync", cmd_filesystem_sync, cmd_filesystem_sync_usage, NULL,
