@@ -4,6 +4,12 @@ btrfs-progs (4.5.3-0.1) UNRELEASED; urgency=medium
   * New upstream release.
   * Update standards version to 3.9.8 (no changes needed).
   * Install upstream changelog
+  * Because btrfs-convert is known to fail and/or cause data-loss; use a
+    wrapper script to warn the user it is for testing purposes only; warn
+    the user at run-time.
+  * Provide a initramfs hook in /usr/share/doc/btrfs-progs, because a
+    sophisticated user will look here before writing his/her own script,
+    and because this user might not expect the wrapper script diversion.
 
  -- Nicholas D Steeves <nsteeves@gmail.com>  Sat, 28 May 2016 16:27:44 -0400
 
