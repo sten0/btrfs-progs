@@ -122,6 +122,9 @@ struct tree_backref {
 	};
 };
 
+/* Explicit initialization for extent_record::flag_block_full_backref */
+enum { FLAG_UNSET = 2 };
+
 struct extent_record {
 	struct list_head backrefs;
 	struct list_head dups;
@@ -138,7 +141,7 @@ struct extent_record {
 	u64 info_objectid;
 	u32 num_duplicates;
 	u8 info_level;
-	int flag_block_full_backref;
+	unsigned int flag_block_full_backref:2;
 	unsigned int found_rec:1;
 	unsigned int content_checked:1;
 	unsigned int owner_ref_checked:1;
@@ -4509,11 +4512,13 @@ static void check_extent_type(struct extent_record *rec)
 	}
 }
 
+/*
+ * Allocate a new extent record, fill default values from @tmpl and insert int
+ * @extent_cache. Caller is supposed to make sure the [start,nr) is not in
+ * the cache, otherwise it fails.
+ */
 static int add_extent_rec_nolookup(struct cache_tree *extent_cache,
-			  struct btrfs_key *parent_key, u64 parent_gen,
-			  u64 start, u64 nr, u64 extent_item_refs,
-			  int is_root, int inc_ref, int set_checked,
-			  int metadata, int extent_rec, u64 max_size)
+		struct extent_record *tmpl)
 {
 	struct extent_record *rec;
 	int ret = 0;
@@ -4521,90 +4526,72 @@ static int add_extent_rec_nolookup(struct cache_tree *extent_cache,
 	rec = malloc(sizeof(*rec));
 	if (!rec)
 		return -ENOMEM;
-	rec->start = start;
-	rec->max_size = max_size;
-	rec->nr = max(nr, max_size);
-	rec->found_rec = !!extent_rec;
-	rec->content_checked = 0;
-	rec->owner_ref_checked = 0;
+	rec->start = tmpl->start;
+	rec->max_size = tmpl->max_size;
+	rec->nr = max(tmpl->nr, tmpl->max_size);
+	rec->found_rec = tmpl->found_rec;
+	rec->content_checked = tmpl->content_checked;
+	rec->owner_ref_checked = tmpl->owner_ref_checked;
 	rec->num_duplicates = 0;
-	rec->metadata = metadata;
-	rec->flag_block_full_backref = -1;
+	rec->metadata = tmpl->metadata;
+	rec->flag_block_full_backref = FLAG_UNSET;
 	rec->bad_full_backref = 0;
 	rec->crossing_stripes = 0;
 	rec->wrong_chunk_type = 0;
+	rec->is_root = tmpl->is_root;
+	rec->refs = tmpl->refs;
+	rec->extent_item_refs = tmpl->extent_item_refs;
+	rec->parent_generation = tmpl->parent_generation;
 	INIT_LIST_HEAD(&rec->backrefs);
 	INIT_LIST_HEAD(&rec->dups);
 	INIT_LIST_HEAD(&rec->list);
-
-	if (is_root)
-		rec->is_root = 1;
-	else
-		rec->is_root = 0;
-
-	if (inc_ref)
-		rec->refs = 1;
-	else
-		rec->refs = 0;
-
-	if (extent_item_refs)
-		rec->extent_item_refs = extent_item_refs;
-	else
-		rec->extent_item_refs = 0;
-
-	if (parent_key)
-		btrfs_cpu_key_to_disk(&rec->parent_key, parent_key);
-	else
-		memset(&rec->parent_key, 0, sizeof(*parent_key));
-
-	if (parent_gen)
-		rec->parent_generation = parent_gen;
-	else
-		rec->parent_generation = 0;
-
-	rec->cache.start = start;
-	rec->cache.size = nr;
+	memcpy(&rec->parent_key, &tmpl->parent_key, sizeof(tmpl->parent_key));
+	rec->cache.start = tmpl->start;
+	rec->cache.size = tmpl->nr;
 	ret = insert_cache_extent(extent_cache, &rec->cache);
 	BUG_ON(ret);
-	bytes_used += nr;
-	if (set_checked) {
-		rec->content_checked = 1;
-		rec->owner_ref_checked = 1;
-	}
+	bytes_used += rec->nr;
 
-	if (metadata)
+	if (tmpl->metadata)
 		rec->crossing_stripes = check_crossing_stripes(rec->start,
-				rec->max_size);
+				global_info->tree_root->nodesize);
 	check_extent_type(rec);
 	return ret;
 }
 
+/*
+ * Lookup and modify an extent, some values of @tmpl are interpreted verbatim,
+ * some are hints:
+ * - refs              - if found, increase refs
+ * - is_root           - if found, set
+ * - content_checked   - if found, set
+ * - owner_ref_checked - if found, set
+ *
+ * If not found, create a new one, initialize and insert.
+ */
 static int add_extent_rec(struct cache_tree *extent_cache,
-			  struct btrfs_key *parent_key, u64 parent_gen,
-			  u64 start, u64 nr, u64 extent_item_refs,
-			  int is_root, int inc_ref, int set_checked,
-			  int metadata, int extent_rec, u64 max_size)
+		struct extent_record *tmpl)
 {
 	struct extent_record *rec;
 	struct cache_extent *cache;
 	int ret = 0;
 	int dup = 0;
 
-	cache = lookup_cache_extent(extent_cache, start, nr);
+	cache = lookup_cache_extent(extent_cache, tmpl->start, tmpl->nr);
 	if (cache) {
 		rec = container_of(cache, struct extent_record, cache);
-		if (inc_ref)
+		if (tmpl->refs)
 			rec->refs++;
 		if (rec->nr == 1)
-			rec->nr = max(nr, max_size);
+			rec->nr = max(tmpl->nr, tmpl->max_size);
 
 		/*
 		 * We need to make sure to reset nr to whatever the extent
 		 * record says was the real size, this way we can compare it to
 		 * the backrefs.
 		 */
-		if (extent_rec) {
-			if (start != rec->start || rec->found_rec) {
+		if (tmpl->found_rec) {
+			if (tmpl->start != rec->start || rec->found_rec) {
 				struct extent_record *tmp;
 
 				dup = 1;
@@ -4621,46 +4608,44 @@ static int add_extent_rec(struct cache_tree *extent_cache,
 				tmp = malloc(sizeof(*tmp));
 				if (!tmp)
 					return -ENOMEM;
-				tmp->start = start;
-				tmp->max_size = max_size;
-				tmp->nr = nr;
+				tmp->start = tmpl->start;
+				tmp->max_size = tmpl->max_size;
+				tmp->nr = tmpl->nr;
 				tmp->found_rec = 1;
-				tmp->metadata = metadata;
-				tmp->extent_item_refs = extent_item_refs;
+				tmp->metadata = tmpl->metadata;
+				tmp->extent_item_refs = tmpl->extent_item_refs;
 				INIT_LIST_HEAD(&tmp->list);
 				list_add_tail(&tmp->list, &rec->dups);
 				rec->num_duplicates++;
 			} else {
-				rec->nr = nr;
+				rec->nr = tmpl->nr;
 				rec->found_rec = 1;
 			}
 		}
 
-		if (extent_item_refs && !dup) {
+		if (tmpl->extent_item_refs && !dup) {
 			if (rec->extent_item_refs) {
 				fprintf(stderr, "block %llu rec "
 					"extent_item_refs %llu, passed %llu\n",
-					(unsigned long long)start,
+					(unsigned long long)tmpl->start,
 					(unsigned long long)
 							rec->extent_item_refs,
-					(unsigned long long)extent_item_refs);
+					(unsigned long long)tmpl->extent_item_refs);
 			}
-			rec->extent_item_refs = extent_item_refs;
+			rec->extent_item_refs = tmpl->extent_item_refs;
 		}
-		if (is_root)
+		if (tmpl->is_root)
 			rec->is_root = 1;
-		if (set_checked) {
+		if (tmpl->content_checked)
 			rec->content_checked = 1;
+		if (tmpl->owner_ref_checked)
 			rec->owner_ref_checked = 1;
-		}
-
-		if (parent_key)
-			btrfs_cpu_key_to_disk(&rec->parent_key, parent_key);
-		if (parent_gen)
-			rec->parent_generation = parent_gen;
-
-		if (rec->max_size < max_size)
-			rec->max_size = max_size;
+		memcpy(&rec->parent_key, &tmpl->parent_key,
+				sizeof(tmpl->parent_key));
+		if (tmpl->parent_generation)
+			rec->parent_generation = tmpl->parent_generation;
+		if (rec->max_size < tmpl->max_size)
+			rec->max_size = tmpl->max_size;
 
 		/*
 		 * A metadata extent can't cross stripe_len boundary, otherwise
@@ -4668,17 +4653,15 @@ static int add_extent_rec(struct cache_tree *extent_cache,
 		 * As now stripe_len is fixed to BTRFS_STRIPE_LEN, just check
 		 * it.
 		 */
-		if (metadata)
+		if (tmpl->metadata)
 			rec->crossing_stripes = check_crossing_stripes(
-					rec->start, rec->max_size);
+				rec->start, global_info->tree_root->nodesize);
 		check_extent_type(rec);
 		maybe_free_extent_rec(extent_cache, rec);
 		return ret;
 	}
 
-	ret = add_extent_rec_nolookup(extent_cache, parent_key, parent_gen,
-			start, nr, extent_item_refs, is_root, inc_ref,
-			set_checked, metadata, extent_rec, max_size);
+	ret = add_extent_rec_nolookup(extent_cache, tmpl);
 
 	return ret;
 }
@@ -4692,8 +4675,15 @@ static int add_tree_backref(struct cache_tree *extent_cache, u64 bytenr,
 
 	cache = lookup_cache_extent(extent_cache, bytenr, 1);
 	if (!cache) {
-		add_extent_rec_nolookup(extent_cache, NULL, 0, bytenr,
-			       1, 0, 0, 0, 0, 1, 0, 0);
+		struct extent_record tmpl;
+
+		memset(&tmpl, 0, sizeof(tmpl));
+		tmpl.start = bytenr;
+		tmpl.nr = 1;
+		tmpl.metadata = 1;
+
+		add_extent_rec_nolookup(extent_cache, &tmpl);
+
 		cache = lookup_cache_extent(extent_cache, bytenr, 1);
 		if (!cache)
 			abort();
@@ -4744,8 +4734,15 @@ static int add_data_backref(struct cache_tree *extent_cache, u64 bytenr,
 
 	cache = lookup_cache_extent(extent_cache, bytenr, 1);
 	if (!cache) {
-		add_extent_rec_nolookup(extent_cache, NULL, 0, bytenr, 1, 0, 0,
-				0, 0, 0, 0, max_size);
+		struct extent_record tmpl;
+
+		memset(&tmpl, 0, sizeof(tmpl));
+		tmpl.start = bytenr;
+		tmpl.nr = 1;
+		tmpl.max_size = max_size;
+
+		add_extent_rec_nolookup(extent_cache, &tmpl);
+
 		cache = lookup_cache_extent(extent_cache, bytenr, 1);
 		if (!cache)
 			abort();
@@ -5210,6 +5207,7 @@ static int process_extent_item(struct btrfs_root *root,
 	struct btrfs_extent_data_ref *dref;
 	struct btrfs_shared_data_ref *sref;
 	struct btrfs_key key;
+	struct extent_record tmpl;
 	unsigned long end;
 	unsigned long ptr;
 	int type;
@@ -5237,9 +5235,15 @@ static int process_extent_item(struct btrfs_root *root,
 #else
 		BUG();
 #endif
-		return add_extent_rec(extent_cache, NULL, 0, key.objectid,
-				      num_bytes, refs, 0, 0, 0, metadata, 1,
-				      num_bytes);
+		memset(&tmpl, 0, sizeof(tmpl));
+		tmpl.start = key.objectid;
+		tmpl.nr = num_bytes;
+		tmpl.extent_item_refs = refs;
+		tmpl.metadata = metadata;
+		tmpl.found_rec = 1;
+		tmpl.max_size = num_bytes;
+
+		return add_extent_rec(extent_cache, &tmpl);
 	}
 
 	ei = btrfs_item_ptr(eb, slot, struct btrfs_extent_item);
@@ -5249,8 +5253,14 @@ static int process_extent_item(struct btrfs_root *root,
 	else
 		metadata = 0;
 
-	add_extent_rec(extent_cache, NULL, 0, key.objectid, num_bytes,
-		       refs, 0, 0, 0, metadata, 1, num_bytes);
+	memset(&tmpl, 0, sizeof(tmpl));
+	tmpl.start = key.objectid;
+	tmpl.nr = num_bytes;
+	tmpl.extent_item_refs = refs;
+	tmpl.metadata = metadata;
+	tmpl.found_rec = 1;
+	tmpl.max_size = num_bytes;
+	add_extent_rec(extent_cache, &tmpl);
 
 	ptr = (unsigned long)(ei + 1);
 	if (btrfs_extent_flags(eb, ei) & BTRFS_EXTENT_FLAG_TREE_BLOCK &&
@@ -5925,13 +5935,13 @@ static int calc_extent_flag(struct btrfs_root *root,
 		goto full_backref;
 normal:
 	*flags = 0;
-	if (rec->flag_block_full_backref != -1 &&
+	if (rec->flag_block_full_backref != FLAG_UNSET &&
 	    rec->flag_block_full_backref != 0)
 		rec->bad_full_backref = 1;
 	return 0;
 full_backref:
 	*flags |= BTRFS_BLOCK_FLAG_FULL_BACKREF;
-	if (rec->flag_block_full_backref != -1 &&
+	if (rec->flag_block_full_backref != FLAG_UNSET &&
 	    rec->flag_block_full_backref != 1)
 		rec->bad_full_backref = 1;
 	return 0;
@@ -6213,6 +6223,8 @@ static int run_next_block(struct btrfs_root *root,
 			btrfs_item_key_to_cpu(buf, &first_key, 0);
 		level = btrfs_header_level(buf);
 		for (i = 0; i < nritems; i++) {
+			struct extent_record tmpl;
+
 			ptr = btrfs_node_blockptr(buf, i);
 			size = root->nodesize;
 			btrfs_node_key_to_cpu(buf, &key, i);
@@ -6222,10 +6234,16 @@ static int run_next_block(struct btrfs_root *root,
 					continue;
 				}
 			}
-			ret = add_extent_rec(extent_cache, &key,
-					     btrfs_node_ptr_generation(buf, i),
-					     ptr, size, 0, 0, 1, 0, 1, 0,
-					     size);
+
+			memset(&tmpl, 0, sizeof(tmpl));
+			btrfs_cpu_key_to_disk(&tmpl.parent_key, &key);
+			tmpl.parent_generation = btrfs_node_ptr_generation(buf, i);
+			tmpl.start = ptr;
+			tmpl.nr = size;
+			tmpl.refs = 1;
+			tmpl.metadata = 1;
+			tmpl.max_size = size;
+			ret = add_extent_rec(extent_cache, &tmpl);
 			BUG_ON(ret);
 
 			add_tree_backref(extent_cache, ptr, parent, owner, 1);
@@ -6261,12 +6279,21 @@ static int add_root_to_pending(struct extent_buffer *buf,
 			       struct cache_tree *nodes,
 			       u64 objectid)
 {
+	struct extent_record tmpl;
+
 	if (btrfs_header_level(buf) > 0)
 		add_pending(nodes, seen, buf->start, buf->len);
 	else
 		add_pending(pending, seen, buf->start, buf->len);
-	add_extent_rec(extent_cache, NULL, 0, buf->start, buf->len,
-		       0, 1, 1, 0, 1, 0, buf->len);
+
+	memset(&tmpl, 0, sizeof(tmpl));
+	tmpl.start = buf->start;
+	tmpl.nr = buf->len;
+	tmpl.is_root = 1;
+	tmpl.refs = 1;
+	tmpl.metadata = 1;
+	tmpl.max_size = buf->len;
+	add_extent_rec(extent_cache, &tmpl);
 
 	if (objectid == BTRFS_TREE_RELOC_OBJECTID ||
 	    btrfs_header_backref_rev(buf) < BTRFS_MIXED_BACKREF_REV)
