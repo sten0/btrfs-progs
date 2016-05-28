@@ -27,7 +27,6 @@ override_dh_auto_install:
 	# Adding initramfs-tools integration
 	install -D -m 0755 debian/local/btrfs.hook debian/btrfs-progs/usr/share/initramfs-tools/hooks/btrfs
 	install -D -m 0755 debian/local/btrfs.local-premount debian/btrfs-progs/usr/share/initramfs-tools/scripts/local-premount/btrfs
-	install -D -m 0755 debian/local/btrfs-convert.hook debian/btrfs-progs/usr/share/doc/btrfs-convert.hook
 
 # divert btrfs-convert to btrfs-convert.real
 # and use a wrapper script to notify it is dangerous
@@ -39,6 +38,3 @@ override_dh_auto_test:
 
 override_dh_strip:
 	dh_strip --dbg-package=btrfs-progs-dbg
-
-override_dh_installchangelogs:
-	dh_installchangelogs CHANGES
