@@ -75,7 +75,7 @@ consumption and may help to convert a filesystem with low free space
 -N|--nodesize <SIZE>::
 set filesystem nodesize, the tree block size in which btrfs stores its metadata.
 The default value is 16KB (16384) or the page size, whichever is bigger.
-Must be a multiple of the sectorsize, but not larger than 65536. Se
+Must be a multiple of the sectorsize, but not larger than 65536. See
 `mkfs.btrfs`(8) for more details.
 -r|--rollback::
 rollback to the original ext2/3/4 filesystem if possible
@@ -83,6 +83,13 @@ rollback to the original ext2/3/4 filesystem if possible
 set filesystem label during conversion
 -L|--copy-label::
 use label from the converted filesystem
+-O|--features <feature1>[,<feature2>...]::
+A list of filesystem features turned on at btrfs-convert time. Not all features
+are supported by old kernels. To disable a feature, prefix it with '^'.
++
+To see all available features that btrfs-convert supports run:
++
++btrfs-convert -O list-all+
 -p|--progress::
 show progress of conversion, on by default
 --no-progress::

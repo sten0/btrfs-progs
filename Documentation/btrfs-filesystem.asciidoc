@@ -39,7 +39,7 @@ GlobalReserve, single: total=512.00MiB, used=0.00B
 ------------------------------
 +
 --
-* 'Data', 'System' and 'Metadata' are separeate block group types.
+* 'Data', 'System' and 'Metadata' are separate block group types.
 'GlobalReserve' is an artificial and internal emergency space, see below.
 * 'single' -- the allocation profile, defined at mkfs time
 * 'total' -- sum of space reserved for
@@ -79,11 +79,11 @@ show sizes in TiB, or TB with --si
 If conflicting options are passed, the last one takes precedence.
 
 *defragment* [options] <file>|<dir> [<file>|<dir>...]::
-Defragment file data on a mounted filesytem.
+Defragment file data on a mounted filesystem.
 +
 If '-r' is passed, files in dir will be defragmented recursively.
 The start position and the number of bytes to defragment can be specified by
-start and len using '-s' and '-l' options below.
+start and length using '-s' and '-l' options below.
 Extents bigger than value given by '-t' will be skipped, otherwise this value
 is used as a target extent size, but is only advisory and may not be reached
 if the free space is too fragmented.
@@ -96,6 +96,14 @@ the ref-links of COW data (for example files copied with `cp --reflink`,
 snapshots or de-duplicated data).
 This may cause considerable increase of space usage depending on the broken up
 ref-links.
++
+NOTE: Directory arguments without '-r' do not defragment files recursively but will
+defragment certain internal trees (extent tree and the subvolume tree). This has been
+confusing and could be removed in the future.
++
+For 'start', 'len', 'size' it is possible to append
+units designator: \'K', \'M', \'G', \'T', \'P', or \'E', which represent
+KiB, MiB, GiB, TiB, PiB, or EiB, respectively (case does not matter).
 +
 `Options`
 +
@@ -117,14 +125,41 @@ defragmentation will start from the given offset, default is beginning of a file
 defragment only up to 'len' bytes, default is the file size
 -t <size>[kKmMgGtTpPeE]::::
 target extent size, do not touch extents bigger than 'size'
+
+*du* [options] <path> [<path>..]::
+Calculate disk usage of the target files using FIEMAP. For individual
+files, it will report a count of total bytes, and exclusive (not
+shared) bytes. We also calculate a 'set shared' value which is
+described below.
 +
-For 'start', 'len', 'size' it is possible to append
-units designator: \'K', \'M', \'G', \'T', \'P', or \'E', which represent
-KiB, MiB, GiB, TiB, PiB, or EiB, respectively (case does not matter).
+Each argument to 'btrfs fi du' will have a 'set shared' value
+calculated for it. We define each 'set' as those files found by a
+recursive search of an argument. The 'set shared' value
+then is a sum of all shared space referenced by the set.
 +
-NOTE: Directory arguments without '-r' do not defragment files recursively but will
-defragment certain internal trees (extent tree and the subvolume tree). This has been
-confusing and could be removed in the future.
+'set shared' takes into account overlapping shared extents, hence it
+isn't as simple as adding up shared extents.
++
+`Options`
++
+-s|--summarize::::
+display only a total for each argument
+--raw::::
+raw numbers in bytes, without the 'B' suffix.
+--human-readable::::
+print human friendly numbers, base 1024, this is the default
+--iec::::
+select the 1024 base for the following options, according to the IEC standard.
+--si::::
+select the 1000 base for the following options, according to the SI standard.
+--kbytes::::
+show sizes in KiB, or kB with --si.
+--mbytes::::
+show sizes in MiB, or MB with --si.
+--gbytes::::
+show sizes in GiB, or GB with --si.
+--tbytes::::
+show sizes in TiB, or TB with --si.
 
 *label* [<dev>|<mountpoint>] [<newlabel>]::
 Show or update the label of a filesystem. This works on a mounted filesystem or
@@ -177,7 +212,7 @@ Show the btrfs filesystem with some additional info about devices and space
 allocation.
 +
 If no option none of 'path'/'uuid'/'device'/'label' is passed, information
-about all the BTRFS filesystems is shown, both mounted and unmounted. 
+about all the BTRFS filesystems is shown, both mounted and unmounted.
 +
 `Options`
 +
@@ -286,18 +321,18 @@ of IO load and the system may stall for a moment.
 
 *$ btrfs filesystem defrag -v -r -f dir/*
 
-Recusively defragment files under 'dir/', be verbose and wait until all blocks
+Recursively defragment files under 'dir/', be verbose and wait until all blocks
 are flushed before processing next file. You can note slower progress of the
 output and lower IO load (proportional to currently defragmented file).
 
 *$ btrfs filesystem defrag -v -r -f -clzo dir/*
 
-Recusively defragment files under 'dir/', be verbose, wait until all blocks are
+Recursively defragment files under 'dir/', be verbose, wait until all blocks are
 flushed and force file compression.
 
 *$ btrfs filesystem defrag -v -r -t 64M dir/*
 
-Recusively defragment files under 'dir/', be verbose and try to merge extents
+Recursively defragment files under 'dir/', be verbose and try to merge extents
 to be about 64MiB. As stated above, the success rate depends on actual free
 space fragmentation and the final result is not guaranteed to meet the target
 even if run repeatedly.

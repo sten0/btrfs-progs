@@ -35,7 +35,7 @@ Debugging option to force all block allocations above a certain
 byte threshold on each block device.  The value is specified in
 bytes, optionally with a K, M, or G suffix (case insensitive).
 +
-This option was used for testing and has not practial use, it's slated to be
+This option was used for testing and has no practical use, it's slated to be
 removed in the future.
 
 *autodefrag*::
@@ -72,7 +72,7 @@ The write flushes incur a slight hit and also prevent the IO block
 scheduler to reorder requests in more effective way. Disabling barriers gets
 rid of that penalty but will most certainly lead to a corrupted filesystem in
 case of a crash or power loss. The ordinary metadata blocks could be yet
-unwrittent at the time the new superblock is stored permanently, expecting that
+unwritten at the time the new superblock is stored permanently, expecting that
 the block pointers to metadata were stored permanently before.
 +
 On a device with a volatile battery-backed write-back cache, the 'nobarrier'
@@ -167,7 +167,7 @@ system at that point.
 Enable discarding of freed file blocks using TRIM operation.  This is useful
 for SSD devices, thinly provisioned LUNs or virtual machine images where the
 backing device understands the operation. Depending on support of the
-underlying device, the operation may severly hurt performance in case the TRIM
+underlying device, the operation may severely hurt performance in case the TRIM
 operation is synchronous (eg. with SATA devices up to revision 3.0).
 +
 If discarding is not necessary to be done at the block freeing time, there's
@@ -278,13 +278,25 @@ May be resumed with *btrfs balance resume* or the paused state can be removed
 by *btrfs balance cancel*.
 
 *space_cache*::
+*space_cache=v2*::
 *nospace_cache*::
-('nospace_cache' since: 3.2, default: on)
+('nospace_cache' since: 3.2, 'space_cache=v2' since 4.5, default: on)
 +
-Disable freespace cache loading without clearing the cache and the free space
-cache will not be used during the mount. This affects performance as searching
-for new free blocks could take longer. On the other hand, managing the space
-cache consumes some resources.
+Options to control the free space cache.  This affects performance as searching
+for new free blocks could take longer if the space cache is not enabled. On the
+other hand, managing the space cache consumes some resources.  It can be
+disabled without clearing at mount time.
++
+There are two implementations of how the space is tracked. The safe default is
+'v1'.  On large filesystems (many-terabytes) and certain workloads the 'v1'
+performance may degrade.  This problem is addressed by 'v2', that is based on
+b-trees, sometimes referred to as 'free-space-tree'.
++
+'Compatibility notes:'
++
+* the 'v2' has to be enabled manually at mount time, once
+* kernel without 'v2' support will be able to mount the filesystem in read-only mode
+* 'v2' can be removed by mounting with 'clear_cache'
 
 *ssd*::
 *nossd*::
@@ -293,7 +305,7 @@ cache consumes some resources.
 +
 Options to control SSD allocation schemes.  By default, BTRFS will
 enable or disable SSD allocation heuristics depending on whether a
-rotational or nonrotational disk is in use.  The 'ssd' and 'nossd' options
+rotational or non-rotational disk is in use.  The 'ssd' and 'nossd' options
 can override this autodetection.
 +
 The 'ssd_spread' mount option attempts to allocate into bigger and aligned
@@ -337,7 +349,7 @@ such syncs, the pending tree log operations are replayed during mount.
 WARNING: currently, the tree log is replayed even with a read-only mount!
 +
 The tree log could contain new files/directories, these would not exist on
-a mounted filesystm if the log is not replayed.
+a mounted filesystem if the log is not replayed.
 
 *user_subvol_rm_allowed*::
 (default: off)

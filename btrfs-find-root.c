@@ -185,13 +185,12 @@ int main(int argc, char **argv)
 	}
 
 	set_argv0(argv);
-	argc = argc - optind;
-	if (check_argc_min(argc, 1)) {
+	if (check_argc_min(argc - optind, 1)) {
 		usage();
 		exit(1);
 	}
 
-	fs_info = open_ctree_fs_info(argv[optind], 0, 0,
+	fs_info = open_ctree_fs_info(argv[optind], 0, 0, 0,
 			OPEN_CTREE_CHUNK_ROOT_ONLY |
 			OPEN_CTREE_IGNORE_CHUNK_TREE_ERROR);
 	if (!fs_info) {

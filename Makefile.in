@@ -75,7 +75,8 @@ cmds_objects = cmds-subvolume.o cmds-filesystem.o cmds-device.o cmds-scrub.o \
 	       cmds-inspect.o cmds-balance.o cmds-send.o cmds-receive.o \
 	       cmds-quota.o cmds-qgroup.o cmds-replace.o cmds-check.o \
 	       cmds-restore.o cmds-rescue.o chunk-recover.o super-recover.o \
-	       cmds-property.o cmds-fi-usage.o
+	       cmds-property.o cmds-fi-usage.o cmds-inspect-dump-tree.o \
+	       cmds-inspect-dump-super.o cmds-inspect-tree-stats.o cmds-fi-du.o
 libbtrfs_objects = send-stream.o send-utils.o rbtree.o btrfs-list.o crc32c.o \
 		   uuid-tree.o utils-lib.o rbtree-utils.o
 libbtrfs_headers = send-stream.h send-utils.h send.h rbtree.h btrfs-list.h \
@@ -125,6 +126,12 @@ endif
 # specify btrfs_foo_libs = <list of libs>; see $($(subst...)) rules below
 btrfs_convert_libs = @EXT2FS_LIBS@ @COM_ERR_LIBS@
 btrfs_fragments_libs = -lgd -lpng -ljpeg -lfreetype
+btrfs_debug_tree_objects = cmds-inspect-dump-tree.o
+btrfs_show_super_objects = cmds-inspect-dump-super.o
+btrfs_calc_size_objects = cmds-inspect-tree-stats.o
+
+# collect values of the variables above
+standalone_deps = $(foreach dep,$(patsubst %,%_objects,$(subst -,_,$(filter btrfs-%, $(progs)))),$($(dep)))
 
 SUBDIRS =
 BUILDDIRS = $(patsubst %,build-%,$(SUBDIRS))
@@ -209,6 +216,10 @@ test-fuzz: btrfs
 	@echo "    [TEST]   fuzz-tests.sh"
 	$(Q)bash tests/fuzz-tests.sh
 
+test-cli: btrfs
+	@echo "    [TEST]   cli-tests.sh"
+	$(Q)bash tests/cli-tests.sh
+
 test-clean:
 	@echo "Cleaning tests"
 	$(Q)bash tests/clean-tests.sh
@@ -248,15 +259,18 @@ $(lib_links):
 # For static variants, use an extra $(subst) to get rid of the ".static"
 # from the target name before translating to list of libs
 
-btrfs-%.static: $(static_objects) btrfs-%.static.o $(static_libbtrfs_objects)
+btrfs-%.static: $(static_objects) btrfs-%.static.o $(static_libbtrfs_objects) $(patsubst %.o,%.static.o,$(standalone_deps))
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ $@.o $(static_objects) \
+		$(patsubst %.o, %.static.o, $($(subst -,_,$(subst .static,,$@)-objects))) \
 		$(static_libbtrfs_objects) $(STATIC_LDFLAGS) \
 		$($(subst -,_,$(subst .static,,$@)-libs)) $(STATIC_LIBS)
 
-btrfs-%: $(objects) $(libs_static) btrfs-%.o
+btrfs-%: $(objects) $(libs_static) btrfs-%.o $(standalone_deps)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -o $@ $(objects) $@.o $(libs_static) \
+	$(Q)$(CC) $(CFLAGS) -o $@ $(objects) $@.o \
+		$($(subst -,_,$@-objects)) \
+		$(libs_static) \
 		$(LDFLAGS) $(LIBS) $($(subst -,_,$@-libs))
 
 btrfs: $(objects) btrfs.o $(cmds_objects) $(libs_static)
