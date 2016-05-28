@@ -20,6 +20,7 @@
 #include "transaction.h"
 #include "print-tree.h"
 #include "repair.h"
+#include "internal.h"
 
 static int split_node(struct btrfs_trans_handle *trans, struct btrfs_root
 		      *root, struct btrfs_path *path, int level);
@@ -648,7 +649,7 @@ struct extent_buffer *read_node_slot(struct btrfs_root *root,
 		return NULL;
 
 	return read_tree_block(root, btrfs_node_blockptr(parent, slot),
-		       btrfs_level_size(root, level - 1),
+		       root->nodesize,
 		       btrfs_node_ptr_generation(parent, slot));
 }
 
@@ -989,7 +990,7 @@ void reada_for_search(struct btrfs_root *root, struct btrfs_path *path,
 
 	node = path->nodes[level];
 	search = btrfs_node_blockptr(node, slot);
-	blocksize = btrfs_level_size(root, level - 1);
+	blocksize = root->nodesize;
 	eb = btrfs_find_tree_block(root, search, blocksize);
 	if (eb) {
 		free_extent_buffer(eb);
@@ -2112,7 +2113,7 @@ again:
 	else
 		btrfs_item_key(l, &disk_key, mid);
 
-	right = btrfs_alloc_free_block(trans, root, root->leafsize,
+	right = btrfs_alloc_free_block(trans, root, root->nodesize,
 					root->root_key.objectid,
 					&disk_key, 0, l->start, 0);
 	if (IS_ERR(right)) {

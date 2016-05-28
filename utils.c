@@ -253,7 +253,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_super_cache_generation(&super, -1);
 	btrfs_set_super_incompat_flags(&super, cfg->features);
 	if (cfg->label)
-		strncpy(super.label, cfg->label, BTRFS_LABEL_SIZE - 1);
+		__strncpy_null(super.label, cfg->label, BTRFS_LABEL_SIZE - 1);
 
 	/* create the tree of root objects */
 	memset(buf->data, 0, cfg->nodesize);
@@ -842,8 +842,11 @@ static int btrfs_wipe_existing_sb(int fd)
 
 	memset(buf, 0, len);
 	ret = pwrite(fd, buf, len, offset);
-	if (ret != len) {
-		fprintf(stderr, "ERROR: cannot wipe existing superblock\n");
+	if (ret < 0) {
+		error("cannot wipe existing superblock: %s", strerror(errno));
+		ret = -1;
+	} else if (ret != len) {
+		error("cannot wipe existing superblock: wrote %d of %zd", ret, len);
 		ret = -1;
 	}
 	fsync(fd);
@@ -853,8 +856,8 @@ out:
 	return ret;
 }
 
-int btrfs_prepare_device(int fd, char *file, int zero_end, u64 *block_count_ret,
-			   u64 max_block_count, int discard)
+int btrfs_prepare_device(int fd, const char *file, int zero_end,
+		u64 *block_count_ret, u64 max_block_count, int discard)
 {
 	u64 block_count;
 	struct stat st;
@@ -862,13 +865,13 @@ int btrfs_prepare_device(int fd, char *file, int zero_end, u64 *block_count_ret,
 
 	ret = fstat(fd, &st);
 	if (ret < 0) {
-		fprintf(stderr, "unable to stat %s\n", file);
+		error("unable to stat %s: %s", file, strerror(errno));
 		return 1;
 	}
 
 	block_count = btrfs_device_size(fd, &st);
 	if (block_count == 0) {
-		fprintf(stderr, "unable to find %s size\n", file);
+		error("unable to determine size of %s", file);
 		return 1;
 	}
 	if (max_block_count)
@@ -896,15 +899,13 @@ int btrfs_prepare_device(int fd, char *file, int zero_end, u64 *block_count_ret,
 				       ZERO_DEV_BYTES, block_count);
 
 	if (ret < 0) {
-		fprintf(stderr, "ERROR: failed to zero device '%s' - %s\n",
-			file, strerror(-ret));
+		error("failed to zero device '%s': %s", file, strerror(-ret));
 		return 1;
 	}
 
 	ret = btrfs_wipe_existing_sb(fd);
 	if (ret < 0) {
-		fprintf(stderr, "ERROR: cannot wipe superblocks on '%s'\n",
-				file);
+		error("cannot wipe superblocks on %s", file);
 		return 1;
 	}
 
@@ -1051,11 +1052,10 @@ int get_btrfs_mount(const char *dev, char *mp, size_t mp_size)
 	ret = is_block_device(dev);
 	if (ret <= 0) {
 		if (!ret) {
-			fprintf(stderr, "%s is not a block device\n", dev);
+			error("not a block device: %s", dev);
 			ret = -EINVAL;
 		} else {
-			fprintf(stderr, "Could not check %s: %s\n",
-				dev, strerror(-ret));
+			error("cannot check %s: %s", dev, strerror(-ret));
 		}
 		goto out;
 	}
@@ -1063,7 +1063,7 @@ int get_btrfs_mount(const char *dev, char *mp, size_t mp_size)
 	fd = open(dev, O_RDONLY);
 	if (fd < 0) {
 		ret = -errno;
-		fprintf(stderr, "Could not open %s: %s\n", dev, strerror(errno));
+		error("cannot open %s: %s", dev, strerror(errno));
 		goto out;
 	}
 
@@ -1122,43 +1122,31 @@ int btrfs_open_dir(const char *path, DIR **dirstream, int verbose)
 	int ret;
 
 	if (statfs(path, &stfs) != 0) {
-		if (verbose)
-			fprintf(stderr,
-				"ERROR: can't access '%s': %s\n",
-				path, strerror(errno));
+		error_on(verbose, "cannot access '%s': %s", path,
+				strerror(errno));
 		return -1;
 	}
 
 	if (stfs.f_type != BTRFS_SUPER_MAGIC) {
-		if (verbose)
-			fprintf(stderr,
-				"ERROR: not a btrfs filesystem: %s\n",
-				path);
+		error_on(verbose, "not a btrfs filesystem: %s", path);
 		return -2;
 	}
 
 	if (stat(path, &st) != 0) {
-		if (verbose)
-			fprintf(stderr,
-				"ERROR: can't access '%s': %s\n",
-				path, strerror(errno));
+		error_on(verbose, "cannot access '%s': %s", path,
+				strerror(errno));
 		return -1;
 	}
 
 	if (!S_ISDIR(st.st_mode)) {
-		if (verbose)
-			fprintf(stderr,
-				"ERROR: not a directory: %s\n",
-				path);
+		error_on(verbose, "not a directory: %s", path);
 		return -3;
 	}
 
 	ret = open_file_or_dir(path, dirstream);
 	if (ret < 0) {
-		if (verbose)
-			fprintf(stderr,
-				"ERROR: can't access '%s': %s\n",
-				path, strerror(errno));
+		error_on(verbose, "cannot access '%s': %s", path,
+				strerror(errno));
 	}
 
 	return ret;
@@ -1434,7 +1422,8 @@ int check_mounted(const char* file)
 
 	fd = open(file, O_RDONLY);
 	if (fd < 0) {
-		fprintf (stderr, "check_mounted(): Could not open %s\n", file);
+		error("mount check: cannot open %s: %s", file,
+				strerror(errno));
 		return -errno;
 	}
 
@@ -1522,8 +1511,8 @@ int btrfs_register_one_device(const char *fname)
 
 	fd = open("/dev/btrfs-control", O_RDWR);
 	if (fd < 0) {
-		fprintf(stderr, "failed to open /dev/btrfs-control "
-			"skipping device registration: %s\n",
+		warning(
+	"failed to open /dev/btrfs-control, skipping device registration: %s",
 			strerror(errno));
 		return -errno;
 	}
@@ -1531,8 +1520,8 @@ int btrfs_register_one_device(const char *fname)
 	strncpy_null(args.name, fname);
 	ret = ioctl(fd, BTRFS_IOC_SCAN_DEV, &args);
 	if (ret < 0) {
-		fprintf(stderr, "ERROR: device scan failed '%s' - %s\n",
-			fname, strerror(errno));
+		error("device scan failed on '%s': %s", fname,
+				strerror(errno));
 		ret = -errno;
 	}
 	close(fd);
@@ -1545,7 +1534,8 @@ int btrfs_register_one_device(const char *fname)
  */
 int btrfs_register_all_devices(void)
 {
-	int err;
+	int err = 0;
+	int ret = 0;
 	struct btrfs_fs_devices *fs_devices;
 	struct btrfs_device *device;
 	struct list_head *all_uuids;
@@ -1554,16 +1544,15 @@ int btrfs_register_all_devices(void)
 
 	list_for_each_entry(fs_devices, all_uuids, list) {
 		list_for_each_entry(device, &fs_devices->devices, dev_list) {
-			if (*device->name) {
+			if (*device->name)
 				err = btrfs_register_one_device(device->name);
-				if (err < 0)
-					return err;
-				if (err > 0)
-					return -err;
-			}
+
+			if (err)
+				ret++;
 		}
 	}
-	return 0;
+
+	return ret;
 }
 
 int btrfs_device_already_in_root(struct btrfs_root *root, int fd,
@@ -1672,6 +1661,13 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_size, unsigned unit_mod
 			size /= mult;
 			num_divs++;
 		}
+		/*
+		 * If the value is smaller than base, we didn't do any
+		 * division, in that case, base should be 1, not original
+		 * base, or the unit will be wrong
+		 */
+		if (num_divs == 0)
+			base = 1;
 	}
 
 	if (num_divs >= ARRAY_SIZE(unit_suffix_binary)) {
@@ -1687,7 +1683,7 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_size, unsigned unit_mod
 }
 
 /*
- * __strncpy__null - strncpy with null termination
+ * __strncpy_null - strncpy with null termination
  * @dest:	the target array
  * @src:	the source string
  * @n:		maximum bytes to copy (size of *dest)
@@ -1698,7 +1694,7 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_size, unsigned unit_mod
  * byte ('\0'), to the buffer pointed to by dest, up to a maximum
  * of n bytes.  Then ensure that dest is null-terminated.
  */
-char *__strncpy__null(char *dest, const char *src, size_t n)
+char *__strncpy_null(char *dest, const char *src, size_t n)
 {
 	strncpy(dest, src, n);
 	if (n > 0)
@@ -1750,8 +1746,8 @@ static int set_label_unmounted(const char *dev, const char *label)
 		return -1;
 
 	trans = btrfs_start_transaction(root, 1);
-	snprintf(root->fs_info->super_copy->label, BTRFS_LABEL_SIZE, "%s",
-		 label);
+	__strncpy_null(root->fs_info->super_copy->label, label, BTRFS_LABEL_SIZE - 1);
+
 	btrfs_commit_transaction(trans, root);
 
 	/* Now we close it since we are done. */
@@ -1759,9 +1755,10 @@ static int set_label_unmounted(const char *dev, const char *label)
 	return 0;
 }
 
-static int set_label_mounted(const char *mount_path, const char *label)
+static int set_label_mounted(const char *mount_path, const char *labelp)
 {
 	int fd;
+	char label[BTRFS_LABEL_SIZE];
 
 	fd = open(mount_path, O_RDONLY | O_NOATIME);
 	if (fd < 0) {
@@ -1769,6 +1766,8 @@ static int set_label_mounted(const char *mount_path, const char *label)
 		return -1;
 	}
 
+	memset(label, 0, sizeof(label));
+	__strncpy_null(label, labelp, BTRFS_LABEL_SIZE - 1);
 	if (ioctl(fd, BTRFS_IOC_SET_FSLABEL, label) < 0) {
 		fprintf(stderr, "ERROR: unable to set label %s\n",
 			strerror(errno));
@@ -1798,7 +1797,8 @@ int get_label_unmounted(const char *dev, char *label)
 	if(!root)
 		return -1;
 
-	memcpy(label, root->fs_info->super_copy->label, BTRFS_LABEL_SIZE);
+	__strncpy_null(label, root->fs_info->super_copy->label,
+			BTRFS_LABEL_SIZE - 1);
 
 	/* Now we close it since we are done. */
 	close_ctree(root);
@@ -1833,7 +1833,7 @@ int get_label_mounted(const char *mount_path, char *labelp)
 		return ret;
 	}
 
-	strncpy(labelp, label, sizeof(label));
+	__strncpy_null(labelp, label, BTRFS_LABEL_SIZE - 1);
 	close(fd);
 	return 0;
 }
@@ -1865,25 +1865,6 @@ int set_label(const char *btrfs_dev, const char *label)
 		ret = set_label_unmounted(btrfs_dev, label);
 
 	return ret;
-}
-
-/*
- * Unsafe subvolume check.
- *
- * This only checks ino == BTRFS_FIRST_FREE_OBJECTID, even it is not in a
- * btrfs mount point.
- * Must use together with other reliable method like btrfs ioctl.
- */
-static int __is_subvol(const char *path)
-{
-	struct stat st;
-	int ret;
-
-	ret = lstat(path, &st);
-	if (ret < 0)
-		return ret;
-
-	return st.st_ino == BTRFS_FIRST_FREE_OBJECTID;
 }
 
 /*
@@ -2006,7 +1987,7 @@ u64 parse_qgroupid(const char *p)
 
 path:
 	/* Path format like subv at 'my_subvol' is the fallback case */
-	ret = __is_subvol(p);
+	ret = test_issubvolume(p);
 	if (ret < 0 || !ret)
 		goto err;
 	fd = open(p, O_RDONLY);
@@ -2187,8 +2168,7 @@ int get_fs_info(char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 		fd = open(path, O_RDONLY);
 		if (fd < 0) {
 			ret = -errno;
-			fprintf(stderr, "Couldn't open %s: %s\n",
-				path, strerror(errno));
+			error("cannot open %s: %s", path, strerror(errno));
 			goto out;
 		}
 		ret = check_mounted_where(fd, path, mp, sizeof(mp),
@@ -2371,9 +2351,7 @@ out:
  *	 0 for nothing found
  *	-1 for internal error
  */
-static int
-check_overwrite(
-	char		*device)
+static int check_overwrite(const char *device)
 {
 	const char	*type;
 	blkid_probe	pr = NULL;
@@ -2477,16 +2455,13 @@ int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 	case 2:
 		allowed |= BTRFS_BLOCK_GROUP_RAID0 | BTRFS_BLOCK_GROUP_RAID1 |
 			BTRFS_BLOCK_GROUP_RAID5;
-		break;
 	case 1:
 		allowed |= BTRFS_BLOCK_GROUP_DUP;
 	}
 
 	if (dev_cnt > 1 &&
 	    ((metadata_profile | data_profile) & BTRFS_BLOCK_GROUP_DUP)) {
-		fprintf(stderr,
-		    "ERROR: DUP is not allowed when FS has multiple devices\n");
-		return 1;
+		warning("DUP is not recommended on filesystem with multiple devices");
 	}
 	if (metadata_profile & ~allowed) {
 		fprintf(stderr,
@@ -2535,7 +2510,7 @@ int group_profile_max_safe_loss(u64 flags)
  *  1: something is wrong, an error is printed
  *  0: all is fine
  */
-int test_dev_for_mkfs(char *file, int force_overwrite)
+int test_dev_for_mkfs(const char *file, int force_overwrite)
 {
 	int ret, fd;
 	struct stat st;
@@ -2639,7 +2614,7 @@ int btrfs_scan_lblkid(void)
 	return 0;
 }
 
-int is_vol_small(char *file)
+int is_vol_small(const char *file)
 {
 	int fd = -1;
 	int e;
@@ -2673,7 +2648,7 @@ int is_vol_small(char *file)
  * first whitespace delimited token is a case insensitive match with yes
  * or y.
  */
-int ask_user(char *question)
+int ask_user(const char *question)
 {
 	char buf[30] = {0,};
 	char *saveptr = NULL;
@@ -2789,17 +2764,6 @@ int test_minimum_size(const char *file, u32 nodesize)
 	return 0;
 }
 
-/*
- * test if name is a correct subvolume name
- * this function return
- * 0-> name is not a correct subvolume name
- * 1-> name is a correct subvolume name
- */
-int test_issubvolname(const char *name)
-{
-	return name[0] != '\0' && !strchr(name, '/') &&
-		strcmp(name, ".") && strcmp(name, "..");
-}
 
 /*
  * Test if path is a directory
@@ -2855,7 +2819,7 @@ int find_next_key(struct btrfs_path *path, struct btrfs_key *key)
 	return 1;
 }
 
-char* btrfs_group_type_str(u64 flag)
+const char* btrfs_group_type_str(u64 flag)
 {
 	u64 mask = BTRFS_BLOCK_GROUP_TYPE_MASK |
 		BTRFS_SPACE_INFO_GLOBAL_RSV;
@@ -2876,7 +2840,7 @@ char* btrfs_group_type_str(u64 flag)
 	}
 }
 
-char* btrfs_group_profile_str(u64 flag)
+const char* btrfs_group_profile_str(u64 flag)
 {
 	switch (flag & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
 	case 0:
@@ -2898,7 +2862,7 @@ char* btrfs_group_profile_str(u64 flag)
 	}
 }
 
-u64 disk_size(char *path)
+u64 disk_size(const char *path)
 {
 	struct statfs sfs;
 
@@ -2908,7 +2872,7 @@ u64 disk_size(char *path)
 		return sfs.f_bsize * sfs.f_blocks;
 }
 
-u64 get_partition_size(char *dev)
+u64 get_partition_size(const char *dev)
 {
 	u64 result;
 	int fd = open(dev, O_RDONLY);
@@ -3005,7 +2969,7 @@ int arg_copy_path(char *dest, const char *src, int destlen)
 	if (len >= PATH_MAX || len >= destlen)
 		return -ENAMETOOLONG;
 
-	__strncpy__null(dest, src, destlen);
+	__strncpy_null(dest, src, destlen);
 
 	return 0;
 }
@@ -3017,6 +2981,9 @@ unsigned int get_unit_mode_from_arg(int *argc, char *argv[], int df_mode)
 	int arg_end;
 
 	for (arg_i = 0; arg_i < *argc; arg_i++) {
+		if (!strcmp(argv[arg_i], "--"))
+			break;
+
 		if (!strcmp(argv[arg_i], "--raw")) {
 			unit_mode = UNITS_RAW;
 			argv[arg_i] = NULL;
@@ -3147,4 +3114,129 @@ void clean_args_no_options(int argc, char *argv[], const char * const *usagestr)
 				usage(usagestr);
 		}
 	}
+}
+
+/* Subvolume helper functions */
+/*
+ * test if name is a correct subvolume name
+ * this function return
+ * 0-> name is not a correct subvolume name
+ * 1-> name is a correct subvolume name
+ */
+int test_issubvolname(const char *name)
+{
+	return name[0] != '\0' && !strchr(name, '/') &&
+		strcmp(name, ".") && strcmp(name, "..");
+}
+
+/*
+ * Test if path is a subvolume
+ * Returns:
+ *   0 - path exists but it is not a subvolume
+ *   1 - path exists and it is  a subvolume
+ * < 0 - error
+ */
+int test_issubvolume(const char *path)
+{
+	struct stat	st;
+	struct statfs stfs;
+	int		res;
+
+	res = stat(path, &st);
+	if (res < 0)
+		return -errno;
+
+	if (st.st_ino != BTRFS_FIRST_FREE_OBJECTID || !S_ISDIR(st.st_mode))
+		return 0;
+
+	res = statfs(path, &stfs);
+	if (res < 0)
+		return -errno;
+
+	return (int)stfs.f_type == BTRFS_SUPER_MAGIC;
+}
+
+const char *subvol_strip_mountpoint(const char *mnt, const char *full_path)
+{
+	int len = strlen(mnt);
+	if (!len)
+		return full_path;
+
+	if (mnt[len - 1] != '/')
+		len += 1;
+
+	return full_path + len;
+}
+
+/*
+ * Returns
+ * <0: Std error
+ * 0: All fine
+ * 1: Error; and error info printed to the terminal. Fixme.
+ * 2: If the fullpath is root tree instead of subvol tree
+ */
+int get_subvol_info(const char *fullpath, struct root_info *get_ri)
+{
+	u64 sv_id;
+	int ret = 1;
+	int fd = -1;
+	int mntfd = -1;
+	char *mnt = NULL;
+	const char *svpath = NULL;
+	DIR *dirstream1 = NULL;
+	DIR *dirstream2 = NULL;
+
+	ret = test_issubvolume(fullpath);
+	if (ret < 0)
+		return ret;
+	if (!ret) {
+		error("not a subvolume: %s", fullpath);
+		return 1;
+	}
+
+	ret = find_mount_root(fullpath, &mnt);
+	if (ret < 0)
+		return ret;
+	if (ret > 0) {
+		error("%s doesn't belong to btrfs mount point", fullpath);
+		return 1;
+	}
+	ret = 1;
+	svpath = subvol_strip_mountpoint(mnt, fullpath);
+
+	fd = btrfs_open_dir(fullpath, &dirstream1, 1);
+	if (fd < 0)
+		goto out;
+
+	ret = btrfs_list_get_path_rootid(fd, &sv_id);
+	if (ret) {
+		error("can't get rootid for '%s'", fullpath);
+		goto out;
+	}
+
+	mntfd = btrfs_open_dir(mnt, &dirstream2, 1);
+	if (mntfd < 0)
+		goto out;
+
+	if (sv_id == BTRFS_FS_TREE_OBJECTID) {
+		ret = 2;
+		/*
+		 * So that caller may decide if thats an error or just fine.
+		 */
+		goto out;
+	}
+
+	memset(get_ri, 0, sizeof(*get_ri));
+	get_ri->root_id = sv_id;
+
+	ret = btrfs_get_subvol(mntfd, get_ri);
+	if (ret)
+		error("can't find '%s': %d", svpath, ret);
+
+out:
+	close_file_or_dir(mntfd, dirstream2);
+	close_file_or_dir(fd, dirstream1);
+	free(mnt);
+
+	return ret;
 }

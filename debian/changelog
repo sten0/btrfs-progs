@@ -1,8 +1,24 @@
-btrfs-progs (4.4.1-1.1~bpo8+1) jessie-backports; urgency=medium
+btrfs-progs (4.5.2-1) unstable; urgency=medium
 
-  * Rebuild for jessie-backports.
+  [ Dimitri John Ledkov ]
+  * Thanks for NMU of package rename.
+  * New upstream release 4.5.2.
+  * Upload using dgit.
+  * Source-only upload.
+  * btrfs-convert should not be included in the initramfs, but should be
+    compiled. Using btrfs-convert is not a trivial operation, and
+    especially not from a minimal shell. Also it is known to fail, and for
+    a sophisticated user it is trivial to include it in the
+    initramfs. Thus won't fix Closes: #801192
+  * No sponsorship required Closes: #823474
+  * Add Provides btrfs-tools-udeb to the -progs-udeb package.
+  * Enable verbose build.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Mon, 02 May 2016 17:09:11 -0400
+  [ Ben Hutchings ]
+  * Show only errors from boot-time "btrfs scan" if "quiet" is
+    used. Closes: #812722
+
+ -- Dimitri John Ledkov <xnox@debian.org>  Tue, 10 May 2016 09:59:51 +0100
 
 btrfs-progs (4.4.1-1.1) unstable; urgency=medium
 

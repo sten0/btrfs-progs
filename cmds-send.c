@@ -335,17 +335,6 @@ out:
 	return ret;
 }
 
-char *get_subvol_name(char *mnt, char *full_path)
-{
-	int len = strlen(mnt);
-	if (!len)
-		return full_path;
-	if (mnt[len - 1] != '/')
-		len += 1;
-
-	return full_path + len;
-}
-
 static int init_root_path(struct btrfs_send *s, const char *subvol)
 {
 	int ret = 0;
@@ -466,8 +455,9 @@ int cmd_send(int argc, char **argv)
 			if (ret < 0)
 				goto out;
 
-			ret = get_root_id(&send, get_subvol_name(send.root_path, subvol),
-					&root_id);
+			ret = get_root_id(&send,
+				subvol_strip_mountpoint(send.root_path, subvol),
+				&root_id);
 			if (ret < 0) {
 				error("cannot resolve rootid for %s", subvol);
 				goto out;
@@ -484,7 +474,7 @@ int cmd_send(int argc, char **argv)
 
 			ret = add_clone_source(&send, root_id);
 			if (ret < 0) {
-				error("not enough memory");
+				error("cannot add clone source: %s", strerror(-ret));
 				goto out;
 			}
 			subvol_uuid_search_finit(&send.sus);
@@ -580,8 +570,8 @@ int cmd_send(int argc, char **argv)
 
 	if (snapshot_parent != NULL) {
 		ret = get_root_id(&send,
-				get_subvol_name(send.root_path, snapshot_parent),
-				&parent_root_id);
+			subvol_strip_mountpoint(send.root_path, snapshot_parent),
+			&parent_root_id);
 		if (ret < 0) {
 			error("could not resolve rootid for %s", snapshot_parent);
 			goto out;
@@ -589,7 +579,7 @@ int cmd_send(int argc, char **argv)
 
 		ret = add_clone_source(&send, parent_root_id);
 		if (ret < 0) {
-			error("not enough memory");
+			error("cannot add clone source: %s", strerror(-ret));
 			goto out;
 		}
 	}
@@ -683,15 +673,16 @@ int cmd_send(int argc, char **argv)
 		if (ret < 0)
 			goto out;
 
-		/* done with this subvol, so add it to the clone sources */
-		ret = add_clone_source(&send, root_id);
-		if (ret < 0) {
-			error("not enough memory");
-			goto out;
+		if (!full_send) {
+			/* done with this subvol, so add it to the clone sources */
+			ret = add_clone_source(&send, root_id);
+			if (ret < 0) {
+				error("cannot add clone source: %s", strerror(-ret));
+				goto out;
+			}
 		}
 
 		parent_root_id = 0;
-		full_send = 0;
 	}
 
 	ret = 0;

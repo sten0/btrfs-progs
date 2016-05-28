@@ -12,7 +12,7 @@ Build-Depends: debhelper (>= 9),
                zlib1g-dev,
                asciidoc,
                xmlto,
-Standards-Version: 3.9.7
+Standards-Version: 3.9.8
 Homepage: http://btrfs.wiki.kernel.org/
 
 Package: btrfs-progs
@@ -40,6 +40,7 @@ Package-Type: udeb
 Section: debian-installer
 Architecture: linux-any
 Depends: ${misc:Depends}, ${shlibs:Depends}
+Provides: btrfs-tools-udeb
 Description: Checksumming Copy on Write Filesystem utilities (udeb)
 
 Package: btrfs-progs-dbg
