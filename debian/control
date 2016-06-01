@@ -31,7 +31,7 @@ Description: Checksumming Copy on Write Filesystem utilities
 Package: btrfs-tools
 Section: oldlibs
 Architecture: linux-any
-Depends: btrfs-progs, ${misc:Depends}, ${shlibs:Depends}
+Depends: btrfs-progs (= ${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
 Description: transitional dummy package
  This is a transitional dummy package. It can safely be removed.
 
@@ -61,6 +61,6 @@ Package: btrfs-tools-dbg
 Section: oldlibs
 Priority: extra
 Architecture: linux-any
-Depends: btrfs-progs-dbg, ${misc:Depends}
+Depends: btrfs-progs-dbg (= ${binary:Version}), ${misc:Depends}
 Description: transitional dummy package
  This is a transitional dummy package. It can safely be removed.

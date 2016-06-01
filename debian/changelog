@@ -2,6 +2,10 @@ btrfs-progs (4.5.2-1~bpo8+1) jessie-backports; urgency=medium
 
   * Rebuild for jessie-backports.
   * Update standards version to 3.9.8 (no changes needed).
+  * debian/control: Be strict, in case of mixed DIST! Thanks Simon McVittie.
+    Addresses possible issue when using snapper and/or system-storage-manager
+    (debian-backports@lists.debian.org, Message-ID:
+    <CANBHLUjAJOYo-iSQyLnrN+cBMqnDMFXpC+WhvZgSOQwC+AZsow@mail.gmail.com>)
 
  -- Nicholas D Steeves <nsteeves@gmail.com>  Sat, 28 May 2016 17:13:38 -0400
 
