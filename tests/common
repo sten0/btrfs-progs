@@ -90,7 +90,15 @@ run_mustfail()
 check_prereq()
 {
 	if ! [ -f $TOP/$1 ]; then
-		_fail "Failed prerequisities: $1";
+		_fail "Failed prerequisites: $1";
+	fi
+}
+
+check_global_prereq()
+{
+	which $1 &> /dev/null
+	if [ $? -ne 0 ]; then
+		_fail "Failed system wide prerequisities: $1";
 	fi
 }
 
