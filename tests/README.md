@@ -20,7 +20,7 @@ category, eg. `fsck-tests-results.txt`.
 
 ## Selective testing
 
-The test are prefixed by a number for ordering and uniquenes. To run a
+The test are prefixed by a number for ordering and uniqueness. To run a
 particular test use:
 
 ```shell
@@ -53,6 +53,13 @@ will run the first test in fsck-tests subdirectory.
   * collection of fuzzed or crafted images
   * tests that are supposed to run various utilities on the images and not
     crash
+
+*tests/cli-tests/:*
+
+  * tests for command line interface, option coverage, weird optin combinations that should not work
+  * not necessary to do any functional testing, could be rather lightweight
+  * functional tests should go to to other test dirs
+  * the driver script will only execute `./test.sh` in the test directory
 
 *tests/misc-tests/:*
 
@@ -120,7 +127,7 @@ close to the purpose of your new test.
 * Use the highest unused number in the sequence, write a short descriptive title
 and join by dashes `-`.
 
-* Write a short description of the bug and how it's teste to the comment at the
+* Write a short description of the bug and how it's tested to the comment at the
 begining of `test.sh`.
 
 * Write the test commands, comment anything that's not obvious.
