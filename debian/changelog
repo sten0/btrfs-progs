@@ -13,7 +13,8 @@ btrfs-progs (4.6-0.1) UNRELEASED; urgency=medium
   * Fix serious errors in debian/copyright.  This is not a GPL2+ package.
     Cme was used to generate a machine-readable copyright file, then manual
     fixes were made. (Closes: #824896)
-  * debian/watch: add mangling rules to prefer non-rcN versions.
+  * debian/watch: add mangling rules to prefer non-rcN versions; add
+    cryptographic signature verification of tarball.
 
  -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 16 Jun 2016 20:32:00 -0400
 

@@ -1,5 +1,5 @@
 version=3
 
-opts="uversionmangle=s/(\d)[_\.\-\+]?(rc\d*)$/$1~$2/" \
+opts="uversionmangle=s/(\d)[_\.\-\+]?(rc\d*)$/$1~$2/,pgpsigurlmangle=s/\.tar.*$/\.tar.sign/,decompress" \
 https://www.kernel.org/pub/linux/kernel/people/kdave/btrfs-progs/btrfs-progs-v(.+)\.tar\.xz
 
