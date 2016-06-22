@@ -1,14 +1,4 @@
-btrfs-progs (4.5.3-1~bpo8+1) jessie-backports; urgency=medium
-
-  * Rebuild for jessie-backports.
-  * debian/control: Be strict, in case of mixed DIST! Thanks Simon McVittie.
-    Addresses possible issue when using snapper and/or system-storage-manager
-    (debian-backports@lists.debian.org, Message-ID:
-    <CANBHLUjAJOYo-iSQyLnrN+cBMqnDMFXpC+WhvZgSOQwC+AZsow@mail.gmail.com>)
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Wed, 22 Jun 2016 15:44:56 -0400
-
-btrfs-progs (4.5.3-0.1) UNRELEASED; urgency=medium
+btrfs-progs (4.6-0.1) UNRELEASED; urgency=medium
 
   * Non-maintainer upload.
   * New upstream release.
@@ -23,8 +13,10 @@ btrfs-progs (4.5.3-0.1) UNRELEASED; urgency=medium
   * Fix serious errors in debian/copyright.  This is not a GPL2+ package.
     Cme was used to generate a machine-readable copyright file, then manual
     fixes were made. (Closes: #824896)
+  * debian/watch: add mangling rules to prefer non-rcN versions; add
+    cryptographic signature verification of tarball.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Sat, 28 May 2016 16:27:44 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 16 Jun 2016 20:32:00 -0400
 
 btrfs-progs (4.5.2-1) unstable; urgency=medium
 
