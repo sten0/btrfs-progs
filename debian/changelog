@@ -1,13 +1,20 @@
-btrfs-progs (4.5.2-1~bpo8+1) jessie-backports; urgency=medium
+btrfs-progs (4.5.3-0.1) UNRELEASED; urgency=medium
 
-  * Rebuild for jessie-backports.
+  * Non-maintainer upload.
+  * New upstream release.
   * Update standards version to 3.9.8 (no changes needed).
-  * debian/control: Be strict, in case of mixed DIST! Thanks Simon McVittie.
-    Addresses possible issue when using snapper and/or system-storage-manager
-    (debian-backports@lists.debian.org, Message-ID:
-    <CANBHLUjAJOYo-iSQyLnrN+cBMqnDMFXpC+WhvZgSOQwC+AZsow@mail.gmail.com>)
+  * Install upstream changelog. (Closes: #824894)
+  * Because btrfs-convert is known to fail and/or cause data-loss; use a
+    wrapper script to warn the user it is for testing purposes only; warn
+    the user at run-time. (Closes: #824895)
+  * Provide a initramfs hook in /usr/share/doc/btrfs-progs, because a
+    sophisticated user will look here before writing his/her own script,
+    and because this user might not expect the wrapper script diversion.
+  * Fix serious errors in debian/copyright.  This is not a GPL2+ package.
+    Cme was used to generate a machine-readable copyright file, then manual
+    fixes were made. (Closes: #824896)
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Sat, 28 May 2016 17:13:38 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Sat, 28 May 2016 16:27:44 -0400
 
 btrfs-progs (4.5.2-1) unstable; urgency=medium
 

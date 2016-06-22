@@ -1,0 +1,35 @@
+#!/bin/sh
+
+cat << !EOF!
+********  WARNING ********
+Btrfs-convert is known to fail. An upstream rewrite of the
+utility is currently in progress. At this point in time,
+btrfs-convert is provided for experimental purposes only.
+
+Please do not convert filesystems filled with data you value.
+Expect that you will need to restore from backup.  Beware,
+the dataloss may not be immediately apparent, and may take
+some time to manifest.
+
+If you choose to experiment with btrfs-convert, please do so
+with the willingness to work with linux-btrfs@vger.kernel.org
+
+!EOF!
+echo -n 'Proceed (Yes/No)?: '
+
+while true; do
+    read -r choice
+    case "$choice" in
+        yes | y | Yes | YES )
+            exec /bin/btrfs-convert.real "$@"
+            exit $?
+            ;;
+        no | n | No | NO )
+            echo "Thank you for making the safe choice"
+            exit 0
+            ;;
+        * )
+            echo -n "Please answer Yes or No: "
+            ;;
+    esac
+done
