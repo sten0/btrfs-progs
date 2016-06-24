@@ -1,4 +1,4 @@
-btrfs-progs (4.6-1~bpo8+1) jessie-backports; urgency=medium
+btrfs-progs (4.6.1-1~bpo8+1) jessie-backports; urgency=medium
 
   * Rebuild for jessie-backports.
   * debian/control: Be strict, in case of mixed DIST! Thanks Simon McVittie.
@@ -6,9 +6,9 @@ btrfs-progs (4.6-1~bpo8+1) jessie-backports; urgency=medium
     (debian-backports@lists.debian.org, Message-ID:
     <CANBHLUjAJOYo-iSQyLnrN+cBMqnDMFXpC+WhvZgSOQwC+AZsow@mail.gmail.com>)
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Wed, 22 Jun 2016 16:26:34 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 24 Jun 2016 13:04:18 -0400
 
-btrfs-progs (4.6-0.1) UNRELEASED; urgency=medium
+btrfs-progs (4.6.1-0.1) UNRELEASED; urgency=medium
 
   * Non-maintainer upload.
   * New upstream release.
@@ -26,7 +26,7 @@ btrfs-progs (4.6-0.1) UNRELEASED; urgency=medium
   * debian/watch: add mangling rules to prefer non-rcN versions; add
     cryptographic signature verification of tarball.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 16 Jun 2016 20:32:00 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 24 Jun 2016 12:50:13 -0400
 
 btrfs-progs (4.5.2-1) unstable; urgency=medium
 

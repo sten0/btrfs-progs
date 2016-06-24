@@ -43,7 +43,9 @@ library-test
 library-test-static
 
 /tests/*-tests-results.txt
+/tests/test-console.txt
 /tests/test.img
+/tests/mnt/
 
 aclocal.m4
 autom4te.cache
@@ -64,7 +66,6 @@ configure
 cscope.out
 depcomp
 libtool
-m4/*.m4
 Makefile
 Documentation/Makefile
 missing
