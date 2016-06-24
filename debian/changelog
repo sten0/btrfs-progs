@@ -1,4 +1,4 @@
-btrfs-progs (4.6-0.1) UNRELEASED; urgency=medium
+btrfs-progs (4.6.1-0.1) UNRELEASED; urgency=medium
 
   * Non-maintainer upload.
   * New upstream release.
@@ -16,7 +16,7 @@ btrfs-progs (4.6-0.1) UNRELEASED; urgency=medium
   * debian/watch: add mangling rules to prefer non-rcN versions; add
     cryptographic signature verification of tarball.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 16 Jun 2016 20:32:00 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 24 Jun 2016 12:50:13 -0400
 
 btrfs-progs (4.5.2-1) unstable; urgency=medium
 
