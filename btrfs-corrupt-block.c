@@ -131,8 +131,8 @@ static void corrupt_keys(struct btrfs_trans_handle *trans,
 	if (nr == 0)
 		return;
 
-	slot = rand() % nr;
-	bad_slot = rand() % nr;
+	slot = rand_range(nr);
+	bad_slot = rand_range(nr);
 
 	if (bad_slot == slot)
 		return;
@@ -181,7 +181,7 @@ static int corrupt_extent(struct btrfs_trans_handle *trans,
 	struct btrfs_path *path;
 	int ret;
 	int slot;
-	int should_del = rand() % 3;
+	int should_del = rand_range(3);
 
 	path = btrfs_alloc_path();
 	if (!path)
@@ -210,6 +210,7 @@ static int corrupt_extent(struct btrfs_trans_handle *trans,
 			break;
 
 		if (key.type != BTRFS_EXTENT_ITEM_KEY &&
+		    key.type != BTRFS_METADATA_ITEM_KEY &&
 		    key.type != BTRFS_TREE_BLOCK_REF_KEY &&
 		    key.type != BTRFS_EXTENT_DATA_REF_KEY &&
 		    key.type != BTRFS_EXTENT_REF_V0_KEY &&
@@ -257,7 +258,7 @@ static void btrfs_corrupt_extent_leaf(struct btrfs_trans_handle *trans,
 				      struct extent_buffer *eb)
 {
 	u32 nr = btrfs_header_nritems(eb);
-	u32 victim = rand() % nr;
+	u32 victim = rand_range(nr);
 	u64 objectid;
 	struct btrfs_key key;
 
@@ -281,7 +282,7 @@ static void btrfs_corrupt_extent_tree(struct btrfs_trans_handle *trans,
 	}
 
 	if (btrfs_header_level(eb) == 1 && eb != root->node) {
-		if (rand() % 5)
+		if (rand_range(5))
 			return;
 	}
 
@@ -390,7 +391,7 @@ static u64 generate_u64(u64 orig)
 {
 	u64 ret;
 	do {
-		ret = rand();
+		ret = rand_u64();
 	} while (ret == orig);
 	return ret;
 }
@@ -399,7 +400,7 @@ static u32 generate_u32(u32 orig)
 {
 	u32 ret;
 	do {
-		ret = rand();
+		ret = rand_u32();
 	} while (ret == orig);
 	return ret;
 }
@@ -408,7 +409,7 @@ static u8 generate_u8(u8 orig)
 {
 	u8 ret;
 	do {
-		ret = rand();
+		ret = rand_u8();
 	} while (ret == orig);
 	return ret;
 }
@@ -719,7 +720,7 @@ static int corrupt_metadata_block(struct btrfs_root *root, u64 block,
 
 	root = btrfs_read_fs_root(root->fs_info, &root_key);
 	if (IS_ERR(root)) {
-		fprintf(stderr, "Couldn't finde owner root %llu\n",
+		fprintf(stderr, "Couldn't find owner root %llu\n",
 			key.objectid);
 		return PTR_ERR(root);
 	}
@@ -871,7 +872,7 @@ static int delete_csum(struct btrfs_root *root, u64 bytenr, u64 bytes)
 }
 
 /* corrupt item using NO cow.
- * Because chunk recover will recover based on whole partition scaning,
+ * Because chunk recover will recover based on whole partition scanning,
  * If using COW, chunk recover will use the old item to recover,
  * which is still OK but we want to check the ability to rebuild chunk
  * not only restore the old ones */
@@ -944,7 +945,7 @@ static int corrupt_chunk_tree(struct btrfs_trans_handle *trans,
 	while (!btrfs_previous_item(root, path, 0, BTRFS_DEV_ITEM_KEY)) {
 		slot = path->slots[0];
 		leaf = path->nodes[0];
-		del = rand() % 3;
+		del = rand_range(3);
 		/* Never delete the first item to keep the leaf structure */
 		if (path->slots[0] == 0)
 			del = 0;
@@ -971,7 +972,7 @@ static int corrupt_chunk_tree(struct btrfs_trans_handle *trans,
 	while (!btrfs_previous_item(root, path, 0, BTRFS_CHUNK_ITEM_KEY)) {
 		slot = path->slots[0];
 		leaf = path->nodes[0];
-		del = rand() % 3;
+		del = rand_range(3);
 		btrfs_item_key_to_cpu(leaf, &found_key, slot);
 		ret = corrupt_item_nocow(trans, root, path, del);
 		if (ret)
@@ -1040,7 +1041,6 @@ int main(int argc, char **argv)
 	char field[FIELD_BUF_LEN];
 
 	field[0] = '\0';
-	srand(128);
 	memset(&key, 0, sizeof(key));
 
 	while(1) {
@@ -1179,7 +1179,7 @@ int main(int argc, char **argv)
 
 		if (logical == (u64)-1)
 			print_usage(1);
-		del = rand() % 3;
+		del = rand_range(3);
 		path = btrfs_alloc_path();
 		if (!path) {
 			fprintf(stderr, "path allocation failed\n");

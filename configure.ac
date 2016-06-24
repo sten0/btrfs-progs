@@ -105,10 +105,16 @@ AS_IF([test "x$enable_convert" = xyes], [DISABLE_BTRFSCONVERT=0], [DISABLE_BTRFS
 AC_SUBST([DISABLE_BTRFSCONVERT])
 
 if test "x$enable_convert" = xyes; then
-	PKG_CHECK_MODULES(EXT2FS, [ext2fs >= 1.41])
+	PKG_CHECK_MODULES(EXT2FS, [ext2fs >= 1.42],,
+		[PKG_CHECK_MODULES(EXT2FS, [ext2fs],
+			[AC_DEFINE([HAVE_OLD_E2FSPROGS], [1],
+				  [E2fsprogs does not support BIGALLOC])]
+			)])
 	PKG_CHECK_MODULES(COM_ERR, [com_err])
 fi
 
+AX_CHECK_DEFINE([linux/fiemap.h], [FIEMAP_EXTENT_SHARED], [],
+		[AC_MSG_ERROR([no definition of FIEMAP_EXTENT_SHARED found])])
 
 dnl Define <NAME>_LIBS= and <NAME>_CFLAGS= by pkg-config
 dnl
@@ -123,6 +129,9 @@ PKG_STATIC(UUID_LIBS_STATIC, [uuid])
 
 PKG_CHECK_MODULES(ZLIB, [zlib])
 PKG_STATIC(ZLIB_LIBS_STATIC, [zlib])
+
+UDEVDIR="$(pkg-config udev --variable=udevdir)"
+AC_SUBST(UDEVDIR)
 
 dnl lzo library does not provide pkg-config, let use classic way
 AC_CHECK_LIB([lzo2], [lzo_version], [
