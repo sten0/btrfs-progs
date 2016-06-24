@@ -898,9 +898,10 @@ devs_only:
 	list_for_each_entry(fs_devices, &all_uuids, list)
 		print_one_uuid(fs_devices, unit_mode);
 
-	if (search && !found)
+	if (search && !found) {
+		error("not a valid btrfs filesystem: %s", search);
 		ret = 1;
-
+	}
 	while (!list_empty(&all_uuids)) {
 		fs_devices = list_entry(all_uuids.next,
 					struct btrfs_fs_devices, list);
@@ -1184,7 +1185,7 @@ static int cmd_filesystem_resize(int argc, char **argv)
 	DIR	*dirstream = NULL;
 	struct stat st;
 
-	clean_args_no_options(argc, argv, cmd_filesystem_resize_usage);
+	clean_args_no_options_relaxed(argc, argv, cmd_filesystem_resize_usage);
 
 	if (check_argc_exact(argc - optind, 2))
 		usage(cmd_filesystem_resize_usage);
