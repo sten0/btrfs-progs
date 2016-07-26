@@ -185,11 +185,11 @@ static int load_chunk_info(int fd, struct chunk_info **info_ptr, int *info_count
 				return 1;
 			}
 
-			off += sh->len;
+			off += btrfs_search_header_len(sh);
 
-			sk->min_objectid = sh->objectid;
-			sk->min_type = sh->type;
-			sk->min_offset = sh->offset+1;
+			sk->min_objectid = btrfs_search_header_objectid(sh);
+			sk->min_type = btrfs_search_header_type(sh);
+			sk->min_offset = btrfs_search_header_offset(sh)+1;
 
 		}
 		if (!sk->min_offset)	/* overflow */
@@ -280,7 +280,7 @@ static struct btrfs_ioctl_space_args *load_space_info(int fd, char *path)
 }
 
 /*
- * This function computes the space occuped by a *single* RAID5/RAID6 chunk.
+ * This function computes the space occupied by a *single* RAID5/RAID6 chunk.
  * The computation is performed on the basis of the number of stripes
  * which compose the chunk, which could be different from the number of devices
  * if a disk is added later.
@@ -1024,13 +1024,8 @@ void print_device_sizes(int fd, struct device_info *devinfo, unsigned unit_mode)
 	printf("   Device size: %*s%10s\n",
 		(int)(20 - strlen("Device size")), "",
 		pretty_size_mode(devinfo->device_size, unit_mode));
-#if 0
-	/*
-	 * The term has not seen an agreement and we don't want to change it
-	 * once it's in non-development branches or even released.
-	 */
-	printf("   FS occupied: %*s%10s\n",
-		(int)(20 - strlen("FS occupied")), "",
-		pretty_size_mode(devinfo->size, unit_mode));
-#endif
+	printf("   Device slack: %*s%10s\n",
+		(int)(20 - strlen("Device slack")), "",
+		pretty_size_mode(devinfo->device_size - devinfo->size,
+			unit_mode));
 }

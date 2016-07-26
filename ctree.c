@@ -142,7 +142,7 @@ static int btrfs_block_can_be_shared(struct btrfs_root *root,
 			             struct extent_buffer *buf)
 {
 	/*
-	 * Tree blocks not in refernece counted trees and tree roots
+	 * Tree blocks not in reference counted trees and tree roots
 	 * are never shared. If a block was allocated after the last
 	 * snapshot and the block was not allocated by tree relocation,
 	 * we know the block is not shared.
@@ -2880,6 +2880,7 @@ int btrfs_previous_item(struct btrfs_root *root,
 {
 	struct btrfs_key found_key;
 	struct extent_buffer *leaf;
+	u32 nritems;
 	int ret;
 
 	while(1) {
@@ -2891,9 +2892,20 @@ int btrfs_previous_item(struct btrfs_root *root,
 			path->slots[0]--;
 		}
 		leaf = path->nodes[0];
+		nritems = btrfs_header_nritems(leaf);
+		if (nritems == 0)
+			return 1;
+		if (path->slots[0] == nritems)
+			path->slots[0]--;
+
 		btrfs_item_key_to_cpu(leaf, &found_key, path->slots[0]);
+		if (found_key.objectid < min_objectid)
+			break;
 		if (found_key.type == type)
 			return 0;
+		if (found_key.objectid == min_objectid &&
+		    found_key.type < type)
+			break;
 	}
 	return 1;
 }
@@ -2938,4 +2950,28 @@ int btrfs_previous_extent_item(struct btrfs_root *root,
 			break;
 	}
 	return 1;
+}
+
+/*
+ * Search in extent tree to found next meta/data extent
+ * Caller needs to check for no-hole or skinny metadata features.
+ */
+int btrfs_next_extent_item(struct btrfs_root *root,
+			struct btrfs_path *path, u64 max_objectid)
+{
+	struct btrfs_key found_key;
+	int ret;
+
+	while (1) {
+		ret = btrfs_next_item(root, path);
+		if (ret)
+			return ret;
+		btrfs_item_key_to_cpu(path->nodes[0], &found_key,
+				      path->slots[0]);
+		if (found_key.objectid > max_objectid)
+			return 1;
+		if (found_key.type == BTRFS_EXTENT_ITEM_KEY ||
+		    found_key.type == BTRFS_METADATA_ITEM_KEY)
+		return 0;
+	}
 }

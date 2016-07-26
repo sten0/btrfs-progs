@@ -1,6 +1,7 @@
-btrfs-progs (4.5.2-2) UNRELEASED; urgency=high
+btrfs-progs (4.6.1-1) UNRELEASED; urgency=high
 
   [ Dimitri John Ledkov ]
+  * New upstream release
   * Update debian/copyright as package is mostly GPL-2 only, not GPL-2+
     (Closes: #824896)
   * Provide upstream changelog, thanks to Nicholas D Steeves (Closes:

@@ -46,6 +46,8 @@
 	| BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA		\
 	| BTRFS_FEATURE_INCOMPAT_NO_HOLES)
 
+#define BTRFS_CONVERT_META_GROUP_SIZE (32 * 1024 * 1024)
+
 #define BTRFS_FEATURE_LIST_ALL		(1ULL << 63)
 
 #define BTRFS_SCAN_MOUNTED	(1ULL << 0)
@@ -123,7 +125,30 @@ struct btrfs_mkfs_config {
 	u64 super_bytenr;
 };
 
-int make_btrfs(int fd, struct btrfs_mkfs_config *cfg);
+struct btrfs_convert_context {
+	u32 blocksize;
+	u32 first_data_block;
+	u32 block_count;
+	u32 inodes_count;
+	u32 free_inodes_count;
+	u64 total_bytes;
+	char *volume_name;
+	const struct btrfs_convert_operations *convert_ops;
+
+	/* The accurate used space of old filesystem */
+	struct cache_tree used;
+
+	/* Batched ranges which must be covered by data chunks */
+	struct cache_tree data_chunks;
+
+	/* Free space which is not covered by data_chunks */
+	struct cache_tree free;
+
+	void *fs_data;
+};
+
+int make_btrfs(int fd, struct btrfs_mkfs_config *cfg,
+		struct btrfs_convert_context *cctx);
 int btrfs_make_root_dir(struct btrfs_trans_handle *trans,
 			struct btrfs_root *root, u64 objectid);
 int btrfs_prepare_device(int fd, const char *file, int zero_end,
@@ -209,8 +234,9 @@ int get_subvol_info(const char *fullpath, struct root_info *get_ri);
  */
 static inline u64 btrfs_min_global_blk_rsv_size(u32 nodesize)
 {
-	return nodesize << 10;
+	return (u64)nodesize << 10;
 }
+
 static inline u64 btrfs_min_dev_size(u32 nodesize)
 {
 	return 2 * (BTRFS_MKFS_SYSTEM_GROUP_SIZE +
@@ -277,6 +303,8 @@ const char *get_argv0_buf(void);
 
 unsigned int get_unit_mode_from_arg(int *argc, char *argv[], int df_mode);
 void clean_args_no_options(int argc, char *argv[], const char * const *usage);
+void clean_args_no_options_relaxed(int argc, char *argv[],
+		const char * const *usagestr);
 int string_is_numerical(const char *str);
 
 __attribute__ ((format (printf, 1, 2)))
@@ -336,5 +364,39 @@ static inline int error_on(int condition, const char *fmt, ...)
 
 	return 1;
 }
+
+/* Pseudo random number generator wrappers */
+u32 rand_u32(void);
+
+static inline int rand_int(void)
+{
+	return (int)(rand_u32());
+}
+
+static inline u64 rand_u64(void)
+{
+	u64 ret = 0;
+
+	ret += rand_u32();
+	ret <<= 32;
+	ret += rand_u32();
+	return ret;
+}
+
+static inline u16 rand_u16(void)
+{
+	return (u16)(rand_u32());
+}
+
+static inline u8 rand_u8(void)
+{
+	return (u8)(rand_u32());
+}
+
+/* Return random number in range [0, limit) */
+unsigned int rand_range(unsigned int upper);
+
+/* Also allow setting the seed manually */
+void init_rand_seed(u64 seed);
 
 #endif
