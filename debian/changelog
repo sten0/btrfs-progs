@@ -1,4 +1,4 @@
-btrfs-progs (4.6.1-1) UNRELEASED; urgency=high
+btrfs-progs (4.6.1-1) unstable; urgency=high
 
   [ Dimitri John Ledkov ]
   * New upstream release
@@ -15,7 +15,7 @@ btrfs-progs (4.6.1-1) UNRELEASED; urgency=high
   * debian/watch: add mangling rules to prefer non-rcN versions; add
     cryptographic signature verification of tarball (Closes: #827778)
 
- -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 26 Jul 2016 12:43:42 +0100
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 26 Jul 2016 13:50:21 +0100
 
 btrfs-progs (4.5.2-1) unstable; urgency=medium
 
