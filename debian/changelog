@@ -1,31 +1,21 @@
-btrfs-progs (4.6.1-1~bpo8+1) jessie-backports; urgency=medium
+btrfs-progs (4.6.1-1) unstable; urgency=high
 
-  * Rebuild for jessie-backports.
-  * debian/control: Be strict, in case of mixed DIST! Thanks Simon McVittie.
-    Addresses possible issue when using snapper and/or system-storage-manager
-    (debian-backports@lists.debian.org, Message-ID:
-    <CANBHLUjAJOYo-iSQyLnrN+cBMqnDMFXpC+WhvZgSOQwC+AZsow@mail.gmail.com>)
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 24 Jun 2016 13:04:18 -0400
-
-btrfs-progs (4.6.1-0.1) UNRELEASED; urgency=medium
-
-  * Non-maintainer upload.
-  * New upstream release.
-  * Update standards version to 3.9.8 (no changes needed).
-  * Install upstream changelog. (Closes: #824894)
-  * Because btrfs-convert is known to fail and/or cause data-loss; use a
-    wrapper script to warn the user it is for testing purposes only; warn
-    the user at run-time. (Closes: #824895)
-  * Provide a initramfs hook in /usr/share/doc/btrfs-progs, because a
-    sophisticated user will look here before writing his/her own script,
-    and because this user might not expect the wrapper script diversion.
-  * Fix serious errors in debian/copyright.  This is not a GPL2+ package.
+  [ Dimitri John Ledkov ]
+  * New upstream release
+  * Update debian/copyright as package is mostly GPL-2 only, not GPL-2+
     (Closes: #824896)
-  * debian/watch: add mangling rules to prefer non-rcN versions; add
-    cryptographic signature verification of tarball.
+  * Provide upstream changelog, thanks to Nicholas D Steeves (Closes:
+    #824894)
+  * Set Vcs-* control headers pointing at dgit git repositories
+  * Add udev build-dependency, to install upstream btrfs-dm udev rules
+  * Ship libgcc_s into the initrd, for scrub to work because it uses
+    pthread_cancel. Thanks Guilhem. (Closes: #830883)
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 24 Jun 2016 12:50:13 -0400
+  [ Nicholas D Steeves ]
+  * debian/watch: add mangling rules to prefer non-rcN versions; add
+    cryptographic signature verification of tarball (Closes: #827778)
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 26 Jul 2016 13:50:21 +0100
 
 btrfs-progs (4.5.2-1) unstable; urgency=medium
 

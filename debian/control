@@ -9,11 +9,14 @@ Build-Depends: debhelper (>= 9),
                libblkid-dev,
                liblzo2-dev,
                uuid-dev,
+	       udev,
                zlib1g-dev,
                asciidoc,
                xmlto,
 Standards-Version: 3.9.8
 Homepage: http://btrfs.wiki.kernel.org/
+Vcs-Browser: https://browse.dgit.debian.org/btrfs-progs.git
+Vcs-Git: https://git.dgit.debian.org/btrfs-progs
 
 Package: btrfs-progs
 Architecture: linux-any

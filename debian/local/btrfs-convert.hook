@@ -1,8 +1,0 @@
-#!/bin/sh
-
-. /usr/share/initramfs-tools/hook-functions
-
-if command -v /bin/btrfs-convert >/dev/null 2>&1; then
-    copy_exec /bin/btrfs-convert bin/btrfs-convert
-    copy_exec /bin/btrfs-convert.real bin/btrfs-convert.real
-fi
