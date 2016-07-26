@@ -11,7 +11,7 @@ btrfs-progs (4.6.1-1) UNRELEASED; urgency=high
 
   [ Nicholas D Steeves ]
   * debian/watch: add mangling rules to prefer non-rcN versions; add
-    cryptographic signature verification of tarball.
+    cryptographic signature verification of tarball (Closes: #827778)
 
  -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 26 Jul 2016 12:43:42 +0100
 
