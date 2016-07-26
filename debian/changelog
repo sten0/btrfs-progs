@@ -8,6 +8,8 @@ btrfs-progs (4.6.1-1) UNRELEASED; urgency=high
     #824894)
   * Set Vcs-* control headers pointing at dgit git repositories
   * Add udev build-dependency, to install upstream btrfs-dm udev rules
+  * Ship libgcc_s into the initrd, for scrub to work because it uses
+    pthread_cancel. Thanks Guilhem. (Closes: #830883)
 
   [ Nicholas D Steeves ]
   * debian/watch: add mangling rules to prefer non-rcN versions; add
