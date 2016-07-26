@@ -2,6 +2,8 @@ btrfs-progs (4.5.2-2) UNRELEASED; urgency=high
 
   * Update debian/copyright as package is mostly GPL-2 only, not GPL-2+
     (Closes: #824896)
+  * Provide upstream changelog, thanks to Nicholas D Steeves (Closes:
+    #824894)
 
  -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 26 Jul 2016 12:43:42 +0100
 
