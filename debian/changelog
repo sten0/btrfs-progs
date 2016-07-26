@@ -7,6 +7,7 @@ btrfs-progs (4.6.1-1) UNRELEASED; urgency=high
   * Provide upstream changelog, thanks to Nicholas D Steeves (Closes:
     #824894)
   * Set Vcs-* control headers pointing at dgit git repositories
+  * Add udev build-dependency, to install upstream btrfs-dm udev rules
 
   [ Nicholas D Steeves ]
   * debian/watch: add mangling rules to prefer non-rcN versions; add
