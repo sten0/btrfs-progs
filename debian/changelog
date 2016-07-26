@@ -5,6 +5,7 @@ btrfs-progs (4.5.2-2) UNRELEASED; urgency=high
     (Closes: #824896)
   * Provide upstream changelog, thanks to Nicholas D Steeves (Closes:
     #824894)
+  * Set Vcs-* control headers pointing at dgit git repositories
 
   [ Nicholas D Steeves ]
   * debian/watch: add mangling rules to prefer non-rcN versions; add
