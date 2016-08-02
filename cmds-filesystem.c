@@ -968,7 +968,7 @@ static const char * const cmd_filesystem_defrag_usage[] = {
 	"-f             flush data to disk immediately after defragmenting",
 	"-s start       defragment only from byte onward",
 	"-l len         defragment only up to len bytes",
-	"-t size        target extent size hint",
+	"-t size        target extent size hint (default: 32M)",
 	NULL
 };
 
@@ -1029,7 +1029,7 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 	int flush = 0;
 	u64 start = 0;
 	u64 len = (u64)-1;
-	u64 thresh = 0;
+	u64 thresh;
 	int i;
 	int recursive = 0;
 	int ret = 0;
@@ -1037,11 +1037,17 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 	int compress_type = BTRFS_COMPRESS_NONE;
 	DIR *dirstream;
 
+	/*
+	 * Kernel has a different default (256K) that is supposed to be safe,
+	 * but it does not defragment very well. The 32M will likely lead to
+	 * better results and is independent of the kernel default.
+	 */
+	thresh = 32 * 1024 * 1024;
+
 	defrag_global_errors = 0;
 	defrag_global_verbose = 0;
 	defrag_global_errors = 0;
 	defrag_global_fancy_ioctl = 0;
-	optind = 1;
 	while(1) {
 		int c = getopt(argc, argv, "vrc::fs:l:t:");
 		if (c < 0)

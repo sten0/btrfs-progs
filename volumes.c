@@ -227,6 +227,8 @@ int btrfs_open_devices(struct btrfs_fs_devices *fs_devices, int flags)
 		fd = open(device->name, flags);
 		if (fd < 0) {
 			ret = -errno;
+			error("cannot open device '%s': %s", device->name,
+					strerror(errno));
 			goto fail;
 		}
 
@@ -1759,6 +1761,8 @@ static int read_one_chunk(struct btrfs_root *root, struct btrfs_key *key,
 			map->stripes[i].dev = fill_missing_device(devid);
 			printf("warning, device %llu is missing\n",
 			       (unsigned long long)devid);
+			list_add(&map->stripes[i].dev->dev_list,
+				 &root->fs_info->fs_devices->devices);
 		}
 
 	}
@@ -2152,9 +2156,14 @@ int write_raid56_with_parity(struct btrfs_fs_info *info,
 		ebs[multi->num_stripes - 1] = p_eb;
 		memcpy(p_eb->data, ebs[0]->data, stripe_len);
 		for (j = 1; j < multi->num_stripes - 1; j++) {
-			for (i = 0; i < stripe_len; i += sizeof(unsigned long)) {
-				*(unsigned long *)(p_eb->data + i) ^=
-					*(unsigned long *)(ebs[j]->data + i);
+			for (i = 0; i < stripe_len; i += sizeof(u64)) {
+				u64 p_eb_data;
+				u64 ebs_data;
+
+				p_eb_data = get_unaligned_64(p_eb->data + i);
+				ebs_data = get_unaligned_64(ebs[j]->data + i);
+				p_eb_data ^= ebs_data;
+				put_unaligned_64(p_eb_data, p_eb->data + i);
 			}
 		}
 	}
