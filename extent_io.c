@@ -540,10 +540,8 @@ static struct extent_buffer *__alloc_extent_buffer(struct extent_io_tree *tree,
 	struct extent_buffer *eb;
 
 	eb = calloc(1, sizeof(struct extent_buffer) + blocksize);
-	if (!eb) {
-		BUG();
+	if (!eb)
 		return NULL;
-	}
 
 	eb->start = bytenr;
 	eb->len = blocksize;
@@ -564,7 +562,7 @@ struct extent_buffer *btrfs_clone_extent_buffer(struct extent_buffer *src)
 	struct extent_buffer *new;
 
 	new = __alloc_extent_buffer(NULL, src->start, src->len);
-	if (new == NULL)
+	if (!new)
 		return NULL;
 
 	copy_extent_buffer(new, src, 0, 0, src->len);
@@ -774,7 +772,11 @@ int write_data_to_disk(struct btrfs_fs_info *info, void *buf, u64 offset,
 			this_len = min(this_len, (u64)info->tree_root->nodesize);
 
 			eb = malloc(sizeof(struct extent_buffer) + this_len);
-			BUG_ON(!eb);
+			if (!eb) {
+				fprintf(stderr, "cannot allocate memory for eb\n");
+				ret = -ENOMEM;
+				goto out;
+			}
 
 			memset(eb, 0, sizeof(struct extent_buffer) + this_len);
 			eb->start = offset;
@@ -825,6 +827,10 @@ int write_data_to_disk(struct btrfs_fs_info *info, void *buf, u64 offset,
 		multi = NULL;
 	}
 	return 0;
+
+out:
+	kfree(raid_map);
+	return ret;
 }
 
 int set_extent_buffer_dirty(struct extent_buffer *eb)
@@ -889,5 +895,5 @@ void memset_extent_buffer(struct extent_buffer *eb, char c,
 int extent_buffer_test_bit(struct extent_buffer *eb, unsigned long start,
 			   unsigned long nr)
 {
-	return test_bit(nr, (unsigned long *)(eb->data + start));
+	return le_test_bit(nr, (u8 *)eb->data + start);
 }

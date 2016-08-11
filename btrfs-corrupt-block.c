@@ -34,27 +34,28 @@
 
 #define FIELD_BUF_LEN 80
 
-static struct extent_buffer *debug_corrupt_block(struct btrfs_root *root,
-		u64 bytenr, u32 blocksize, u64 copy)
+static int debug_corrupt_block(struct extent_buffer *eb,
+		struct btrfs_root *root, u64 bytenr, u32 blocksize, u64 copy)
 {
 	int ret;
-	struct extent_buffer *eb;
 	u64 length;
 	struct btrfs_multi_bio *multi = NULL;
 	struct btrfs_device *device;
 	int num_copies;
 	int mirror_num = 1;
 
-	eb = btrfs_find_create_tree_block(root->fs_info, bytenr, blocksize);
-	if (!eb)
-		return NULL;
-
 	length = blocksize;
 	while (1) {
 		ret = btrfs_map_block(&root->fs_info->mapping_tree, READ,
 				      eb->start, &length, &multi,
 				      mirror_num, NULL);
-		BUG_ON(ret);
+		if (ret) {
+			error("cannot map block %llu length %llu mirror %d: %d",
+					(unsigned long long)eb->start,
+					(unsigned long long)length,
+					mirror_num, ret);
+			return ret;
+		}
 		device = multi->stripes[0].dev;
 		eb->fd = device->fd;
 		device->total_ios++;
@@ -68,10 +69,22 @@ static struct extent_buffer *debug_corrupt_block(struct btrfs_root *root,
 
 		if (!copy || mirror_num == copy) {
 			ret = read_extent_from_disk(eb, 0, eb->len);
+			if (ret < 0) {
+				error("cannot read eb bytenr %llu: %s",
+						(unsigned long long)eb->dev_bytenr,
+						strerror(-ret));
+				return ret;
+			}
 			printf("corrupting %llu copy %d\n", eb->start,
 			       mirror_num);
 			memset(eb->data, 0, eb->len);
-			write_extent_to_disk(eb);
+			ret = write_extent_to_disk(eb);
+			if (ret < 0) {
+				error("cannot write eb bytenr %llu: %s",
+						(unsigned long long)eb->dev_bytenr,
+						strerror(-ret));
+				return ret;
+			}
 			fsync(eb->fd);
 		}
 
@@ -84,7 +97,8 @@ static struct extent_buffer *debug_corrupt_block(struct btrfs_root *root,
 		if (mirror_num > num_copies)
 			break;
 	}
-	return eb;
+
+	return 0;
 }
 
 static void print_usage(int ret)
@@ -1018,7 +1032,6 @@ int main(int argc, char **argv)
 	struct cache_tree root_cache;
 	struct btrfs_key key;
 	struct btrfs_root *root;
-	struct extent_buffer *eb;
 	char *dev;
 	/* chunk offset can be 0,so change to (u64)-1 */
 	u64 logical = (u64)-1;
@@ -1295,8 +1308,20 @@ int main(int argc, char **argv)
 		if (corrupt_block_keys) {
 			corrupt_keys_in_block(root, logical);
 		} else {
-			eb = debug_corrupt_block(root, logical,
-						 root->sectorsize, copy);
+			struct extent_buffer *eb;
+
+			eb = btrfs_find_create_tree_block(root->fs_info,
+					logical, root->sectorsize);
+			if (!eb) {
+				error(
+		"not enough memory to allocate extent buffer for bytenr %llu",
+					(unsigned long long)logical);
+				ret = 1;
+				goto out_close;
+			}
+
+			debug_corrupt_block(eb, root, logical, root->sectorsize,
+					copy);
 			free_extent_buffer(eb);
 		}
 		logical += root->sectorsize;
