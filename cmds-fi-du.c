@@ -389,8 +389,14 @@ static int du_walk_dir(struct du_dir_ctxt *ctxt, struct rb_root *shared_extents)
 						  dirfd(dirstream),
 						  shared_extents, &tot, &shr,
 						  0);
-				if (ret)
+				if (ret == -ENOTTY) {
+					continue;
+				} else if (ret) {
+					fprintf(stderr,
+						"failed to walk dir/file: %s :%s\n",
+						entry->d_name, strerror(-ret));
 					break;
+				}
 
 				ctxt->bytes_total += tot;
 				ctxt->bytes_shared += shr;
@@ -537,7 +543,6 @@ int cmd_filesystem_du(int argc, char **argv)
 
 	unit_mode = get_unit_mode_from_arg(&argc, argv, 1);
 
-	optind = 1;
 	while (1) {
 		static const struct option long_options[] = {
 			{ "summarize", no_argument, NULL, 's'},
