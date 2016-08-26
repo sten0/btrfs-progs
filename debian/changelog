@@ -1,3 +1,9 @@
+btrfs-progs (4.7-1~bpo8+1) jessie-backports; urgency=medium
+
+  * Rebuild for jessie-backports.
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 26 Aug 2016 19:19:01 -0400
+
 btrfs-progs (4.7-1) unstable; urgency=medium
 
   * New upstream release.
