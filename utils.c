@@ -238,6 +238,9 @@ static inline int write_temp_super(int fd, struct btrfs_super_block *sb,
  *
  * For now sys chunk array will be empty and dev_item is empty too.
  * They will be re-initialized at temp chunk tree setup.
+ *
+ * The superblock signature is not valid, denotes a partially created
+ * filesystem, needs to be finalized.
  */
 static int setup_temp_super(int fd, struct btrfs_mkfs_config *cfg,
 			    u64 root_bytenr, u64 chunk_bytenr)
@@ -276,7 +279,7 @@ static int setup_temp_super(int fd, struct btrfs_mkfs_config *cfg,
 
 	btrfs_set_super_bytenr(super, cfg->super_bytenr);
 	btrfs_set_super_num_devices(super, 1);
-	btrfs_set_super_magic(super, BTRFS_MAGIC);
+	btrfs_set_super_magic(super, BTRFS_MAGIC_PARTIAL);
 	btrfs_set_super_generation(super, 1);
 	btrfs_set_super_root(super, root_bytenr);
 	btrfs_set_super_chunk_root(super, chunk_bytenr);
@@ -1004,6 +1007,9 @@ out:
 
 /*
  * @fs_uuid - if NULL, generates a UUID, returns back the new filesystem UUID
+ *
+ * The superblock signature is not valid, denotes a partially created
+ * filesystem, needs to be finalized.
  */
 int make_btrfs(int fd, struct btrfs_mkfs_config *cfg,
 		struct btrfs_convert_context *cctx)
@@ -1064,7 +1070,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg,
 
 	btrfs_set_super_bytenr(&super, cfg->blocks[0]);
 	btrfs_set_super_num_devices(&super, 1);
-	btrfs_set_super_magic(&super, BTRFS_MAGIC);
+	btrfs_set_super_magic(&super, BTRFS_MAGIC_PARTIAL);
 	btrfs_set_super_generation(&super, 1);
 	btrfs_set_super_root(&super, cfg->blocks[1]);
 	btrfs_set_super_chunk_root(&super, cfg->blocks[3]);
@@ -2272,7 +2278,7 @@ int check_mounted_where(int fd, const char *file, char *where, int size,
 
 	/* scan the initial device */
 	ret = btrfs_scan_one_device(fd, file, &fs_devices_mnt,
-				    &total_devs, BTRFS_SUPER_INFO_OFFSET, 0);
+		    &total_devs, BTRFS_SUPER_INFO_OFFSET, SBREAD_DEFAULT);
 	is_btrfs = (ret >= 0);
 
 	/* scan other devices */
@@ -2400,7 +2406,12 @@ int btrfs_device_already_in_root(struct btrfs_root *root, int fd,
 
 	ret = 0;
 	disk_super = (struct btrfs_super_block *)buf;
-	if (btrfs_super_magic(disk_super) != BTRFS_MAGIC)
+	/*
+	 * Accept devices from the same filesystem, allow partially created
+	 * structures.
+	 */
+	if (btrfs_super_magic(disk_super) != BTRFS_MAGIC &&
+			btrfs_super_magic(disk_super) != BTRFS_MAGIC_PARTIAL)
 		goto brelse;
 
 	if (!memcmp(disk_super->fsid, root->fs_info->super_copy->fsid,
@@ -3419,7 +3430,8 @@ int btrfs_scan_lblkid(void)
 			continue;
 		}
 		ret = btrfs_scan_one_device(fd, path, &tmp_devices,
-				&num_devices, BTRFS_SUPER_INFO_OFFSET, 0);
+				&num_devices, BTRFS_SUPER_INFO_OFFSET,
+				SBREAD_DEFAULT);
 		if (ret) {
 			error("cannot scan %s: %s", path, strerror(-ret));
 			close (fd);

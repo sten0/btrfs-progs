@@ -932,7 +932,7 @@ static int find_best_backup_root(struct btrfs_super_block *super)
 }
 
 static int setup_root_or_create_block(struct btrfs_fs_info *fs_info,
-				      enum btrfs_open_ctree_flags flags,
+				      unsigned flags,
 				      struct btrfs_root *info_root,
 				      u64 objectid, char *str)
 {
@@ -961,7 +961,7 @@ static int setup_root_or_create_block(struct btrfs_fs_info *fs_info,
 }
 
 int btrfs_setup_all_roots(struct btrfs_fs_info *fs_info, u64 root_tree_bytenr,
-			  enum btrfs_open_ctree_flags flags)
+			  unsigned flags)
 {
 	struct btrfs_super_block *sb = fs_info->super_copy;
 	struct btrfs_root *root;
@@ -1114,7 +1114,7 @@ void btrfs_cleanup_all_caches(struct btrfs_fs_info *fs_info)
 
 int btrfs_scan_fs_devices(int fd, const char *path,
 			  struct btrfs_fs_devices **fs_devices,
-			  u64 sb_bytenr, int super_recover,
+			  u64 sb_bytenr, unsigned sbflags,
 			  int skip_devices)
 {
 	u64 total_devs;
@@ -1136,7 +1136,7 @@ int btrfs_scan_fs_devices(int fd, const char *path,
 	}
 
 	ret = btrfs_scan_one_device(fd, path, fs_devices,
-				    &total_devs, sb_bytenr, super_recover);
+				    &total_devs, sb_bytenr, sbflags);
 	if (ret) {
 		fprintf(stderr, "No valid Btrfs found on %s\n", path);
 		return ret;
@@ -1217,7 +1217,7 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, const char *path,
 					     u64 sb_bytenr,
 					     u64 root_tree_bytenr,
 					     u64 chunk_root_bytenr,
-					     enum btrfs_open_ctree_flags flags)
+					     unsigned flags)
 {
 	struct btrfs_fs_info *fs_info;
 	struct btrfs_super_block *disk_super;
@@ -1225,6 +1225,7 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, const char *path,
 	struct extent_buffer *eb;
 	int ret;
 	int oflags;
+	unsigned sbflags = SBREAD_DEFAULT;
 
 	if (sb_bytenr == 0)
 		sb_bytenr = BTRFS_SUPER_INFO_OFFSET;
@@ -1247,9 +1248,18 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, const char *path,
 	if (flags & OPEN_CTREE_IGNORE_CHUNK_TREE_ERROR)
 		fs_info->ignore_chunk_tree_error = 1;
 
-	ret = btrfs_scan_fs_devices(fp, path, &fs_devices, sb_bytenr,
-				    (flags & OPEN_CTREE_RECOVER_SUPER),
-				    (flags & OPEN_CTREE_NO_DEVICES));
+	if ((flags & OPEN_CTREE_RECOVER_SUPER)
+	     && (flags & OPEN_CTREE_FS_PARTIAL)) {
+		fprintf(stderr,
+		    "cannot open a partially created filesystem for recovery");
+		goto out;
+	}
+
+	if (flags & OPEN_CTREE_FS_PARTIAL)
+		sbflags = SBREAD_PARTIAL;
+
+	ret = btrfs_scan_fs_devices(fp, path, &fs_devices, sb_bytenr, sbflags,
+			(flags & OPEN_CTREE_NO_DEVICES));
 	if (ret)
 		goto out;
 
@@ -1268,10 +1278,11 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, const char *path,
 
 	disk_super = fs_info->super_copy;
 	if (flags & OPEN_CTREE_RECOVER_SUPER)
-		ret = btrfs_read_dev_super(fs_devices->latest_bdev,
-					   disk_super, sb_bytenr, 1);
+		ret = btrfs_read_dev_super(fs_devices->latest_bdev, disk_super,
+				sb_bytenr, SBREAD_RECOVER);
 	else
-		ret = btrfs_read_dev_super(fp, disk_super, sb_bytenr, 0);
+		ret = btrfs_read_dev_super(fp, disk_super, sb_bytenr,
+				sbflags);
 	if (ret) {
 		printk("No valid btrfs found\n");
 		goto out_devices;
@@ -1323,7 +1334,7 @@ out:
 struct btrfs_fs_info *open_ctree_fs_info(const char *filename,
 					 u64 sb_bytenr, u64 root_tree_bytenr,
 					 u64 chunk_root_bytenr,
-					 enum btrfs_open_ctree_flags flags)
+					 unsigned flags)
 {
 	int fp;
 	int ret;
@@ -1356,7 +1367,7 @@ struct btrfs_fs_info *open_ctree_fs_info(const char *filename,
 }
 
 struct btrfs_root *open_ctree(const char *filename, u64 sb_bytenr,
-			      enum btrfs_open_ctree_flags flags)
+			      unsigned flags)
 {
 	struct btrfs_fs_info *info;
 
@@ -1371,7 +1382,7 @@ struct btrfs_root *open_ctree(const char *filename, u64 sb_bytenr,
 }
 
 struct btrfs_root *open_ctree_fd(int fp, const char *path, u64 sb_bytenr,
-				 enum btrfs_open_ctree_flags flags)
+				 unsigned flags)
 {
 	struct btrfs_fs_info *info;
 
@@ -1392,7 +1403,7 @@ struct btrfs_root *open_ctree_fd(int fp, const char *path, u64 sb_bytenr,
  * - number of devices   - something sane
  * - sys array size      - maximum
  */
-static int check_super(struct btrfs_super_block *sb)
+static int check_super(struct btrfs_super_block *sb, unsigned sbflags)
 {
 	char result[BTRFS_CSUM_SIZE];
 	u32 crc;
@@ -1400,8 +1411,12 @@ static int check_super(struct btrfs_super_block *sb)
 	int csum_size;
 
 	if (btrfs_super_magic(sb) != BTRFS_MAGIC) {
-		error("superblock magic doesn't match");
-		return -EIO;
+		if (btrfs_super_magic(sb) == BTRFS_MAGIC_PARTIAL) {
+			if (!(sbflags & SBREAD_PARTIAL)) {
+				error("superblock magic doesn't match");
+				return -EIO;
+			}
+		}
 	}
 
 	csum_type = btrfs_super_csum_type(sb);
@@ -1533,7 +1548,7 @@ error_out:
 }
 
 int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
-			 int super_recover)
+			 unsigned sbflags)
 {
 	u8 fsid[BTRFS_FSID_SIZE];
 	int fsid_is_initialized = 0;
@@ -1541,7 +1556,7 @@ int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 	struct btrfs_super_block *buf = (struct btrfs_super_block *)tmp;
 	int i;
 	int ret;
-	int max_super = super_recover ? BTRFS_SUPER_MIRROR_MAX : 1;
+	int max_super = sbflags & SBREAD_RECOVER ? BTRFS_SUPER_MIRROR_MAX : 1;
 	u64 transid = 0;
 	u64 bytenr;
 
@@ -1553,7 +1568,7 @@ int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 		if (btrfs_super_bytenr(buf) != sb_bytenr)
 			return -1;
 
-		if (check_super(buf))
+		if (check_super(buf, sbflags))
 			return -1;
 		memcpy(sb, buf, BTRFS_SUPER_INFO_SIZE);
 		return 0;
@@ -1577,7 +1592,7 @@ int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 		/* if magic is NULL, the device was removed */
 		if (btrfs_super_magic(buf) == 0 && i == 0)
 			break;
-		if (check_super(buf))
+		if (check_super(buf, sbflags))
 			continue;
 
 		if (!fsid_is_initialized) {
@@ -1745,6 +1760,15 @@ int close_ctree_fs_info(struct btrfs_fs_info *fs_info)
 		BUG_ON(ret);
 		write_ctree_super(trans, root);
 		btrfs_free_transaction(root, trans);
+	}
+
+	if (fs_info->finalize_on_close) {
+		btrfs_set_super_magic(fs_info->super_copy, BTRFS_MAGIC);
+		root->fs_info->finalize_on_close = 0;
+		ret = write_all_supers(root);
+		if (ret)
+			fprintf(stderr,
+				"failed to write new super block err %d\n", ret);
 	}
 	btrfs_free_block_groups(fs_info);
 
