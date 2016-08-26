@@ -496,18 +496,31 @@ static int count_bytes(void *buf, int len, char b)
 	return cnt;
 }
 
+/*
+ * Caller must ensure sizeof(*ret) >= 7 "RDONLY"
+ */
+static void root_flags_to_str(u64 flags, char *ret)
+{
+	if (flags & BTRFS_ROOT_SUBVOL_RDONLY)
+		strcat(ret, "RDONLY");
+	else
+		strcat(ret, "none");
+}
+
 static void print_root(struct extent_buffer *leaf, int slot)
 {
 	struct btrfs_root_item *ri;
 	struct btrfs_root_item root_item;
 	int len;
 	char uuid_str[BTRFS_UUID_UNPARSED_SIZE];
+	char flags_str[32] = {0};
 
 	ri = btrfs_item_ptr(leaf, slot, struct btrfs_root_item);
 	len = btrfs_item_size_nr(leaf, slot);
 
 	memset(&root_item, 0, sizeof(root_item));
 	read_extent_buffer(leaf, &root_item, (unsigned long)ri, len);
+	root_flags_to_str(btrfs_root_flags(&root_item), flags_str);
 
 	printf("\t\troot data bytenr %llu level %d dirid %llu refs %u gen %llu lastsnap %llu\n",
 		(unsigned long long)btrfs_root_bytenr(&root_item),
@@ -516,6 +529,8 @@ static void print_root(struct extent_buffer *leaf, int slot)
 		btrfs_root_refs(&root_item),
 		(unsigned long long)btrfs_root_generation(&root_item),
 		(unsigned long long)btrfs_root_last_snapshot(&root_item));
+	printf("\t\tflags 0x%llx(%s)\n", btrfs_root_flags(&root_item),
+	       flags_str);
 
 	if (root_item.generation == root_item.generation_v2) {
 		uuid_unparse(root_item.uuid, uuid_str);
@@ -835,6 +850,33 @@ static void print_uuid_item(struct extent_buffer *l, unsigned long offset,
 	}
 }
 
+/* Caller should ensure sizeof(*ret) >= 29 "NODATASUM|NODATACOW|READONLY" */
+static void inode_flags_to_str(u64 flags, char *ret)
+{
+	int empty = 1;
+
+	if (flags & BTRFS_INODE_NODATASUM) {
+		empty = 0;
+		strcpy(ret, "NODATASUM");
+	}
+	if (flags & BTRFS_INODE_NODATACOW) {
+		if (!empty) {
+			empty = 0;
+			strcat(ret, "|");
+		}
+		strcat(ret, "NODATACOW");
+	}
+	if (flags & BTRFS_INODE_READONLY) {
+		if (!empty) {
+			empty = 0;
+			strcat(ret, "|");
+		}
+		strcat(ret, "READONLY");
+	}
+	if (empty)
+		strcat(ret, "none");
+}
+
 void btrfs_print_leaf(struct btrfs_root *root, struct extent_buffer *l)
 {
 	int i;
@@ -884,10 +926,12 @@ void btrfs_print_leaf(struct btrfs_root *root, struct extent_buffer *l)
 
 		switch (type) {
 		case BTRFS_INODE_ITEM_KEY:
+			memset(flags_str, 0, sizeof(flags_str));
 			ii = btrfs_item_ptr(l, i, struct btrfs_inode_item);
+			inode_flags_to_str(btrfs_inode_flags(l, ii), flags_str);
 			printf("\t\tinode generation %llu transid %llu size %llu nbytes %llu\n"
 			       "\t\tblock group %llu mode %o links %u uid %u gid %u\n"
-			       "\t\trdev %llu flags 0x%llx\n",
+			       "\t\trdev %llu flags 0x%llx(%s)\n",
 			       (unsigned long long)btrfs_inode_generation(l, ii),
 			       (unsigned long long)btrfs_inode_transid(l, ii),
 			       (unsigned long long)btrfs_inode_size(l, ii),
@@ -898,7 +942,8 @@ void btrfs_print_leaf(struct btrfs_root *root, struct extent_buffer *l)
 			       btrfs_inode_uid(l, ii),
 			       btrfs_inode_gid(l, ii),
 			       (unsigned long long)btrfs_inode_rdev(l,ii),
-			       (unsigned long long)btrfs_inode_flags(l,ii));
+			       (unsigned long long)btrfs_inode_flags(l,ii),
+			       flags_str);
 			break;
 		case BTRFS_INODE_REF_KEY:
 			iref = btrfs_item_ptr(l, i, struct btrfs_inode_ref);

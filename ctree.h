@@ -40,6 +40,12 @@ struct btrfs_trans_handle;
 struct btrfs_free_space_ctl;
 #define BTRFS_MAGIC 0x4D5F53665248425FULL /* ascii _BHRfS_M, no null */
 
+/*
+ * Fake signature for an unfinalized filesystem, structures might be partially
+ * created or missing.
+ */
+#define BTRFS_MAGIC_PARTIAL 0x4D5F536652484221ULL /* ascii !BHRfS_M, no null */
+
 #define BTRFS_MAX_MIRRORS 3
 
 #define BTRFS_MAX_LEVEL 8
@@ -1026,6 +1032,7 @@ struct btrfs_fs_info {
 	unsigned int ignore_chunk_tree_error:1;
 	unsigned int avoid_meta_chunk_alloc:1;
 	unsigned int avoid_sys_chunk_alloc:1;
+	unsigned int finalize_on_close:1;
 
 	int (*free_extent_hook)(struct btrfs_trans_handle *trans,
 				struct btrfs_root *root,
@@ -1740,7 +1747,10 @@ BTRFS_SETGET_FUNCS(dir_type, struct btrfs_dir_item, type, 8);
 BTRFS_SETGET_FUNCS(dir_name_len, struct btrfs_dir_item, name_len, 16);
 BTRFS_SETGET_FUNCS(dir_transid, struct btrfs_dir_item, transid, 64);
 
+BTRFS_SETGET_STACK_FUNCS(stack_dir_data_len, struct btrfs_dir_item, data_len, 16);
+BTRFS_SETGET_STACK_FUNCS(stack_dir_type, struct btrfs_dir_item, type, 8);
 BTRFS_SETGET_STACK_FUNCS(stack_dir_name_len, struct btrfs_dir_item, name_len, 16);
+BTRFS_SETGET_STACK_FUNCS(stack_dir_transid, struct btrfs_dir_item, transid, 64);
 
 static inline void btrfs_dir_item_key(struct extent_buffer *eb,
 				      struct btrfs_dir_item *item,
@@ -2364,6 +2374,8 @@ int exclude_super_stripes(struct btrfs_root *root,
 			  struct btrfs_block_group_cache *cache);
 u64 add_new_free_space(struct btrfs_block_group_cache *block_group,
 		       struct btrfs_fs_info *info, u64 start, u64 end);
+u64 hash_extent_data_ref(u64 root_objectid, u64 owner, u64 offset);
+
 /* ctree.c */
 int btrfs_comp_cpu_keys(struct btrfs_key *k1, struct btrfs_key *k2);
 int btrfs_del_ptr(struct btrfs_trans_handle *trans, struct btrfs_root *root,
@@ -2576,6 +2588,8 @@ int check_dir_conflict(struct btrfs_root *root, char *name, int namelen,
 		u64 dir, u64 index);
 int btrfs_new_inode(struct btrfs_trans_handle *trans, struct btrfs_root *root,
 		u64 ino, u32 mode);
+int btrfs_change_inode_flags(struct btrfs_trans_handle *trans,
+			     struct btrfs_root *root, u64 ino, u64 flags);
 int btrfs_add_link(struct btrfs_trans_handle *trans, struct btrfs_root *root,
 		   u64 ino, u64 parent_ino, char *name, int namelen,
 		   u8 type, u64 *index, int add_backref);

@@ -12,6 +12,11 @@
 #   V=1            verbose, print command lines (default: quiet)
 #   C=1            run checker before compilation (default checker: sparse)
 #   D=1            debugging build, turn off optimizations
+#   D=dflags       dtto, turn on additional debugging features:
+#                  verbose - print file:line along with error/warning messages
+#                  trace   - print trace before the error/warning messages
+#                  abort   - call abort() on first error (dumps core)
+#                  all     - shortcut for all of the above
 #   W=123          build with warnings (default: off)
 #   DEBUG_CFLAGS   additional compiler flags for debugging build
 #   EXTRA_CFLAGS   additional compiler flags
@@ -35,6 +40,7 @@ RMDIR = @RMDIR@
 INSTALL = @INSTALL@
 DISABLE_DOCUMENTATION = @DISABLE_DOCUMENTATION@
 DISABLE_BTRFSCONVERT = @DISABLE_BTRFSCONVERT@
+BTRFSCONVERT_EXT2 = @BTRFSCONVERT_EXT2@
 
 EXTRA_CFLAGS :=
 EXTRA_LDFLAGS :=
@@ -121,6 +127,24 @@ ifeq ("$(origin D)", "command line")
   DEBUG_CFLAGS_INTERNAL = $(DEBUG_CFLAGS_DEFAULT) $(DEBUG_CFLAGS)
 endif
 
+ifneq (,$(findstring verbose,$(D)))
+  DEBUG_CFLAGS_INTERNAL += -DDEBUG_VERBOSE_ERROR=1
+endif
+
+ifneq (,$(findstring trace,$(D)))
+  DEBUG_CFLAGS_INTERNAL += -DDEBUG_TRACE_ON_ERROR=1
+endif
+
+ifneq (,$(findstring abort,$(D)))
+  DEBUG_CFLAGS_INTERNAL += -DDEBUG_ABORT_ON_ERROR=1
+endif
+
+ifneq (,$(findstring all,$(D)))
+  DEBUG_CFLAGS_INTERNAL += -DDEBUG_VERBOSE_ERROR=1
+  DEBUG_CFLAGS_INTERNAL += -DDEBUG_TRACE_ON_ERROR=1
+  DEBUG_CFLAGS_INTERNAL += -DDEBUG_ABORT_ON_ERROR=1
+endif
+
 MAKEOPTS = --no-print-directory Q=$(Q)
 
 # build all by default
@@ -143,6 +167,7 @@ endif
 # external libs required by various binaries; for btrfs-foo,
 # specify btrfs_foo_libs = <list of libs>; see $($(subst...)) rules below
 btrfs_convert_libs = @EXT2FS_LIBS@ @COM_ERR_LIBS@
+btrfs_convert_cflags = -DBTRFSCONVERT_EXT2=$(BTRFSCONVERT_EXT2)
 btrfs_fragments_libs = -lgd -lpng -ljpeg -lfreetype
 btrfs_debug_tree_objects = cmds-inspect-dump-tree.o
 btrfs_show_super_objects = cmds-inspect-dump-super.o
@@ -198,15 +223,18 @@ endif
 %.o.d: %.c
 	$(Q)$(CC) -MM -MG -MF $@ -MT $(@:.o.d=.o) -MT $(@:.o.d=.static.o) -MT $@ $(CFLAGS) $<
 
+#
+# Pick from per-file variables, btrfs_*_cflags
+#
 .c.o:
 	@$(check_echo) "    [SP]     $<"
 	$(Q)$(check) $(CFLAGS) $(CHECKER_FLAGS) $<
 	@echo "    [CC]     $@"
-	$(Q)$(CC) $(CFLAGS) -c $<
+	$(Q)$(CC) $(CFLAGS) -c $< $($(subst -,_,$(@:%.o=%)-cflags))
 
 %.static.o: %.c
 	@echo "    [CC]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -c $< -o $@
+	$(Q)$(CC) $(STATIC_CFLAGS) -c $< -o $@ $($(subst -,_,$(@:%.static.o=%)-cflags))
 
 all: $(progs) $(BUILDDIRS)
 $(SUBDIRS): $(BUILDDIRS)
