@@ -1318,10 +1318,27 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 		if (is_temp_block_group(path->nodes[0], bgi,
 					data_profile, meta_profile,
 					sys_profile)) {
+			u64 flags = btrfs_disk_block_group_flags(path->nodes[0],
+							     bgi);
+
 			ret = btrfs_free_block_group(trans, fs_info,
 					found_key.objectid, found_key.offset);
 			if (ret < 0)
 				goto out;
+
+			if ((flags & BTRFS_BLOCK_GROUP_TYPE_MASK) ==
+			    BTRFS_BLOCK_GROUP_DATA)
+				alloc->data -= found_key.offset;
+			else if ((flags & BTRFS_BLOCK_GROUP_TYPE_MASK) ==
+				 BTRFS_BLOCK_GROUP_METADATA)
+				alloc->metadata -= found_key.offset;
+			else if ((flags & BTRFS_BLOCK_GROUP_TYPE_MASK) ==
+				 BTRFS_BLOCK_GROUP_SYSTEM)
+				alloc->system -= found_key.offset;
+			else if ((flags & BTRFS_BLOCK_GROUP_TYPE_MASK) ==
+				 (BTRFS_BLOCK_GROUP_METADATA |
+				  BTRFS_BLOCK_GROUP_DATA))
+				alloc->mixed -= found_key.offset;
 		}
 		btrfs_release_path(path);
 		key.objectid = found_key.objectid + found_key.offset;
@@ -1619,8 +1636,11 @@ int main(int argc, char **argv)
 				strerror(errno));
 			exit(1);
 		}
-		ret = btrfs_prepare_device(fd, file, zero_end, &dev_block_count,
-					   block_count, discard);
+		ret = btrfs_prepare_device(fd, file, &dev_block_count,
+				block_count,
+				(zero_end ? PREP_DEVICE_ZERO_END : 0) |
+				(discard ? PREP_DEVICE_DISCARD : 0) |
+				(verbose ? PREP_DEVICE_VERBOSE : 0));
 		if (ret) {
 			close(fd);
 			exit(1);
@@ -1750,8 +1770,11 @@ int main(int argc, char **argv)
 			close(fd);
 			continue;
 		}
-		ret = btrfs_prepare_device(fd, file, zero_end, &dev_block_count,
-					   block_count, discard);
+		ret = btrfs_prepare_device(fd, file, &dev_block_count,
+				block_count,
+				(verbose ? PREP_DEVICE_VERBOSE : 0) |
+				(zero_end ? PREP_DEVICE_ZERO_END : 0) |
+				(discard ? PREP_DEVICE_DISCARD : 0));
 		if (ret) {
 			close(fd);
 			exit(1);

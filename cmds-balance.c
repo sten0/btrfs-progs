@@ -20,6 +20,9 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <errno.h>
 
 #include "kerncompat.h"
@@ -427,7 +430,6 @@ static int do_balance(const char *path, struct btrfs_ioctl_balance_args *args,
 {
 	int fd;
 	int ret;
-	int e;
 	DIR *dirstream = NULL;
 
 	fd = btrfs_open_dir(path, &dirstream, 1);
@@ -453,30 +455,28 @@ static int do_balance(const char *path, struct btrfs_ioctl_balance_args *args,
 	}
 
 	ret = ioctl(fd, BTRFS_IOC_BALANCE_V2, args);
-	e = errno;
-
 	if (ret < 0) {
 		/*
 		 * older kernels don't have the new balance ioctl, try the
 		 * old one.  But, the old one doesn't know any filters, so
 		 * don't fall back if they tried to use the fancy new things
 		 */
-		if (e == ENOTTY && !(flags & BALANCE_START_FILTERS)) {
+		if (errno == ENOTTY && !(flags & BALANCE_START_FILTERS)) {
 			ret = do_balance_v1(fd);
 			if (ret == 0)
 				goto out;
-			e = errno;
 		}
 
-		if (e == ECANCELED) {
+		if (errno == ECANCELED) {
 			if (args->state & BTRFS_BALANCE_STATE_PAUSE_REQ)
 				fprintf(stderr, "balance paused by user\n");
 			if (args->state & BTRFS_BALANCE_STATE_CANCEL_REQ)
 				fprintf(stderr, "balance canceled by user\n");
 			ret = 0;
 		} else {
-			error("error during balancing '%s': %s", path, strerror(e));
-			if (e != EINPROGRESS)
+			error("error during balancing '%s': %s", path,
+					strerror(errno));
+			if (errno != EINPROGRESS)
 				fprintf(stderr,
 			"There may be more info in syslog - try dmesg | tail\n");
 			ret = 1;
@@ -510,6 +510,8 @@ static const char * const cmd_balance_start_usage[] = {
 	"-v             be verbose",
 	"-f             force reducing of metadata integrity",
 	"--full-balance do not print warning and do not delay start",
+	"--background|--bg",
+	"               run the balance as a background process",
 	NULL
 };
 
@@ -520,14 +522,15 @@ static int cmd_balance_start(int argc, char **argv)
 						&args.meta, NULL };
 	int force = 0;
 	int verbose = 0;
+	int background = 0;
 	unsigned start_flags = 0;
 	int i;
 
 	memset(&args, 0, sizeof(args));
 
-	optind = 1;
 	while (1) {
-		enum { GETOPT_VAL_FULL_BALANCE = 256 };
+		enum { GETOPT_VAL_FULL_BALANCE = 256,
+			GETOPT_VAL_BACKGROUND = 257 };
 		static const struct option longopts[] = {
 			{ "data", optional_argument, NULL, 'd'},
 			{ "metadata", optional_argument, NULL, 'm' },
@@ -536,6 +539,9 @@ static int cmd_balance_start(int argc, char **argv)
 			{ "verbose", no_argument, NULL, 'v' },
 			{ "full-balance", no_argument, NULL,
 				GETOPT_VAL_FULL_BALANCE },
+			{ "background", no_argument, NULL,
+				GETOPT_VAL_BACKGROUND },
+			{ "bg", no_argument, NULL, GETOPT_VAL_BACKGROUND },
 			{ NULL, 0, NULL, 0 }
 		};
 
@@ -573,6 +579,9 @@ static int cmd_balance_start(int argc, char **argv)
 			break;
 		case GETOPT_VAL_FULL_BALANCE:
 			start_flags |= BALANCE_START_NOWARN;
+			break;
+		case GETOPT_VAL_BACKGROUND:
+			background = 1;
 			break;
 		default:
 			usage(cmd_balance_start_usage);
@@ -626,6 +635,40 @@ static int cmd_balance_start(int argc, char **argv)
 		args.flags |= BTRFS_BALANCE_FORCE;
 	if (verbose)
 		dump_ioctl_balance_args(&args);
+	if (background) {
+		switch (fork()) {
+		case (-1):
+			error("unable to fork to run balance in background");
+			return 1;
+		case (0):
+			setsid();
+			switch(fork()) {
+			case (-1):
+				error(
+				"unable to fork to run balance in background");
+				exit(1);
+			case (0):
+				/*
+				 * Read the return value to silence compiler
+				 * warning. Change to / should succeed and
+				 * we're not in a security-sensitive context.
+				 */
+				i = chdir("/");
+				close(0);
+				close(1);
+				close(2);
+				open("/dev/null", O_RDONLY);
+				open("/dev/null", O_WRONLY);
+				open("/dev/null", O_WRONLY);
+				break;
+			default:
+				exit(0);
+			}
+			break;
+		default:
+			exit(0);
+		}
+	}
 
 	return do_balance(argv[optind], &args, start_flags);
 }
@@ -641,7 +684,6 @@ static int cmd_balance_pause(int argc, char **argv)
 	const char *path;
 	int fd;
 	int ret;
-	int e;
 	DIR *dirstream = NULL;
 
 	clean_args_no_options(argc, argv, cmd_balance_pause_usage);
@@ -656,19 +698,17 @@ static int cmd_balance_pause(int argc, char **argv)
 		return 1;
 
 	ret = ioctl(fd, BTRFS_IOC_BALANCE_CTL, BTRFS_BALANCE_CTL_PAUSE);
-	e = errno;
-	close_file_or_dir(fd, dirstream);
-
 	if (ret < 0) {
 		error("balance pause on '%s' failed: %s", path,
-			(e == ENOTCONN) ? "Not running" : strerror(e));
-		if (e == ENOTCONN)
-			return 2;
+			(errno == ENOTCONN) ? "Not running" : strerror(errno));
+		if (errno == ENOTCONN)
+			ret = 2;
 		else
-			return 1;
+			ret = 1;
 	}
 
-	return 0;
+	close_file_or_dir(fd, dirstream);
+	return ret;
 }
 
 static const char * const cmd_balance_cancel_usage[] = {
@@ -682,7 +722,6 @@ static int cmd_balance_cancel(int argc, char **argv)
 	const char *path;
 	int fd;
 	int ret;
-	int e;
 	DIR *dirstream = NULL;
 
 	clean_args_no_options(argc, argv, cmd_balance_cancel_usage);
@@ -697,19 +736,17 @@ static int cmd_balance_cancel(int argc, char **argv)
 		return 1;
 
 	ret = ioctl(fd, BTRFS_IOC_BALANCE_CTL, BTRFS_BALANCE_CTL_CANCEL);
-	e = errno;
-	close_file_or_dir(fd, dirstream);
-
 	if (ret < 0) {
 		error("balance cancel on '%s' failed: %s", path,
-			(e == ENOTCONN) ? "Not in progress" : strerror(e));
-		if (e == ENOTCONN)
-			return 2;
+			(errno == ENOTCONN) ? "Not in progress" : strerror(errno));
+		if (errno == ENOTCONN)
+			ret = 2;
 		else
-			return 1;
+			ret = 1;
 	}
 
-	return 0;
+	close_file_or_dir(fd, dirstream);
+	return ret;
 }
 
 static const char * const cmd_balance_resume_usage[] = {
@@ -725,7 +762,6 @@ static int cmd_balance_resume(int argc, char **argv)
 	DIR *dirstream = NULL;
 	int fd;
 	int ret;
-	int e;
 
 	clean_args_no_options(argc, argv, cmd_balance_resume_usage);
 
@@ -742,28 +778,25 @@ static int cmd_balance_resume(int argc, char **argv)
 	args.flags |= BTRFS_BALANCE_RESUME;
 
 	ret = ioctl(fd, BTRFS_IOC_BALANCE_V2, &args);
-	e = errno;
-	close_file_or_dir(fd, dirstream);
-
 	if (ret < 0) {
-		if (e == ECANCELED) {
+		if (errno == ECANCELED) {
 			if (args.state & BTRFS_BALANCE_STATE_PAUSE_REQ)
 				fprintf(stderr, "balance paused by user\n");
 			if (args.state & BTRFS_BALANCE_STATE_CANCEL_REQ)
 				fprintf(stderr, "balance canceled by user\n");
-		} else if (e == ENOTCONN || e == EINPROGRESS) {
+		} else if (errno == ENOTCONN || errno == EINPROGRESS) {
 			error("balance resume on '%s' failed: %s", path,
-				(e == ENOTCONN) ? "Not in progress" :
+				(errno == ENOTCONN) ? "Not in progress" :
 						  "Already running");
-			if (e == ENOTCONN)
-				return 2;
+			if (errno == ENOTCONN)
+				ret = 2;
 			else
-				return 1;
+				ret = 1;
 		} else {
 			error("error during balancing '%s': %s\n"
 			  "There may be more info in syslog - try dmesg | tail",
-				path, strerror(e));
-			return 1;
+				path, strerror(errno));
+			ret = 1;
 		}
 	} else {
 		printf("Done, had to relocate %llu out of %llu chunks\n",
@@ -771,7 +804,8 @@ static int cmd_balance_resume(int argc, char **argv)
 		       (unsigned long long)args.stat.considered);
 	}
 
-	return 0;
+	close_file_or_dir(fd, dirstream);
+	return ret;
 }
 
 static const char * const cmd_balance_status_usage[] = {
@@ -796,9 +830,7 @@ static int cmd_balance_status(int argc, char **argv)
 	int fd;
 	int verbose = 0;
 	int ret;
-	int e;
 
-	optind = 1;
 	while (1) {
 		int opt;
 		static const struct option longopts[] = {
@@ -829,16 +861,15 @@ static int cmd_balance_status(int argc, char **argv)
 		return 2;
 
 	ret = ioctl(fd, BTRFS_IOC_BALANCE_PROGRESS, &args);
-	e = errno;
-	close_file_or_dir(fd, dirstream);
-
 	if (ret < 0) {
-		if (e == ENOTCONN) {
+		if (errno == ENOTCONN) {
 			printf("No balance found on '%s'\n", path);
-			return 0;
+			ret = 0;
+			goto out;
 		}
-		error("balance status on '%s' failed: %s", path, strerror(e));
-		return 2;
+		error("balance status on '%s' failed: %s", path, strerror(errno));
+		ret = 2;
+		goto out;
 	}
 
 	if (args.state & BTRFS_BALANCE_STATE_RUNNING) {
@@ -862,7 +893,10 @@ static int cmd_balance_status(int argc, char **argv)
 	if (verbose)
 		dump_ioctl_balance_args(&args);
 
-	return 1;
+	ret = 1;
+out:
+	close_file_or_dir(fd, dirstream);
+	return ret;
 }
 
 static int cmd_balance_full(int argc, char **argv)
