@@ -1,3 +1,9 @@
+btrfs-progs (4.7.2-1) unstable; urgency=medium
+
+  * New upstream release. (Closes: #836778)
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Thu, 08 Sep 2016 12:27:38 +0100
+
 btrfs-progs (4.7.1-1) unstable; urgency=medium
 
   * New upstream release.

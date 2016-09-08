@@ -84,7 +84,7 @@ enum btrfs_check_mode {
 static enum btrfs_check_mode check_mode = CHECK_MODE_DEFAULT;
 
 struct extent_backref {
-	struct rb_node node;
+	struct list_head list;
 	unsigned int is_data:1;
 	unsigned int found_extent_tree:1;
 	unsigned int full_backref:1;
@@ -92,9 +92,9 @@ struct extent_backref {
 	unsigned int broken:1;
 };
 
-static inline struct extent_backref* rb_node_to_extent_backref(struct rb_node *node)
+static inline struct extent_backref* to_extent_backref(struct list_head *entry)
 {
-	return rb_entry(node, struct extent_backref, node);
+	return list_entry(entry, struct extent_backref, list);
 }
 
 struct data_backref {
@@ -115,56 +115,6 @@ struct data_backref {
 static inline struct data_backref* to_data_backref(struct extent_backref *back)
 {
 	return container_of(back, struct data_backref, node);
-}
-
-static int compare_data_backref(struct rb_node *node1, struct rb_node *node2)
-{
-	struct extent_backref *ext1 = rb_node_to_extent_backref(node1);
-	struct extent_backref *ext2 = rb_node_to_extent_backref(node2);
-	struct data_backref *back1 = to_data_backref(ext1);
-	struct data_backref *back2 = to_data_backref(ext2);
-
-	WARN_ON(!ext1->is_data);
-	WARN_ON(!ext2->is_data);
-
-	/* parent and root are a union, so this covers both */
-	if (back1->parent > back2->parent)
-		return 1;
-	if (back1->parent < back2->parent)
-		return -1;
-
-	/* This is a full backref and the parents match. */
-	if (back1->node.full_backref)
-		return 0;
-
-	if (back1->owner > back2->owner)
-		return 1;
-	if (back1->owner < back2->owner)
-		return -1;
-
-	if (back1->offset > back2->offset)
-		return 1;
-	if (back1->offset < back2->offset)
-		return -1;
-
-	if (back1->bytes > back2->bytes)
-		return 1;
-	if (back1->bytes < back2->bytes)
-		return -1;
-
-	if (back1->found_ref && back2->found_ref) {
-		if (back1->disk_bytenr > back2->disk_bytenr)
-			return 1;
-		if (back1->disk_bytenr < back2->disk_bytenr)
-			return -1;
-
-		if (back1->found_ref > back2->found_ref)
-			return 1;
-		if (back1->found_ref < back2->found_ref)
-			return -1;
-	}
-
-	return 0;
 }
 
 /*
@@ -195,54 +145,12 @@ static inline struct tree_backref* to_tree_backref(struct extent_backref *back)
 	return container_of(back, struct tree_backref, node);
 }
 
-static int compare_tree_backref(struct rb_node *node1, struct rb_node *node2)
-{
-	struct extent_backref *ext1 = rb_node_to_extent_backref(node1);
-	struct extent_backref *ext2 = rb_node_to_extent_backref(node2);
-	struct tree_backref *back1 = to_tree_backref(ext1);
-	struct tree_backref *back2 = to_tree_backref(ext2);
-
-	WARN_ON(ext1->is_data);
-	WARN_ON(ext2->is_data);
-
-	/* parent and root are a union, so this covers both */
-	if (back1->parent > back2->parent)
-		return 1;
-	if (back1->parent < back2->parent)
-		return -1;
-
-	return 0;
-}
-
-static int compare_extent_backref(struct rb_node *node1, struct rb_node *node2)
-{
-	struct extent_backref *ext1 = rb_node_to_extent_backref(node1);
-	struct extent_backref *ext2 = rb_node_to_extent_backref(node2);
-
-	if (ext1->is_data > ext2->is_data)
-		return 1;
-
-	if (ext1->is_data < ext2->is_data)
-		return -1;
-
-	if (ext1->full_backref > ext2->full_backref)
-		return 1;
-	if (ext1->full_backref < ext2->full_backref)
-		return -1;
-
-	if (ext1->is_data)
-		return compare_data_backref(node1, node2);
-	else
-		return compare_tree_backref(node1, node2);
-}
-
 /* Explicit initialization for extent_record::flag_block_full_backref */
 enum { FLAG_UNSET = 2 };
 
 struct extent_record {
 	struct list_head backrefs;
 	struct list_head dups;
-	struct rb_root backref_tree;
 	struct list_head list;
 	struct cache_extent cache;
 	struct btrfs_disk_key parent_key;
@@ -3742,6 +3650,11 @@ static int check_fs_root(struct btrfs_root *root,
 		btrfs_disk_key_to_cpu(&key, &root_item->drop_progress);
 		level = root_item->drop_level;
 		path.lowest_level = level;
+		if (level > btrfs_header_level(root->node) ||
+		    level >= BTRFS_MAX_LEVEL) {
+			error("ignoring invalid drop level: %u", level);
+			goto skip_walking;
+		}
 		wret = btrfs_search_slot(NULL, root, &key, &path, 0, 0);
 		if (wret < 0)
 			goto skip_walking;
@@ -3925,15 +3838,16 @@ out:
 
 static int all_backpointers_checked(struct extent_record *rec, int print_errs)
 {
-	struct rb_node *n;
+	struct list_head *cur = rec->backrefs.next;
 	struct extent_backref *back;
 	struct tree_backref *tback;
 	struct data_backref *dback;
 	u64 found = 0;
 	int err = 0;
 
-	for (n = rb_first(&rec->backref_tree); n; n = rb_next(n)) {
-		back = rb_node_to_extent_backref(n);
+	while(cur != &rec->backrefs) {
+		back = to_extent_backref(cur);
+		cur = cur->next;
 		if (!back->found_extent_tree) {
 			err = 1;
 			if (!print_errs)
@@ -4036,16 +3950,17 @@ out:
 	return err;
 }
 
-static void __free_one_backref(struct rb_node *node)
+static int free_all_extent_backrefs(struct extent_record *rec)
 {
-	struct extent_backref *back = rb_node_to_extent_backref(node);
-
-	free(back);
-}
-
-static void free_all_extent_backrefs(struct extent_record *rec)
-{
-	rb_free_nodes(&rec->backref_tree, __free_one_backref);
+	struct extent_backref *back;
+	struct list_head *cur;
+	while (!list_empty(&rec->backrefs)) {
+		cur = rec->backrefs.next;
+		back = to_extent_backref(cur);
+		list_del(cur);
+		free(back);
+	}
+	return 0;
 }
 
 static void free_extent_record_cache(struct btrfs_fs_info *fs_info,
@@ -4085,7 +4000,7 @@ static int check_owner_ref(struct btrfs_root *root,
 			    struct extent_record *rec,
 			    struct extent_buffer *buf)
 {
-	struct extent_backref *node, *tmp;
+	struct extent_backref *node;
 	struct tree_backref *back;
 	struct btrfs_root *ref_root;
 	struct btrfs_key key;
@@ -4095,8 +4010,7 @@ static int check_owner_ref(struct btrfs_root *root,
 	int found = 0;
 	int ret;
 
-	rbtree_postorder_for_each_entry_safe(node, tmp,
-					     &rec->backref_tree, node) {
+	list_for_each_entry(node, &rec->backrefs, list) {
 		if (node->is_data)
 			continue;
 		if (!node->found_ref)
@@ -4141,16 +4055,18 @@ static int check_owner_ref(struct btrfs_root *root,
 
 static int is_extent_tree_record(struct extent_record *rec)
 {
-	struct extent_backref *ref, *tmp;
+	struct list_head *cur = rec->backrefs.next;
+	struct extent_backref *node;
 	struct tree_backref *back;
 	int is_extent = 0;
 
-	rbtree_postorder_for_each_entry_safe(ref, tmp,
-					     &rec->backref_tree, node) {
-		if (ref->is_data)
+	while(cur != &rec->backrefs) {
+		node = to_extent_backref(cur);
+		cur = cur->next;
+		if (node->is_data)
 			return 0;
-		back = to_tree_backref(ref);
-		if (ref->full_backref)
+		back = to_tree_backref(node);
+		if (node->full_backref)
 			return 0;
 		if (back->root == BTRFS_EXTENT_TREE_OBJECTID)
 			is_extent = 1;
@@ -4524,31 +4440,32 @@ static int check_block(struct btrfs_root *root,
 	return ret;
 }
 
-
 static struct tree_backref *find_tree_backref(struct extent_record *rec,
 						u64 parent, u64 root)
 {
-	struct rb_node *node;
-	struct tree_backref *back = NULL;
-	struct tree_backref match = {
-		.node = {
-			.is_data = 0,
-		},
-	};
+	struct list_head *cur = rec->backrefs.next;
+	struct extent_backref *node;
+	struct tree_backref *back;
 
-	if (parent) {
-		match.parent = parent;
-		match.node.full_backref = 1;
-	} else {
-		match.root = root;
+	while(cur != &rec->backrefs) {
+		node = to_extent_backref(cur);
+		cur = cur->next;
+		if (node->is_data)
+			continue;
+		back = to_tree_backref(node);
+		if (parent > 0) {
+			if (!node->full_backref)
+				continue;
+			if (parent == back->parent)
+				return back;
+		} else {
+			if (node->full_backref)
+				continue;
+			if (back->root == root)
+				return back;
+		}
 	}
-
-	node = rb_search(&rec->backref_tree, &match.node.node,
-			 (rb_compare_keys)compare_extent_backref, NULL);
-	if (node)
-		back = to_tree_backref(rb_node_to_extent_backref(node));
-
-	return back;
+	return NULL;
 }
 
 static struct tree_backref *alloc_tree_backref(struct extent_record *rec,
@@ -4566,7 +4483,7 @@ static struct tree_backref *alloc_tree_backref(struct extent_record *rec,
 		ref->root = root;
 		ref->node.full_backref = 0;
 	}
-	rb_insert(&rec->backref_tree, &ref->node.node, compare_extent_backref);
+	list_add_tail(&ref->node.list, &rec->backrefs);
 
 	return ref;
 }
@@ -4577,32 +4494,35 @@ static struct data_backref *find_data_backref(struct extent_record *rec,
 						int found_ref,
 						u64 disk_bytenr, u64 bytes)
 {
-	struct rb_node *node;
-	struct data_backref *back = NULL;
-	struct data_backref match = {
-		.node = {
-			.is_data = 1,
-		},
-		.owner = owner,
-		.offset = offset,
-		.bytes = bytes,
-		.found_ref = found_ref,
-		.disk_bytenr = disk_bytenr,
-	};
+	struct list_head *cur = rec->backrefs.next;
+	struct extent_backref *node;
+	struct data_backref *back;
 
-	if (parent) {
-		match.parent = parent;
-		match.node.full_backref = 1;
-	} else {
-		match.root = root;
+	while(cur != &rec->backrefs) {
+		node = to_extent_backref(cur);
+		cur = cur->next;
+		if (!node->is_data)
+			continue;
+		back = to_data_backref(node);
+		if (parent > 0) {
+			if (!node->full_backref)
+				continue;
+			if (parent == back->parent)
+				return back;
+		} else {
+			if (node->full_backref)
+				continue;
+			if (back->root == root && back->owner == owner &&
+			    back->offset == offset) {
+				if (found_ref && node->found_ref &&
+				    (back->bytes != bytes ||
+				    back->disk_bytenr != disk_bytenr))
+					continue;
+				return back;
+			}
+		}
 	}
-
-	node = rb_search(&rec->backref_tree, &match.node.node,
-			 (rb_compare_keys)compare_extent_backref, NULL);
-	if (node)
-		back = to_data_backref(rb_node_to_extent_backref(node));
-
-	return back;
+	return NULL;
 }
 
 static struct data_backref *alloc_data_backref(struct extent_record *rec,
@@ -4631,7 +4551,7 @@ static struct data_backref *alloc_data_backref(struct extent_record *rec,
 	ref->bytes = max_size;
 	ref->found_ref = 0;
 	ref->num_refs = 0;
-	rb_insert(&rec->backref_tree, &ref->node.node, compare_extent_backref);
+	list_add_tail(&ref->node.list, &rec->backrefs);
 	if (max_size > rec->max_size)
 		rec->max_size = max_size;
 	return ref;
@@ -4664,12 +4584,12 @@ static void check_extent_type(struct extent_record *rec)
 	 * Check SYSTEM extent, as it's also marked as metadata, we can only
 	 * make sure it's a SYSTEM extent by its backref
 	 */
-	if (!RB_EMPTY_ROOT(&rec->backref_tree)) {
+	if (!list_empty(&rec->backrefs)) {
 		struct extent_backref *node;
 		struct tree_backref *tback;
 		u64 bg_type;
 
-		node = rb_node_to_extent_backref(rb_first(&rec->backref_tree));
+		node = to_extent_backref(rec->backrefs.next);
 		if (node->is_data) {
 			/* tree block shouldn't have data backref */
 			rec->wrong_chunk_type = 1;
@@ -4719,7 +4639,6 @@ static int add_extent_rec_nolookup(struct cache_tree *extent_cache,
 	INIT_LIST_HEAD(&rec->backrefs);
 	INIT_LIST_HEAD(&rec->dups);
 	INIT_LIST_HEAD(&rec->list);
-	rec->backref_tree = RB_ROOT;
 	memcpy(&rec->parent_key, &tmpl->parent_key, sizeof(tmpl->parent_key));
 	rec->cache.start = tmpl->start;
 	rec->cache.size = tmpl->nr;
@@ -4859,20 +4778,25 @@ static int add_tree_backref(struct cache_tree *extent_cache, u64 bytenr,
 
 		add_extent_rec_nolookup(extent_cache, &tmpl);
 
+		/* really a bug in cache_extent implement now */
 		cache = lookup_cache_extent(extent_cache, bytenr, 1);
 		if (!cache)
-			abort();
+			return -ENOENT;
 	}
 
 	rec = container_of(cache, struct extent_record, cache);
 	if (rec->start != bytenr) {
-		abort();
+		/*
+		 * Several cause, from unaligned bytenr to over lapping extents
+		 */
+		return -EEXIST;
 	}
 
 	back = find_tree_backref(rec, parent, root);
 	if (!back) {
 		back = alloc_tree_backref(rec, parent, root);
-		BUG_ON(!back);
+		if (!back)
+			return -ENOMEM;
 	}
 
 	if (found_ref) {
@@ -5149,16 +5073,18 @@ static int process_extent_ref_v0(struct cache_tree *extent_cache,
 {
 	struct btrfs_extent_ref_v0 *ref0;
 	struct btrfs_key key;
+	int ret;
 
 	btrfs_item_key_to_cpu(leaf, &key, slot);
 	ref0 = btrfs_item_ptr(leaf, slot, struct btrfs_extent_ref_v0);
 	if (btrfs_ref_objectid_v0(leaf, ref0) < BTRFS_FIRST_FREE_OBJECTID) {
-		add_tree_backref(extent_cache, key.objectid, key.offset, 0, 0);
+		ret = add_tree_backref(extent_cache, key.objectid, key.offset,
+				0, 0);
 	} else {
-		add_data_backref(extent_cache, key.objectid, key.offset, 0,
-				 0, 0, btrfs_ref_count_v0(leaf, ref0), 0, 0);
+		ret = add_data_backref(extent_cache, key.objectid, key.offset,
+				0, 0, 0, btrfs_ref_count_v0(leaf, ref0), 0, 0);
 	}
-	return 0;
+	return ret;
 }
 #endif
 
@@ -5220,8 +5146,24 @@ static int process_chunk_item(struct cache_tree *chunk_cache,
 			      int slot)
 {
 	struct chunk_record *rec;
+	struct btrfs_chunk *chunk;
 	int ret = 0;
 
+	chunk = btrfs_item_ptr(eb, slot, struct btrfs_chunk);
+	/*
+	 * Do extra check for this chunk item,
+	 *
+	 * It's still possible one can craft a leaf with CHUNK_ITEM, with
+	 * wrong onwer(3) out of chunk tree, to pass both chunk tree check
+	 * and owner<->key_type check.
+	 */
+	ret = btrfs_check_chunk_valid(global_info->tree_root, eb, chunk, slot,
+				      key->offset);
+	if (ret < 0) {
+		error("chunk(%llu, %llu) is not valid, ignore it",
+		      key->offset, btrfs_chunk_length(eb, chunk));
+		return 0;
+	}
 	rec = btrfs_new_chunk_record(eb, key, slot);
 	ret = insert_cache_extent(chunk_cache, &rec->cache);
 	if (ret) {
@@ -5385,6 +5327,7 @@ static int process_extent_item(struct btrfs_root *root,
 	struct extent_record tmpl;
 	unsigned long end;
 	unsigned long ptr;
+	int ret;
 	int type;
 	u32 item_size = btrfs_item_size_nr(eb, slot);
 	u64 refs = 0;
@@ -5401,6 +5344,11 @@ static int process_extent_item(struct btrfs_root *root,
 		num_bytes = key.offset;
 	}
 
+	if (!IS_ALIGNED(key.objectid, root->sectorsize)) {
+		error("ignoring invalid extent, bytenr %llu is not aligned to %u",
+		      key.objectid, root->sectorsize);
+		return -EIO;
+	}
 	if (item_size < sizeof(*ei)) {
 #ifdef BTRFS_COMPAT_EXTENT_TREE_V0
 		struct btrfs_extent_item_v0 *ei0;
@@ -5427,6 +5375,16 @@ static int process_extent_item(struct btrfs_root *root,
 		metadata = 1;
 	else
 		metadata = 0;
+	if (metadata && num_bytes != root->nodesize) {
+		error("ignore invalid metadata extent, length %llu does not equal to %u",
+		      num_bytes, root->nodesize);
+		return -EIO;
+	}
+	if (!metadata && !IS_ALIGNED(num_bytes, root->sectorsize)) {
+		error("ignore invalid data extent, length %llu is not aligned to %u",
+		      num_bytes, root->sectorsize);
+		return -EIO;
+	}
 
 	memset(&tmpl, 0, sizeof(tmpl));
 	tmpl.start = key.objectid;
@@ -5449,12 +5407,18 @@ static int process_extent_item(struct btrfs_root *root,
 		offset = btrfs_extent_inline_ref_offset(eb, iref);
 		switch (type) {
 		case BTRFS_TREE_BLOCK_REF_KEY:
-			add_tree_backref(extent_cache, key.objectid,
-					 0, offset, 0);
+			ret = add_tree_backref(extent_cache, key.objectid,
+					0, offset, 0);
+			if (ret < 0)
+				error("add_tree_backref failed: %s",
+				      strerror(-ret));
 			break;
 		case BTRFS_SHARED_BLOCK_REF_KEY:
-			add_tree_backref(extent_cache, key.objectid,
-					 offset, 0, 0);
+			ret = add_tree_backref(extent_cache, key.objectid,
+					offset, 0, 0);
+			if (ret < 0)
+				error("add_tree_backref failed: %s",
+				      strerror(-ret));
 			break;
 		case BTRFS_EXTENT_DATA_REF_KEY:
 			dref = (struct btrfs_extent_data_ref *)(&iref->offset);
@@ -6122,6 +6086,58 @@ full_backref:
 	return 0;
 }
 
+static void report_mismatch_key_root(u8 key_type, u64 rootid)
+{
+	fprintf(stderr, "Invalid key type(");
+	print_key_type(stderr, 0, key_type);
+	fprintf(stderr, ") found in root(");
+	print_objectid(stderr, rootid, 0);
+	fprintf(stderr, ")\n");
+}
+
+/*
+ * Check if the key is valid with its extent buffer.
+ *
+ * This is a early check in case invalid key exists in a extent buffer
+ * This is not comprehensive yet, but should prevent wrong key/item passed
+ * further
+ */
+static int check_type_with_root(u64 rootid, u8 key_type)
+{
+	switch (key_type) {
+	/* Only valid in chunk tree */
+	case BTRFS_DEV_ITEM_KEY:
+	case BTRFS_CHUNK_ITEM_KEY:
+		if (rootid != BTRFS_CHUNK_TREE_OBJECTID)
+			goto err;
+		break;
+	/* valid in csum and log tree */
+	case BTRFS_CSUM_TREE_OBJECTID:
+		if (!(rootid == BTRFS_TREE_LOG_OBJECTID ||
+		      is_fstree(rootid)))
+			goto err;
+		break;
+	case BTRFS_EXTENT_ITEM_KEY:
+	case BTRFS_METADATA_ITEM_KEY:
+	case BTRFS_BLOCK_GROUP_ITEM_KEY:
+		if (rootid != BTRFS_EXTENT_TREE_OBJECTID)
+			goto err;
+		break;
+	case BTRFS_ROOT_ITEM_KEY:
+		if (rootid != BTRFS_ROOT_TREE_OBJECTID)
+			goto err;
+		break;
+	case BTRFS_DEV_EXTENT_KEY:
+		if (rootid != BTRFS_DEV_TREE_OBJECTID)
+			goto err;
+		break;
+	}
+	return 0;
+err:
+	report_mismatch_key_root(key_type, rootid);
+	return -EINVAL;
+}
+
 static int run_next_block(struct btrfs_root *root,
 			  struct block_info *bits,
 			  int bits_nr,
@@ -6271,6 +6287,16 @@ static int run_next_block(struct btrfs_root *root,
 		for (i = 0; i < nritems; i++) {
 			struct btrfs_file_extent_item *fi;
 			btrfs_item_key_to_cpu(buf, &key, i);
+			/*
+			 * Check key type against the leaf owner.
+			 * Could filter quite a lot of early error if
+			 * owner is correct
+			 */
+			if (check_type_with_root(btrfs_header_owner(buf),
+						 key.type)) {
+				fprintf(stderr, "ignoring invalid key\n");
+				continue;
+			}
 			if (key.type == BTRFS_EXTENT_ITEM_KEY) {
 				process_extent_item(root, extent_cache, buf,
 						    i);
@@ -6315,13 +6341,19 @@ static int run_next_block(struct btrfs_root *root,
 			}
 
 			if (key.type == BTRFS_TREE_BLOCK_REF_KEY) {
-				add_tree_backref(extent_cache, key.objectid, 0,
-						 key.offset, 0);
+				ret = add_tree_backref(extent_cache,
+						key.objectid, 0, key.offset, 0);
+				if (ret < 0)
+					error("add_tree_backref failed: %s",
+					      strerror(-ret));
 				continue;
 			}
 			if (key.type == BTRFS_SHARED_BLOCK_REF_KEY) {
-				add_tree_backref(extent_cache, key.objectid,
-						 key.offset, 0, 0);
+				ret = add_tree_backref(extent_cache,
+						key.objectid, key.offset, 0, 0);
+				if (ret < 0)
+					error("add_tree_backref failed: %s",
+					      strerror(-ret));
 				continue;
 			}
 			if (key.type == BTRFS_EXTENT_DATA_REF_KEY) {
@@ -6419,9 +6451,16 @@ static int run_next_block(struct btrfs_root *root,
 			tmpl.metadata = 1;
 			tmpl.max_size = size;
 			ret = add_extent_rec(extent_cache, &tmpl);
-			BUG_ON(ret);
+			if (ret < 0)
+				goto out;
 
-			add_tree_backref(extent_cache, ptr, parent, owner, 1);
+			ret = add_tree_backref(extent_cache, ptr, parent,
+					owner, 1);
+			if (ret < 0) {
+				error("add_tree_backref failed: %s",
+				      strerror(-ret));
+				continue;
+			}
 
 			if (level > 1) {
 				add_pending(nodes, seen, ptr, size);
@@ -6455,6 +6494,7 @@ static int add_root_to_pending(struct extent_buffer *buf,
 			       u64 objectid)
 {
 	struct extent_record tmpl;
+	int ret;
 
 	if (btrfs_header_level(buf) > 0)
 		add_pending(nodes, seen, buf->start, buf->len);
@@ -6472,11 +6512,12 @@ static int add_root_to_pending(struct extent_buffer *buf,
 
 	if (objectid == BTRFS_TREE_RELOC_OBJECTID ||
 	    btrfs_header_backref_rev(buf) < BTRFS_MIXED_BACKREF_REV)
-		add_tree_backref(extent_cache, buf->start, buf->start,
-				 0, 1);
+		ret = add_tree_backref(extent_cache, buf->start, buf->start,
+				0, 1);
 	else
-		add_tree_backref(extent_cache, buf->start, 0, objectid, 1);
-	return 0;
+		ret = add_tree_backref(extent_cache, buf->start, 0, objectid,
+				1);
+	return ret;
 }
 
 /* as we fix the tree, we might be deleting blocks that
@@ -6522,7 +6563,7 @@ static int free_extent_hook(struct btrfs_trans_handle *trans,
 			back->node.found_extent_tree = 0;
 
 		if (!back->node.found_extent_tree && back->node.found_ref) {
-			rb_erase(&back->node.node, &rec->backref_tree);
+			list_del(&back->node.list);
 			free(back);
 		}
 	} else {
@@ -6541,7 +6582,7 @@ static int free_extent_hook(struct btrfs_trans_handle *trans,
 			back->node.found_extent_tree = 0;
 		}
 		if (!back->node.found_extent_tree && back->node.found_ref) {
-			rb_erase(&back->node.node, &rec->backref_tree);
+			list_del(&back->node.list);
 			free(back);
 		}
 	}
@@ -6978,7 +7019,7 @@ out:
 static int verify_backrefs(struct btrfs_fs_info *info, struct btrfs_path *path,
 			   struct extent_record *rec)
 {
-	struct extent_backref *back, *tmp;
+	struct extent_backref *back;
 	struct data_backref *dback;
 	struct extent_entry *entry, *best = NULL;
 	LIST_HEAD(entries);
@@ -6994,8 +7035,7 @@ static int verify_backrefs(struct btrfs_fs_info *info, struct btrfs_path *path,
 	if (rec->metadata)
 		return 0;
 
-	rbtree_postorder_for_each_entry_safe(back, tmp,
-					     &rec->backref_tree, node) {
+	list_for_each_entry(back, &rec->backrefs, list) {
 		if (back->full_backref || !back->is_data)
 			continue;
 
@@ -7121,8 +7161,7 @@ static int verify_backrefs(struct btrfs_fs_info *info, struct btrfs_path *path,
 	 * Ok great we all agreed on an extent record, let's go find the real
 	 * references and fix up the ones that don't match.
 	 */
-	rbtree_postorder_for_each_entry_safe(back, tmp,
-					     &rec->backref_tree, node) {
+	list_for_each_entry(back, &rec->backrefs, list) {
 		if (back->full_backref || !back->is_data)
 			continue;
 
@@ -7351,7 +7390,7 @@ static int find_possible_backrefs(struct btrfs_fs_info *info,
 				  struct extent_record *rec)
 {
 	struct btrfs_root *root;
-	struct extent_backref *back, *tmp;
+	struct extent_backref *back;
 	struct data_backref *dback;
 	struct cache_extent *cache;
 	struct btrfs_file_extent_item *fi;
@@ -7359,8 +7398,7 @@ static int find_possible_backrefs(struct btrfs_fs_info *info,
 	u64 bytenr, bytes;
 	int ret;
 
-	rbtree_postorder_for_each_entry_safe(back, tmp,
-					     &rec->backref_tree, node) {
+	list_for_each_entry(back, &rec->backrefs, list) {
 		/* Don't care about full backrefs (poor unloved backrefs) */
 		if (back->full_backref || !back->is_data)
 			continue;
@@ -7448,7 +7486,7 @@ static int record_orphan_data_extents(struct btrfs_fs_info *fs_info,
 {
 	struct btrfs_key key;
 	struct btrfs_root *dest_root;
-	struct extent_backref *back, *tmp;
+	struct extent_backref *back;
 	struct data_backref *dback;
 	struct orphan_data_extent *orphan;
 	struct btrfs_path *path;
@@ -7460,8 +7498,7 @@ static int record_orphan_data_extents(struct btrfs_fs_info *fs_info,
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
-	rbtree_postorder_for_each_entry_safe(back, tmp,
-					     &rec->backref_tree, node) {
+	list_for_each_entry(back, &rec->backrefs, list) {
 		if (back->full_backref || !back->is_data ||
 		    !back->found_extent_tree)
 			continue;
@@ -7528,8 +7565,9 @@ static int fixup_extent_refs(struct btrfs_fs_info *info,
 	struct btrfs_trans_handle *trans = NULL;
 	int ret;
 	struct btrfs_path *path;
+	struct list_head *cur = rec->backrefs.next;
 	struct cache_extent *cache;
-	struct extent_backref *back, *tmp;
+	struct extent_backref *back;
 	int allocated = 0;
 	u64 flags = 0;
 
@@ -7580,8 +7618,10 @@ static int fixup_extent_refs(struct btrfs_fs_info *info,
 	}
 
 	/* step three, recreate all the refs we did find */
-	rbtree_postorder_for_each_entry_safe(back, tmp,
-					     &rec->backref_tree, node) {
+	while(cur != &rec->backrefs) {
+		back = to_extent_backref(cur);
+		cur = cur->next;
+
 		/*
 		 * if we didn't find any references, don't create a
 		 * new extent record
@@ -8327,8 +8367,10 @@ static int deal_root_from_list(struct list_head *list,
 			ret = -EIO;
 			break;
 		}
-		add_root_to_pending(buf, extent_cache, pending,
+		ret = add_root_to_pending(buf, extent_cache, pending,
 				    seen, nodes, rec->objectid);
+		if (ret < 0)
+			break;
 		/*
 		 * To rebuild extent tree, we need deal with snapshot
 		 * one by one, otherwise we deal with node firstly which
