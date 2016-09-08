@@ -1,3 +1,10 @@
+btrfs-progs (4.7.2-0.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * New upstream release. (Closes #836778)
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 08 Sep 2016 00:37:22 -0400
+
 btrfs-progs (4.7.1-1) unstable; urgency=medium
 
   * New upstream release.
