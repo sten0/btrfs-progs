@@ -1149,7 +1149,9 @@ int btrfs_scan_fs_devices(int fd, const char *path,
 	dev_size = seek_ret;
 	lseek(fd, 0, SEEK_SET);
 	if (sb_bytenr > dev_size) {
-		fprintf(stderr, "Superblock bytenr is larger than device size\n");
+		error("superblock bytenr %llu is larger than device size %llu",
+				(unsigned long long)sb_bytenr,
+				(unsigned long long)dev_size);
 		return -EINVAL;
 	}
 
@@ -1439,7 +1441,7 @@ static int check_super(struct btrfs_super_block *sb, unsigned sbflags)
 
 	csum_type = btrfs_super_csum_type(sb);
 	if (csum_type >= ARRAY_SIZE(btrfs_csum_sizes)) {
-		error("unsupported checksum algorithm %u\n", csum_type);
+		error("unsupported checksum algorithm %u", csum_type);
 		return -EIO;
 	}
 	csum_size = btrfs_csum_sizes[csum_type];
