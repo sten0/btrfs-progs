@@ -356,7 +356,7 @@ again:
 	dev_fd = device->fd;
 	device->total_ios++;
 	dev_bytenr = multi->stripes[0].physical;
-	kfree(multi);
+	free(multi);
 
 	if (size_left < length)
 		length = size_left;
@@ -1233,7 +1233,7 @@ static int do_list_roots(struct btrfs_root *root)
 		}
 		btrfs_item_key(leaf, &disk_key, slot);
 		btrfs_disk_key_to_cpu(&found_key, &disk_key);
-		if (btrfs_key_type(&found_key) != BTRFS_ROOT_ITEM_KEY) {
+		if (found_key.type != BTRFS_ROOT_ITEM_KEY) {
 			path->slots[0]++;
 			continue;
 		}
@@ -1380,9 +1380,9 @@ const char * const cmd_restore_usage[] = {
 	"Try to restore files from a damaged filesystem (unmounted)",
 	"",
 	"-s|--snapshots       get snapshots",
-	"-x|--xattr           get extended attributes",
+	"-x|--xattr           restore extended attributes",
 	"-m|--metadata        restore owner, mode and times",
-	"-S|--symlinks	      restore symbolic links",
+	"-S|--symlink         restore symbolic links",
 	"-v|--verbose         verbose",
 	"-i|--ignore-errors   ignore errors",
 	"-o|--overwrite       overwrite",
@@ -1421,8 +1421,10 @@ int cmd_restore(int argc, char **argv)
 
 	while (1) {
 		int opt;
+		enum { GETOPT_VAL_PATH_REGEX = 256 };
 		static const struct option long_options[] = {
-			{ "path-regex", required_argument, NULL, 256},
+			{ "path-regex", required_argument, NULL,
+				GETOPT_VAL_PATH_REGEX },
 			{ "dry-run", no_argument, NULL, 'D'},
 			{ "metadata", no_argument, NULL, 'm'},
 			{ "symlinks", no_argument, NULL, 'S'},
@@ -1495,8 +1497,7 @@ int cmd_restore(int argc, char **argv)
 			case 'c':
 				match_cflags |= REG_ICASE;
 				break;
-			/* long option without single letter alternative */
-			case 256:
+			case GETOPT_VAL_PATH_REGEX:
 				match_regstr = optarg;
 				break;
 			case 'x':

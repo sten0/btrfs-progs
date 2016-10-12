@@ -120,7 +120,7 @@ void readahead_tree_block(struct btrfs_root *root, u64 bytenr, u32 blocksize,
 struct extent_buffer* btrfs_find_create_tree_block(
 		struct btrfs_fs_info *fs_info, u64 bytenr, u32 blocksize);
 
-int __setup_root(u32 nodesize, u32 leafsize, u32 sectorsize,
+void btrfs_setup_root(u32 nodesize, u32 leafsize, u32 sectorsize,
                         u32 stripesize, struct btrfs_root *root,
                         struct btrfs_fs_info *fs_info, u64 objectid);
 int clean_tree_block(struct btrfs_trans_handle *trans,
@@ -175,7 +175,7 @@ int btrfs_set_buffer_uptodate(struct extent_buffer *buf);
 int wait_on_tree_block_writeback(struct btrfs_root *root,
 				 struct extent_buffer *buf);
 u32 btrfs_csum_data(struct btrfs_root *root, char *data, u32 seed, size_t len);
-void btrfs_csum_final(u32 crc, char *result);
+void btrfs_csum_final(u32 crc, u8 *result);
 
 int btrfs_commit_transaction(struct btrfs_trans_handle *trans,
 			     struct btrfs_root *root);

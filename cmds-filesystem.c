@@ -248,7 +248,7 @@ static int match_search_item_kernel(__u8 *fsid, char *mnt, char *label,
 	return 0;
 }
 
-static int uuid_search(struct btrfs_fs_devices *fs_devices, char *search)
+static int uuid_search(struct btrfs_fs_devices *fs_devices, const char *search)
 {
 	char uuidbuf[BTRFS_UUID_UNPARSED_SIZE];
 	struct list_head *cur;
@@ -495,7 +495,7 @@ static int btrfs_scan_kernel(void *search, unsigned unit_mode)
 		if ((fd != -1) && !get_df(fd, &space_info_arg)) {
 			print_one_fs(&fs_info_arg, dev_info_arg,
 				     space_info_arg, label, unit_mode);
-			kfree(space_info_arg);
+			free(space_info_arg);
 			memset(label, 0, sizeof(label));
 			found = 1;
 		}
@@ -509,7 +509,7 @@ out:
 	return !found;
 }
 
-static int dev_to_fsid(char *dev, __u8 *fsid)
+static int dev_to_fsid(const char *dev, __u8 *fsid)
 {
 	struct btrfs_super_block *disk_super;
 	char buf[BTRFS_SUPER_INFO_SIZE];
