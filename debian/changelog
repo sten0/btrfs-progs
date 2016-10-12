@@ -1,3 +1,9 @@
+btrfs-progs (4.8.1-0.1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Wed, 12 Oct 2016 13:59:12 -0400
+
 btrfs-progs (4.7.3-1) unstable; urgency=medium
 
   * New upstream release.
