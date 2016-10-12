@@ -330,9 +330,18 @@ static int find_parent_roots(struct ulist *roots, u64 parent)
 	 * For each unresolved root, we recurse
 	 */
 	ref = find_ref_bytenr(parent);
+	if (!ref) {
+		error("bytenr ref not found for parent %llu",
+				(unsigned long long)parent);
+		return -EIO;
+	}
 	node = &ref->bytenr_node;
-	BUG_ON(ref == NULL);
-	BUG_ON(ref->bytenr != parent);
+	if (ref->bytenr != parent) {
+		error("found bytenr ref does not match parent: %llu != %llu",
+				(unsigned long long)ref->bytenr,
+				(unsigned long long)parent);
+		return -EIO;
+	}
 
 	{
 		/*
@@ -341,9 +350,15 @@ static int find_parent_roots(struct ulist *roots, u64 parent)
 		 */
 		struct rb_node *prev_node = rb_prev(&ref->bytenr_node);
 		struct ref *prev;
+
 		if (prev_node) {
 			prev = rb_entry(prev_node, struct ref, bytenr_node);
-			BUG_ON(prev->bytenr == parent);
+			if (prev->bytenr == parent) {
+				error(
+				"unexpected: prev bytenr same as parent: %llu",
+						(unsigned long long)parent);
+				return -EIO;
+			}
 		}
 	}
 
@@ -874,15 +889,14 @@ static int add_qgroup_relation(u64 memberid, u64 parentid)
 	return 0;
 }
 
-static void read_qgroup_status(struct btrfs_path *path,
+static void read_qgroup_status(struct extent_buffer *eb, int slot,
 			      struct counts_tree *counts)
 {
 	struct btrfs_qgroup_status_item *status_item;
 	u64 flags;
 
-	status_item = btrfs_item_ptr(path->nodes[0], path->slots[0],
-				     struct btrfs_qgroup_status_item);
-	flags = btrfs_qgroup_status_flags(path->nodes[0], status_item);
+	status_item = btrfs_item_ptr(eb, slot, struct btrfs_qgroup_status_item);
+	flags = btrfs_qgroup_status_flags(eb, status_item);
 	/*
 	 * Since qgroup_inconsist/rescan_running is just one bit,
 	 * assign value directly won't work.
@@ -946,7 +960,7 @@ loop:
 			}
 
 			if (key.type == BTRFS_QGROUP_STATUS_KEY) {
-				read_qgroup_status(&path, &counts);
+				read_qgroup_status(leaf, i, &counts);
 				continue;
 			}
 

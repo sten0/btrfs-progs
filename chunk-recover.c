@@ -968,7 +968,7 @@ static int build_device_map_by_chunk_record(struct btrfs_root *root,
 		map->stripes[i].dev = btrfs_find_device(root, devid,
 							uuid, NULL);
 		if (!map->stripes[i].dev) {
-			kfree(map);
+			free(map);
 			return -EIO;
 		}
 	}
@@ -1488,7 +1488,7 @@ open_ctree_with_broken_chunk(struct recover_control *rc)
 	sectorsize = btrfs_super_sectorsize(disk_super);
 	stripesize = btrfs_super_stripesize(disk_super);
 
-	__setup_root(nodesize, leafsize, sectorsize, stripesize,
+	btrfs_setup_root(nodesize, leafsize, sectorsize, stripesize,
 		     fs_info->chunk_root, fs_info, BTRFS_CHUNK_TREE_OBJECTID);
 
 	ret = build_device_maps_by_chunk_records(rc, fs_info->chunk_root);
@@ -1914,7 +1914,7 @@ static int check_one_csum(int fd, u64 start, u32 len, u32 tree_csum)
 	}
 	ret = 0;
 	csum_result = btrfs_csum_data(NULL, data, csum_result, len);
-	btrfs_csum_final(csum_result, (char *)&csum_result);
+	btrfs_csum_final(csum_result, (u8 *)&csum_result);
 	if (csum_result != tree_csum)
 		ret = 1;
 out:
@@ -1947,9 +1947,12 @@ static int insert_stripe(struct list_head *devexts,
 	dev = btrfs_find_device_by_devid(rc->fs_devices, devext->objectid,
 					0);
 	if (!dev)
-		return 1;
-	BUG_ON(btrfs_find_device_by_devid(rc->fs_devices, devext->objectid,
-					1));
+		return -ENOENT;
+	if (btrfs_find_device_by_devid(rc->fs_devices, devext->objectid, 1)) {
+		error("unexpected: found another device with id %llu",
+				(unsigned long long)devext->objectid);
+		return -EINVAL;
+	}
 
 	chunk->stripes[index].devid = devext->objectid;
 	chunk->stripes[index].offset = devext->offset;
@@ -2247,6 +2250,13 @@ static int btrfs_recover_chunks(struct recover_control *rc)
 		chunk->sub_stripes = calc_sub_nstripes(bg->flags);
 
 		ret = insert_cache_extent(&rc->chunk, &chunk->cache);
+		if (ret == -EEXIST) {
+			error("duplicate entry in cache start %llu size %llu",
+					(unsigned long long)chunk->cache.start,
+					(unsigned long long)chunk->cache.size);
+			free(chunk);
+			return ret;
+		}
 		BUG_ON(ret);
 
 		list_del_init(&bg->list);
