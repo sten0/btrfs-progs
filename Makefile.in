@@ -162,10 +162,6 @@ ifneq (,$(findstring ubsan,$(D)))
   DEBUG_CFLAGS_INTERNAL += -fsanitize=undefined
 endif
 
-ifneq (,$(findstring ubsan,$(D)))
-  DEBUG_CFLAGS_INTERNAL += -fsanitize=undefined
-endif
-
 ifneq (,$(findstring bcheck,$(D)))
   DEBUG_CFLAGS_INTERNAL += -DDEBUG_BUILD_CHECKS
 endif
