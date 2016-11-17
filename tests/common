@@ -3,16 +3,34 @@
 # Common routines for all tests
 #
 
+# assert that argument is not empty and is an existing path (file or directory)
+_assert_path()
+{
+	local path
+
+	path="$1"
+	if [ -z "$path" ]; then
+		echo "ASSERTION FAIL: $path is not valid"
+		exit 1
+	fi
+
+	if [ -f "$path" -o -d "$path" -o -b "$path" ]; then
+		return 0
+	fi
+	echo "ASSERTION FAIL: $path is not valid"
+	exit 1
+}
+
 _fail()
 {
-	echo "$*" | tee -a $RESULTS
+	echo "$*" | tee -a "$RESULTS"
 	exit 1
 }
 
 # log a message to the results file
 _log()
 {
-	echo "$*" | tee -a $RESULTS
+	echo "$*" | tee -a "$RESULTS"
 }
 
 _not_run()
@@ -23,12 +41,12 @@ _not_run()
 
 run_check()
 {
-	echo "############### $@" >> $RESULTS 2>&1
+	echo "############### $@" >> "$RESULTS" 2>&1
 	if [ "$TEST_LOG" = 'tty' ]; then echo "CMD: $@" > /dev/tty; fi
 	if [ "$1" = 'root_helper' ]; then
-		"$@" >> $RESULTS 2>&1 || _fail "failed: $@"
+		"$@" >> "$RESULTS" 2>&1 || _fail "failed: $@"
 	else
-		$INSTRUMENT "$@" >> $RESULTS 2>&1 || _fail "failed: $@"
+		$INSTRUMENT "$@" >> "$RESULTS" 2>&1 || _fail "failed: $@"
 	fi
 }
 
@@ -36,30 +54,32 @@ run_check()
 # can be processed further
 run_check_stdout()
 {
-	echo "############### $@" >> $RESULTS 2>&1
+	echo "############### $@" >> "$RESULTS" 2>&1
 	if [ "$TEST_LOG" = 'tty' ]; then echo "CMD(stdout): $@" > /dev/tty; fi
 	if [ "$1" = 'root_helper' ]; then
-		"$@" 2>&1 | tee -a $RESULTS || _fail "failed: $@"
+		"$@" 2>&1 | tee -a "$RESULTS" || _fail "failed: $@"
 	else
-		$INSTRUMENT "$@" 2>&1 | tee -a $RESULTS || _fail "failed: $@"
+		$INSTRUMENT "$@" 2>&1 | tee -a "$RESULTS" || _fail "failed: $@"
 	fi
 }
 
-# same as run_check but does not fail the test, output is logged
+# same as run_check but does not fail the test if it's handled gracefully by
+# the tool, unexpected failure like segfault or abor will exit forcibly
+# output is logged
 run_mayfail()
 {
 	local ret
 
-	echo "############### $@" >> $RESULTS 2>&1
+	echo "############### $@" >> "$RESULTS" 2>&1
 	if [ "$TEST_LOG" = 'tty' ]; then echo "CMD(mayfail): $@" > /dev/tty; fi
 	if [ "$1" = 'root_helper' ]; then
 		"$@" >> $RESULTS 2>&1
 	else
-		$INSTRUMENT "$@" >> $RESULTS 2>&1
+		$INSTRUMENT "$@" >> "$RESULTS" 2>&1
 	fi
 	ret=$?
 	if [ $ret != 0 ]; then
-		echo "failed (ignored, ret=$ret): $@" >> $RESULTS
+		echo "failed (ignored, ret=$ret): $@" >> "$RESULTS"
 		if [ $ret == 139 ]; then
 			_fail "mayfail: returned code 139 (SEGFAULT), not ignored"
 		elif [ $ret == 134 ]; then
@@ -78,18 +98,18 @@ run_mustfail()
 	msg="$1"
 	shift
 
-	echo "############### $@" >> $RESULTS 2>&1
+	echo "############### $@" >> "$RESULTS" 2>&1
 	if [ "$TEST_LOG" = 'tty' ]; then echo "CMD(mustfail): $@" > /dev/tty; fi
 	if [ "$1" = 'root_helper' ]; then
-		"$@" >> $RESULTS 2>&1
+		"$@" >> "$RESULTS" 2>&1
 	else
-		$INSTRUMENT "$@" >> $RESULTS 2>&1
+		$INSTRUMENT "$@" >> "$RESULTS" 2>&1
 	fi
 	if [ $? != 0 ]; then
-		echo "failed (expected): $@" >> $RESULTS
+		echo "failed (expected): $@" >> "$RESULTS"
 		return 0
 	else
-		echo "succeeded (unexpected!): $@" >> $RESULTS
+		echo "succeeded (unexpected!): $@" >> "$RESULTS"
 		_fail "unexpected success: $msg"
 		return 1
 	fi
@@ -97,7 +117,7 @@ run_mustfail()
 
 check_prereq()
 {
-	if ! [ -f $TOP/$1 ]; then
+	if ! [ -f "$TOP/$1" ]; then
 		_fail "Failed prerequisites: $1";
 	fi
 }
@@ -115,12 +135,12 @@ check_image()
 	local image
 
 	image=$1
-	echo "testing image $(basename $image)" >> $RESULTS
-	$TOP/btrfs check $image >> $RESULTS 2>&1
+	echo "testing image $(basename $image)" >> "$RESULTS"
+	$TOP/btrfs check "$image" >> "$RESULTS" 2>&1
 	[ $? -eq 0 ] && _fail "btrfs check should have detected corruption"
 
-	run_check $TOP/btrfs check --repair $image
-	run_check $TOP/btrfs check $image
+	run_check $TOP/btrfs check --repair "$image"
+	run_check $TOP/btrfs check "$image"
 }
 
 # Extract a usable image from packed formats
@@ -128,6 +148,7 @@ check_image()
 # - dtto compressed by XZ, suffix .raw.xz
 # - meta-dump images with suffix .img
 # - dtto compressed by XZ, suffix .img.xz
+# - compressed send stream, .stream.xz
 extract_image()
 {
 	local image
@@ -136,30 +157,36 @@ extract_image()
 	image="$1"
 	case "$image" in
 	*.img)
-		rm -f $image.restored
+		rm -f "$image.restored"
 		: ;;
 	*.img.xz)
 		xz --decompress --keep "$image" || \
 			_fail "failed to decompress image $image" >&2
 		image=${image%%.xz}
-		rm -f $image.restored
+		rm -f "$image.restored"
 		cleanme=$image
 		;;
 	*.raw)
-		cp --sparse=auto $image $image.restored
+		cp --sparse=auto "$image" "$image.restored"
 		;;
 	*.raw.xz)
 		xz --decompress --keep "$image" || \
 			_fail "failed to decompress image $image" >&2
 		image=${image%%.xz}
-		mv "$image" "$image".restored
+		mv "$image" "$image.restored"
+		;;
+	*.stream.xz)
+		xz --decompress --keep "$image" || \
+			_fail "failed to decompress file $image" >&2
+		image=${image%%.xz}
+		mv "$image" "$image.restored"
 		;;
 	esac
 
-	if ! [ -f $image.restored ]; then
-		echo "restoring image $(basename $image)" >> $RESULTS
-		$TOP/btrfs-image -r $image $image.restored \
-			&>> $RESULTS \
+	if ! [ -f "$image.restored" ]; then
+		echo "restoring image $(basename $image)" >> "$RESULTS"
+		"$TOP/btrfs-image" -r "$image" "$image.restored" \
+			&>> "$RESULTS" \
 			|| _fail "failed to restore image $image" >&2
 	fi
 
@@ -175,7 +202,7 @@ check_all_images()
 	local extracted
 
 	dir="$1"
-	for image in $(find $dir \( -iname '*.img' -o	\
+	for image in $(find "$dir" \( -iname '*.img' -o	\
 				-iname '*.img.xz' -o 	\
 				-iname '*.raw' -o 	\
 				-iname '*.raw.xz' \) | sort)
@@ -241,7 +268,7 @@ prepare_test_dev()
 	[[ "$size" ]] || size='2G'
 
 	echo "\$TEST_DEV not given, use $TOP/test/test.img as fallback" >> \
-		$RESULTS
+		"$RESULTS"
 	TEST_DEV="$TOP/tests/test.img"
 
 	truncate -s "$size" "$TEST_DEV" || _not_run "create file for loop device failed"
@@ -273,10 +300,20 @@ run_check_umount_test_dev()
 	run_check $SUDO_HELPER umount "$@" "$TEST_DEV"
 }
 
+check_kernel_support()
+{
+	if ! grep -iq 'btrfs' /proc/filesystems; then
+		echo "WARNING: btrfs filesystem not listed in /proc/filesystems, some tests might fail"
+		return 1
+	fi
+	return 0
+}
+
 init_env()
 {
 	TEST_MNT="${TEST_MNT:-$TOP/tests/mnt}"
 	export TEST_MNT
 	mkdir -p "$TEST_MNT" || { echo "Failed mkdir -p $TEST_MNT"; exit 1; }
+
 }
 init_env

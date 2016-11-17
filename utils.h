@@ -109,6 +109,8 @@ void btrfs_list_all_fs_features(u64 mask_disallowed);
 char* btrfs_parse_fs_features(char *namelist, u64 *flags);
 void btrfs_process_fs_features(u64 flags);
 void btrfs_parse_features_to_string(char *buf, u64 flags);
+void print_kernel_version(FILE *stream, u32 version);
+u32 get_running_kernel_version(void);
 
 struct btrfs_mkfs_config {
 	char *label;
@@ -207,8 +209,8 @@ int is_vol_small(const char *file);
 int csum_tree_block(struct btrfs_root *root, struct extent_buffer *buf,
 			   int verify);
 int ask_user(const char *question);
-int lookup_ino_rootid(int fd, u64 *rootid);
-int btrfs_scan_lblkid(void);
+int lookup_path_rootid(int fd, u64 *rootid);
+int btrfs_scan_devices(void);
 int get_btrfs_mount(const char *dev, char *mp, size_t mp_size);
 int find_mount_root(const char *path, char **mount_root);
 int get_device_info(int fd, u64 devid,

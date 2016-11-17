@@ -431,10 +431,10 @@ static int cmd_subvol_list(int argc, char **argv)
 	u64 top_id;
 	int ret = -1, uerr = 0;
 	char *subvol;
-	int is_tab_result = 0;
 	int is_list_all = 0;
 	int is_only_in_path = 0;
 	DIR *dirstream = NULL;
+	enum btrfs_list_layout layout = BTRFS_LIST_LAYOUT_DEFAULT;
 
 	filter_set = btrfs_list_alloc_filter_set();
 	comparer_set = btrfs_list_alloc_comparer_set();
@@ -473,7 +473,7 @@ static int cmd_subvol_list(int argc, char **argv)
 			is_only_in_path = 1;
 			break;
 		case 't':
-			is_tab_result = 1;
+			layout = BTRFS_LIST_LAYOUT_TABLE;
 			break;
 		case 's':
 			btrfs_list_setup_filter(&filter_set,
@@ -530,10 +530,6 @@ static int cmd_subvol_list(int argc, char **argv)
 		}
 	}
 
-	if (flags)
-		btrfs_list_setup_filter(&filter_set, BTRFS_LIST_FILTER_FLAGS,
-					flags);
-
 	if (check_argc_exact(argc - optind, 1)) {
 		uerr = 1;
 		goto out;
@@ -547,11 +543,13 @@ static int cmd_subvol_list(int argc, char **argv)
 		goto out;
 	}
 
+	if (flags)
+		btrfs_list_setup_filter(&filter_set, BTRFS_LIST_FILTER_FLAGS,
+					flags);
+
 	ret = btrfs_list_get_path_rootid(fd, &top_id);
-	if (ret) {
-		error("can't get rootid for '%s'", subvol);
+	if (ret)
 		goto out;
-	}
 
 	if (is_list_all)
 		btrfs_list_setup_filter(&filter_set,
@@ -568,14 +566,8 @@ static int cmd_subvol_list(int argc, char **argv)
 	btrfs_list_setup_print_column(BTRFS_LIST_TOP_LEVEL);
 	btrfs_list_setup_print_column(BTRFS_LIST_PATH);
 
-	if (is_tab_result)
-		ret = btrfs_list_subvols_print(fd, filter_set, comparer_set,
-				BTRFS_LIST_LAYOUT_TABLE,
-				!is_list_all && !is_only_in_path, NULL);
-	else
-		ret = btrfs_list_subvols_print(fd, filter_set, comparer_set,
-				BTRFS_LIST_LAYOUT_DEFAULT,
-				!is_list_all && !is_only_in_path, NULL);
+	ret = btrfs_list_subvols_print(fd, filter_set, comparer_set,
+			layout, !is_list_all && !is_only_in_path, NULL);
 
 out:
 	close_file_or_dir(fd, dirstream);
@@ -929,15 +921,6 @@ static int cmd_subvol_show(int argc, char **argv)
 	}
 
 	ret = get_subvol_info(fullpath, &get_ri);
-	if (ret == 2) {
-		/*
-		 * Since the top level btrfs was given don't
-		 * take that as error
-		 */
-		printf("%s is toplevel subvolume\n", fullpath);
-		ret = 0;
-		goto out;
-	}
 	if (ret) {
 		if (ret < 0) {
 			error("Failed to get subvol info %s: %s\n",
