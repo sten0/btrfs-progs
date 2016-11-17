@@ -44,6 +44,8 @@
 #define COMPRESS_NONE		0
 #define COMPRESS_ZLIB		1
 
+#define MAX_WORKER_THREADS	(32)
+
 struct meta_cluster_item {
 	__le64 bytenr;
 	__le32 size;
@@ -95,9 +97,12 @@ struct metadump_struct {
 	struct btrfs_root *root;
 	FILE *out;
 
-	struct meta_cluster *cluster;
+	union {
+		struct meta_cluster cluster;
+		char meta_cluster_bytes[BLOCK_SIZE];
+	};
 
-	pthread_t *threads;
+	pthread_t threads[MAX_WORKER_THREADS];
 	size_t num_threads;
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
@@ -130,7 +135,7 @@ struct mdrestore_struct {
 	FILE *in;
 	FILE *out;
 
-	pthread_t *threads;
+	pthread_t threads[MAX_WORKER_THREADS];
 	size_t num_threads;
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
@@ -703,7 +708,7 @@ static void meta_cluster_init(struct metadump_struct *md, u64 start)
 
 	md->num_items = 0;
 	md->num_ready = 0;
-	header = &md->cluster->header;
+	header = &md->cluster.header;
 	header->magic = cpu_to_le64(HEADER_MAGIC);
 	header->bytenr = cpu_to_le64(start);
 	header->nritems = cpu_to_le32(0);
@@ -736,8 +741,6 @@ static void metadump_destroy(struct metadump_struct *md, int num_threads)
 		free(name->sub);
 		free(name);
 	}
-	free(md->threads);
-	free(md->cluster);
 }
 
 static int metadump_init(struct metadump_struct *md, struct btrfs_root *root,
@@ -747,14 +750,6 @@ static int metadump_init(struct metadump_struct *md, struct btrfs_root *root,
 	int i, ret = 0;
 
 	memset(md, 0, sizeof(*md));
-	md->cluster = calloc(1, BLOCK_SIZE);
-	if (!md->cluster)
-		return -ENOMEM;
-	md->threads = calloc(num_threads, sizeof(pthread_t));
-	if (!md->threads) {
-		free(md->cluster);
-		return -ENOMEM;
-	}
 	INIT_LIST_HEAD(&md->list);
 	INIT_LIST_HEAD(&md->ordered);
 	md->root = root;
@@ -794,7 +789,7 @@ static int write_zero(FILE *out, size_t size)
 
 static int write_buffers(struct metadump_struct *md, u64 *next)
 {
-	struct meta_cluster_header *header = &md->cluster->header;
+	struct meta_cluster_header *header = &md->cluster.header;
 	struct meta_cluster_item *item;
 	struct async_work *async;
 	u64 bytenr = 0;
@@ -824,14 +819,14 @@ static int write_buffers(struct metadump_struct *md, u64 *next)
 
 	/* setup and write index block */
 	list_for_each_entry(async, &md->ordered, ordered) {
-		item = md->cluster->items + nritems;
+		item = &md->cluster.items[nritems];
 		item->bytenr = cpu_to_le64(async->start);
 		item->size = cpu_to_le32(async->bufsize);
 		nritems++;
 	}
 	header->nritems = cpu_to_le32(nritems);
 
-	ret = fwrite(md->cluster, BLOCK_SIZE, 1, md->out);
+	ret = fwrite(&md->cluster, BLOCK_SIZE, 1, md->out);
 	if (ret != 1) {
 		error("unable to write out cluster: %s", strerror(errno));
 		return -errno;
@@ -924,7 +919,7 @@ static int flush_pending(struct metadump_struct *md, int done)
 	struct async_work *async = NULL;
 	struct extent_buffer *eb;
 	u64 blocksize = md->root->nodesize;
-	u64 start;
+	u64 start = 0;
 	u64 size;
 	size_t offset;
 	int ret = 0;
@@ -1328,7 +1323,7 @@ static int create_metadump(const char *input, FILE *out, int num_threads,
 			   int compress_level, int sanitize, int walk_trees)
 {
 	struct btrfs_root *root;
-	struct btrfs_path *path = NULL;
+	struct btrfs_path path;
 	struct metadump_struct metadump;
 	int ret;
 	int err = 0;
@@ -1355,12 +1350,7 @@ static int create_metadump(const char *input, FILE *out, int num_threads,
 		goto out;
 	}
 
-	path = btrfs_alloc_path();
-	if (!path) {
-		error("not enough memory to allocate path");
-		err = -ENOMEM;
-		goto out;
-	}
+	btrfs_init_path(&path);
 
 	if (walk_trees) {
 		ret = copy_tree_blocks(root, root->fs_info->chunk_root->node,
@@ -1377,20 +1367,20 @@ static int create_metadump(const char *input, FILE *out, int num_threads,
 			goto out;
 		}
 	} else {
-		ret = copy_from_extent_tree(&metadump, path);
+		ret = copy_from_extent_tree(&metadump, &path);
 		if (ret) {
 			err = ret;
 			goto out;
 		}
 	}
 
-	ret = copy_log_trees(root, &metadump, path);
+	ret = copy_log_trees(root, &metadump, &path);
 	if (ret) {
 		err = ret;
 		goto out;
 	}
 
-	ret = copy_space_cache(root, &metadump, path);
+	ret = copy_space_cache(root, &metadump, &path);
 out:
 	ret = flush_pending(&metadump, 1);
 	if (ret) {
@@ -1401,7 +1391,7 @@ out:
 
 	metadump_destroy(&metadump, num_threads);
 
-	btrfs_free_path(path);
+	btrfs_release_path(&path);
 	ret = close_ctree(root);
 	return err ? err : ret;
 }
@@ -1844,7 +1834,6 @@ static void mdrestore_destroy(struct mdrestore_struct *mdres, int num_threads)
 
 	pthread_cond_destroy(&mdres->cond);
 	pthread_mutex_destroy(&mdres->mutex);
-	free(mdres->threads);
 }
 
 static int mdrestore_init(struct mdrestore_struct *mdres,
@@ -1874,11 +1863,8 @@ static int mdrestore_init(struct mdrestore_struct *mdres,
 		return 0;
 
 	mdres->num_threads = num_threads;
-	mdres->threads = calloc(num_threads, sizeof(pthread_t));
-	if (!mdres->threads)
-		return -ENOMEM;
 	for (i = 0; i < num_threads; i++) {
-		ret = pthread_create(mdres->threads + i, NULL, restore_worker,
+		ret = pthread_create(&mdres->threads[i], NULL, restore_worker,
 				     mdres);
 		if (ret) {
 			/* pthread_create returns errno directly */
@@ -2416,23 +2402,16 @@ static int fixup_devices(struct btrfs_fs_info *fs_info,
 {
 	struct btrfs_trans_handle *trans;
 	struct btrfs_dev_item *dev_item;
-	struct btrfs_path *path;
+	struct btrfs_path path;
 	struct extent_buffer *leaf;
 	struct btrfs_root *root = fs_info->chunk_root;
 	struct btrfs_key key;
 	u64 devid, cur_devid;
 	int ret;
 
-	path = btrfs_alloc_path();
-	if (!path) {
-		error("not enough memory to allocate path");
-		return -ENOMEM;
-	}
-
 	trans = btrfs_start_transaction(fs_info->tree_root, 1);
 	if (IS_ERR(trans)) {
 		error("cannot starting transaction %ld", PTR_ERR(trans));
-		btrfs_free_path(path);
 		return PTR_ERR(trans);
 	}
 
@@ -2447,17 +2426,19 @@ static int fixup_devices(struct btrfs_fs_info *fs_info,
 	key.type = BTRFS_DEV_ITEM_KEY;
 	key.offset = 0;
 
+	btrfs_init_path(&path);
+
 again:
-	ret = btrfs_search_slot(trans, root, &key, path, -1, 1);
+	ret = btrfs_search_slot(trans, root, &key, &path, -1, 1);
 	if (ret < 0) {
 		error("search failed: %d", ret);
 		exit(1);
 	}
 
 	while (1) {
-		leaf = path->nodes[0];
-		if (path->slots[0] >= btrfs_header_nritems(leaf)) {
-			ret = btrfs_next_leaf(root, path);
+		leaf = path.nodes[0];
+		if (path.slots[0] >= btrfs_header_nritems(leaf)) {
+			ret = btrfs_next_leaf(root, &path);
 			if (ret < 0) {
 				error("cannot go to next leaf %d", ret);
 				exit(1);
@@ -2466,27 +2447,27 @@ again:
 				ret = 0;
 				break;
 			}
-			leaf = path->nodes[0];
+			leaf = path.nodes[0];
 		}
 
-		btrfs_item_key_to_cpu(leaf, &key, path->slots[0]);
+		btrfs_item_key_to_cpu(leaf, &key, path.slots[0]);
 		if (key.type > BTRFS_DEV_ITEM_KEY)
 			break;
 		if (key.type != BTRFS_DEV_ITEM_KEY) {
-			path->slots[0]++;
+			path.slots[0]++;
 			continue;
 		}
 
-		dev_item = btrfs_item_ptr(leaf, path->slots[0],
+		dev_item = btrfs_item_ptr(leaf, path.slots[0],
 					  struct btrfs_dev_item);
 		cur_devid = btrfs_device_id(leaf, dev_item);
 		if (devid != cur_devid) {
-			ret = btrfs_del_item(trans, root, path);
+			ret = btrfs_del_item(trans, root, &path);
 			if (ret) {
 				error("cannot delete item: %d", ret);
 				exit(1);
 			}
-			btrfs_release_path(path);
+			btrfs_release_path(&path);
 			goto again;
 		}
 
@@ -2494,10 +2475,10 @@ again:
 		btrfs_set_device_bytes_used(leaf, dev_item,
 					    mdres->alloced_chunks);
 		btrfs_mark_buffer_dirty(leaf);
-		path->slots[0]++;
+		path.slots[0]++;
 	}
 
-	btrfs_free_path(path);
+	btrfs_release_path(&path);
 	ret = btrfs_commit_transaction(trans, fs_info->tree_root);
 	if (ret) {
 		error("unable to commit transaction: %d", ret);
@@ -2771,9 +2752,10 @@ int main(int argc, char *argv[])
 			break;
 		case 't':
 			num_threads = arg_strtou64(optarg);
-			if (num_threads > 32) {
-				error("number of threads out of range: %llu",
-					(unsigned long long)num_threads);
+			if (num_threads > MAX_WORKER_THREADS) {
+				error("number of threads out of range: %llu > %d",
+					(unsigned long long)num_threads,
+					MAX_WORKER_THREADS);
 				return 1;
 			}
 			break;

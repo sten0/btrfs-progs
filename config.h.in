@@ -27,6 +27,9 @@
 /* Define to 1 if you have the `openat' function. */
 #undef HAVE_OPENAT
 
+/* We did not define FIEMAP_EXTENT_SHARED */
+#undef HAVE_OWN_FIEMAP_EXTENT_SHARED_DEFINE
+
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 

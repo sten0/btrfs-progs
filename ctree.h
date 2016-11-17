@@ -85,6 +85,9 @@ struct btrfs_free_space_ctl;
 /* tracks free space in block groups. */
 #define BTRFS_FREE_SPACE_TREE_OBJECTID 10ULL
 
+/* device stats in the device tree */
+#define BTRFS_DEV_STATS_OBJECTID 0ULL
+
 /* for storing balance parameters in the root tree */
 #define BTRFS_BALANCE_OBJECTID -4ULL
 
@@ -552,18 +555,20 @@ struct btrfs_node {
 struct btrfs_path {
 	struct extent_buffer *nodes[BTRFS_MAX_LEVEL];
 	int slots[BTRFS_MAX_LEVEL];
-	/* if there is real range locking, this locks field will change */
+#if 0
+	/* The kernel locking sheme is not done in userspace. */
 	int locks[BTRFS_MAX_LEVEL];
-	int reada;
+#endif
+	signed char reada;
 	/* keep some upper locks as we walk down */
-	int lowest_level;
+	u8 lowest_level;
 
 	/*
 	 * set by btrfs_split_item, tells search_slot to keep all locks
 	 * and to force calls to keep space in the nodes
 	 */
-	unsigned int search_for_split:1;
-	unsigned int skip_check_block:1;
+	u8 search_for_split;
+	u8 skip_check_block;
 };
 
 /*
@@ -785,6 +790,84 @@ struct btrfs_root_ref {
 	__le16 name_len;
 } __attribute__ ((__packed__));
 
+struct btrfs_disk_balance_args {
+	/*
+	 * profiles to operate on, single is denoted by
+	 * BTRFS_AVAIL_ALLOC_BIT_SINGLE
+	 */
+	__le64 profiles;
+
+	/*
+	 * usage filter
+	 * BTRFS_BALANCE_ARGS_USAGE with a single value means '0..N'
+	 * BTRFS_BALANCE_ARGS_USAGE_RANGE - range syntax, min..max
+	 */
+	union {
+		__le64 usage;
+		struct {
+			__le32 usage_min;
+			__le32 usage_max;
+		};
+	};
+
+	/* devid filter */
+	__le64 devid;
+
+	/* devid subset filter [pstart..pend) */
+	__le64 pstart;
+	__le64 pend;
+
+	/* btrfs virtual address space subset filter [vstart..vend) */
+	__le64 vstart;
+	__le64 vend;
+
+	/*
+	 * profile to convert to, single is denoted by
+	 * BTRFS_AVAIL_ALLOC_BIT_SINGLE
+	 */
+	__le64 target;
+
+	/* BTRFS_BALANCE_ARGS_* */
+	__le64 flags;
+
+	/*
+	 * BTRFS_BALANCE_ARGS_LIMIT with value 'limit'
+	 * BTRFS_BALANCE_ARGS_LIMIT_RANGE - the extend version can use minimum
+	 * and maximum
+	 */
+	union {
+		__le64 limit;
+		struct {
+			__le32 limit_min;
+			__le32 limit_max;
+		};
+	};
+
+	/*
+	 * Process chunks that cross stripes_min..stripes_max devices,
+	 * BTRFS_BALANCE_ARGS_STRIPES_RANGE
+	 */
+	__le32 stripes_min;
+	__le32 stripes_max;
+
+	__le64 unused[6];
+} __attribute__ ((__packed__));
+
+/*
+ * store balance parameters to disk so that balance can be properly
+ * resumed after crash or unmount
+ */
+struct btrfs_balance_item {
+	/* BTRFS_BALANCE_* */
+	__le64 flags;
+
+	struct btrfs_disk_balance_args data;
+	struct btrfs_disk_balance_args meta;
+	struct btrfs_disk_balance_args sys;
+
+	__le64 unused[4];
+} __attribute__ ((__packed__));
+
 #define BTRFS_FILE_EXTENT_INLINE 0
 #define BTRFS_FILE_EXTENT_REG 1
 #define BTRFS_FILE_EXTENT_PREALLOC 2
@@ -836,6 +919,14 @@ struct btrfs_file_extent_item {
 	 */
 	__le64 num_bytes;
 
+} __attribute__ ((__packed__));
+
+struct btrfs_dev_stats_item {
+        /*
+         * grow this item struct at the end for future enhancements and keep
+         * the existing values unchanged
+         */
+        __le64 values[BTRFS_DEV_STAT_VALUES_MAX];
 } __attribute__ ((__packed__));
 
 struct btrfs_csum_item {
@@ -1211,10 +1302,42 @@ struct btrfs_root {
 #define BTRFS_QGROUP_RELATION_KEY	246
 
 /*
- * Persistently stores the io stats in the device tree.
- * One key for all stats, (0, BTRFS_DEV_STATS_KEY, devid).
+ * Obsolete name, see BTRFS_TEMPORARY_ITEM_KEY.
  */
-#define BTRFS_DEV_STATS_KEY	249
+#define BTRFS_BALANCE_ITEM_KEY	248
+
+/*
+ * The key type for tree items that are stored persistently, but do not need to
+ * exist for extended period of time. The items can exist in any tree.
+ *
+ * [subtype, BTRFS_TEMPORARY_ITEM_KEY, data]
+ *
+ * Existing items:
+ *
+ * - balance status item
+ *   (BTRFS_BALANCE_OBJECTID, BTRFS_TEMPORARY_ITEM_KEY, 0)
+ */
+#define BTRFS_TEMPORARY_ITEM_KEY	248
+
+/*
+ * Obsolete name, see BTRFS_PERSISTENT_ITEM_KEY
+ */
+#define BTRFS_DEV_STATS_KEY		249
+
+/*
+ * The key type for tree items that are stored persistently and usually exist
+ * for a long period, eg. filesystem lifetime. The item kinds can be status
+ * information, stats or preference values. The item can exist in any tree.
+ *
+ * [subtype, BTRFS_PERSISTENT_ITEM_KEY, data]
+ *
+ * Existing items:
+ *
+ * - device statistics, store IO stats in the device tree, one key for all
+ *   stats
+ *   (BTRFS_DEV_STATS_OBJECTID, BTRFS_DEV_STATS_KEY, 0)
+ */
+#define BTRFS_PERSISTENT_ITEM_KEY	249
 
 /*
  * Persistently stores the device replace state in the device tree.
@@ -1246,6 +1369,15 @@ struct btrfs_root {
 #define BTRFS_INODE_NODATASUM		(1 << 0)
 #define BTRFS_INODE_NODATACOW		(1 << 1)
 #define BTRFS_INODE_READONLY		(1 << 2)
+#define BTRFS_INODE_NOCOMPRESS		(1 << 3)
+#define BTRFS_INODE_PREALLOC		(1 << 4)
+#define BTRFS_INODE_SYNC		(1 << 5)
+#define BTRFS_INODE_IMMUTABLE		(1 << 6)
+#define BTRFS_INODE_APPEND		(1 << 7)
+#define BTRFS_INODE_NODUMP		(1 << 8)
+#define BTRFS_INODE_NOATIME		(1 << 9)
+#define BTRFS_INODE_DIRSYNC		(1 << 10)
+#define BTRFS_INODE_COMPRESS		(1 << 11)
 
 #define read_eb_member(eb, ptr, type, member, result) (			\
 	read_extent_buffer(eb, (char *)(result),			\
@@ -2180,6 +2312,49 @@ BTRFS_SETGET_STACK_FUNCS(stack_qgroup_limit_rsv_referenced,
 			 struct btrfs_qgroup_limit_item, rsv_referenced, 64);
 BTRFS_SETGET_STACK_FUNCS(stack_qgroup_limit_rsv_exclusive,
 			 struct btrfs_qgroup_limit_item, rsv_exclusive, 64);
+
+/* btrfs_balance_item */
+BTRFS_SETGET_FUNCS(balance_item_flags, struct btrfs_balance_item, flags, 64);
+
+static inline struct btrfs_disk_balance_args* btrfs_balance_item_data(
+		struct extent_buffer *eb, struct btrfs_balance_item *bi)
+{
+	unsigned long offset = (unsigned long)bi;
+	struct btrfs_balance_item *p;
+	p = (struct btrfs_balance_item *)(eb->data + offset);
+	return &p->data;
+}
+
+static inline struct btrfs_disk_balance_args* btrfs_balance_item_meta(
+		struct extent_buffer *eb, struct btrfs_balance_item *bi)
+{
+	unsigned long offset = (unsigned long)bi;
+	struct btrfs_balance_item *p;
+	p = (struct btrfs_balance_item *)(eb->data + offset);
+	return &p->meta;
+}
+
+static inline struct btrfs_disk_balance_args* btrfs_balance_item_sys(
+		struct extent_buffer *eb, struct btrfs_balance_item *bi)
+{
+	unsigned long offset = (unsigned long)bi;
+	struct btrfs_balance_item *p;
+	p = (struct btrfs_balance_item *)(eb->data + offset);
+	return &p->sys;
+}
+
+/*
+ * btrfs_dev_stats_item helper, returns pointer to the raw array, do the
+ * endiannes conversion, @dsi is offset to eb data
+ */
+static inline __le64* btrfs_dev_stats_values(struct extent_buffer *eb,
+		struct btrfs_dev_stats_item *dsi)
+{
+	unsigned long offset = (unsigned long)dsi;
+	struct btrfs_dev_stats_item *p;
+	p = (struct btrfs_dev_stats_item *)(eb->data + offset);
+	return p->values;
+}
 
 /*
  * this returns the number of bytes used by the item on disk, minus the

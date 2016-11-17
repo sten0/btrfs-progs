@@ -38,6 +38,8 @@
 #include <sys/statfs.h>
 #include <linux/magic.h>
 #include <getopt.h>
+#include <sys/utsname.h>
+#include <linux/version.h>
 
 #include "kerncompat.h"
 #include "radix-tree.h"
@@ -1097,8 +1099,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg,
 		}
 	} else {
 		uuid_generate(super.fsid);
-		if (cfg->fs_uuid)
-			uuid_unparse(super.fsid, cfg->fs_uuid);
+		uuid_unparse(super.fsid, cfg->fs_uuid);
 	}
 	uuid_generate(super.dev_item.uuid);
 	uuid_generate(chunk_tree_uuid);
@@ -1450,20 +1451,65 @@ out:
 	return ret;
 }
 
+#define VERSION_TO_STRING3(a,b,c)	#a "." #b "." #c, KERNEL_VERSION(a,b,c)
+#define VERSION_TO_STRING2(a,b)		#a "." #b, KERNEL_VERSION(a,b,0)
+
+/*
+ * Feature stability status and versions: compat <= safe <= default
+ */
 static const struct btrfs_fs_feature {
 	const char *name;
 	u64 flag;
+	const char *sysfs_name;
+	/*
+	 * Compatibility with kernel of given version. Filesystem can be
+	 * mounted.
+	 */
+	const char *compat_str;
+	u32 compat_ver;
+	/*
+	 * Considered safe for use, but is not on by default, even if the
+	 * kernel supports the feature.
+	 */
+	const char *safe_str;
+	u32 safe_ver;
+	/*
+	 * Considered safe for use and will be turned on by default if
+	 * supported by the running kernel.
+	 */
+	const char *default_str;
+	u32 default_ver;
 	const char *desc;
 } mkfs_features[] = {
 	{ "mixed-bg", BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS,
+		"mixed_groups",
+		VERSION_TO_STRING3(2,6,37),
+		VERSION_TO_STRING3(2,6,37),
+		NULL, 0,
 		"mixed data and metadata block groups" },
 	{ "extref", BTRFS_FEATURE_INCOMPAT_EXTENDED_IREF,
+		"extended_iref",
+		VERSION_TO_STRING2(3,7),
+		VERSION_TO_STRING2(3,12),
+		VERSION_TO_STRING2(3,12),
 		"increased hardlink limit per file to 65536" },
 	{ "raid56", BTRFS_FEATURE_INCOMPAT_RAID56,
+		"raid56",
+		VERSION_TO_STRING2(3,9),
+		NULL, 0,
+		NULL, 0,
 		"raid56 extended format" },
 	{ "skinny-metadata", BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA,
+		"skinny_metadata",
+		VERSION_TO_STRING2(3,10),
+		VERSION_TO_STRING2(3,18),
+		VERSION_TO_STRING2(3,18),
 		"reduced-size metadata extent refs" },
 	{ "no-holes", BTRFS_FEATURE_INCOMPAT_NO_HOLES,
+		"no_holes",
+		VERSION_TO_STRING2(3,14),
+		VERSION_TO_STRING2(4,0),
+		NULL, 0,
 		"no explicit hole extents for files" },
 	/* Keep this one last */
 	{ "list-all", BTRFS_FEATURE_LIST_ALL, NULL }
@@ -1522,17 +1568,19 @@ void btrfs_list_all_fs_features(u64 mask_disallowed)
 
 	fprintf(stderr, "Filesystem features available:\n");
 	for (i = 0; i < ARRAY_SIZE(mkfs_features) - 1; i++) {
-		char *is_default = "";
+		const struct btrfs_fs_feature *feat = &mkfs_features[i];
 
-		if (mkfs_features[i].flag & mask_disallowed)
+		if (feat->flag & mask_disallowed)
 			continue;
-		if (mkfs_features[i].flag & BTRFS_MKFS_DEFAULT_FEATURES)
-			is_default = ", default";
-		fprintf(stderr, "%-20s- %s (0x%llx%s)\n",
-				mkfs_features[i].name,
-				mkfs_features[i].desc,
-				mkfs_features[i].flag,
-				is_default);
+		fprintf(stderr, "%-20s- %s (0x%llx", feat->name, feat->desc,
+				feat->flag);
+		if (feat->compat_ver)
+			fprintf(stderr, ", compat=%s", feat->compat_str);
+		if (feat->safe_ver)
+			fprintf(stderr, ", safe=%s", feat->safe_str);
+		if (feat->default_ver)
+			fprintf(stderr, ", default=%s", feat->default_str);
+		fprintf(stderr, ")\n");
 	}
 }
 
@@ -1553,6 +1601,53 @@ char* btrfs_parse_fs_features(char *namelist, u64 *flags)
 	}
 
 	return NULL;
+}
+
+void print_kernel_version(FILE *stream, u32 version)
+{
+	u32 v[3];
+
+	v[0] = version & 0xFF;
+	v[1] = (version >> 8) & 0xFF;
+	v[2] = version >> 16;
+	fprintf(stream, "%u.%u", v[2], v[1]);
+	if (v[0])
+		fprintf(stream, ".%u", v[0]);
+}
+
+u32 get_running_kernel_version(void)
+{
+	struct utsname utsbuf;
+	char *tmp;
+	char *saveptr = NULL;
+	u32 version;
+
+	uname(&utsbuf);
+	if (strcmp(utsbuf.sysname, "Linux") != 0) {
+		error("unsupported system: %s", utsbuf.sysname);
+		exit(1);
+	}
+	/* 1.2.3-4-name */
+	tmp = strchr(utsbuf.release, '-');
+	if (tmp)
+		*tmp = 0;
+
+	tmp = strtok_r(utsbuf.release, ".", &saveptr);
+	if (!string_is_numerical(tmp))
+		return (u32)-1;
+	version = atoi(tmp) << 16;
+	tmp = strtok_r(NULL, ".", &saveptr);
+	if (!string_is_numerical(tmp))
+		return (u32)-1;
+	version |= atoi(tmp) << 8;
+	tmp = strtok_r(NULL, ".", &saveptr);
+	if (tmp) {
+		if (!string_is_numerical(tmp))
+			return (u32)-1;
+		version |= atoi(tmp);
+	}
+
+	return version;
 }
 
 u64 btrfs_device_size(int fd, struct stat *st)
@@ -1818,7 +1913,7 @@ int btrfs_make_root_dir(struct btrfs_trans_handle *trans,
 	btrfs_set_stack_timespec_nsec(&inode_item.ctime, 0);
 	btrfs_set_stack_timespec_sec(&inode_item.mtime, now);
 	btrfs_set_stack_timespec_nsec(&inode_item.mtime, 0);
-	btrfs_set_stack_timespec_sec(&inode_item.otime, 0);
+	btrfs_set_stack_timespec_sec(&inode_item.otime, now);
 	btrfs_set_stack_timespec_nsec(&inode_item.otime, 0);
 
 	if (root->fs_info->tree_root == root)
@@ -2336,7 +2431,7 @@ int check_mounted_where(int fd, const char *file, char *where, int size,
 
 	/* scan other devices */
 	if (is_btrfs && total_devs > 1) {
-		ret = btrfs_scan_lblkid();
+		ret = btrfs_scan_devices();
 		if (ret)
 			return ret;
 	}
@@ -2416,7 +2511,7 @@ int btrfs_register_one_device(const char *fname)
 
 /*
  * Register all devices in the fs_uuid list created in the user
- * space. Ensure btrfs_scan_lblkid() is called before this func.
+ * space. Ensure btrfs_scan_devices() is called before this func.
  */
 int btrfs_register_all_devices(void)
 {
@@ -2879,7 +2974,7 @@ path:
 	fd = open(p, O_RDONLY);
 	if (fd < 0)
 		goto err;
-	ret = lookup_ino_rootid(fd, &id);
+	ret = lookup_path_rootid(fd, &id);
 	if (ret)
 		error("failed to lookup root id: %s", strerror(-ret));
 	close(fd);
@@ -3037,7 +3132,7 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 	int fd = -1;
 	int ret = 0;
 	int ndevs = 0;
-	int i = 0;
+	u64 last_devid = 0;
 	int replacing = 0;
 	struct btrfs_fs_devices *fs_devices_mnt = NULL;
 	struct btrfs_ioctl_dev_info_args *di_args;
@@ -3050,7 +3145,6 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 	if (is_block_device(path) == 1) {
 		struct btrfs_super_block *disk_super;
 		char buf[BTRFS_SUPER_INFO_SIZE];
-		u64 devid;
 
 		/* Ensure it's mounted, then set path to the mountpoint */
 		fd = open(path, O_RDONLY);
@@ -3078,10 +3172,8 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 			ret = -EIO;
 			goto out;
 		}
-		devid = btrfs_stack_device_id(&disk_super->dev_item);
-
-		fi_args->max_id = devid;
-		i = devid;
+		last_devid = btrfs_stack_device_id(&disk_super->dev_item);
+		fi_args->max_id = last_devid;
 
 		memcpy(fi_args->fsid, fs_devices_mnt->fsid, BTRFS_FSID_SIZE);
 		close(fd);
@@ -3118,8 +3210,8 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 			fi_args->num_devices++;
 			ndevs++;
 			replacing = 1;
-			if (i == 0)
-				i++;
+			if (last_devid == 0)
+				last_devid++;
 		}
 	}
 
@@ -3134,8 +3226,8 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 
 	if (replacing)
 		memcpy(di_args, &tmp, sizeof(tmp));
-	for (; i <= fi_args->max_id; ++i) {
-		ret = get_device_info(fd, i, &di_args[ndevs]);
+	for (; last_devid <= fi_args->max_id; last_devid++) {
+		ret = get_device_info(fd, last_devid, &di_args[ndevs]);
 		if (ret == -ENODEV)
 			continue;
 		if (ret)
@@ -3455,7 +3547,7 @@ int test_dev_for_mkfs(const char *file, int force_overwrite)
 	return 0;
 }
 
-int btrfs_scan_lblkid(void)
+int btrfs_scan_devices(void)
 {
 	int fd = -1;
 	int ret;
@@ -3561,7 +3653,7 @@ int ask_user(const char *question)
  * - BTRFS_EMPTY_SUBVOL_DIR_OBJECTID (directory with ino == 2) the result is
  *   undefined and function returns -1
  */
-int lookup_ino_rootid(int fd, u64 *rootid)
+int lookup_path_rootid(int fd, u64 *rootid)
 {
 	struct btrfs_ioctl_ino_lookup_args args;
 	int ret;
@@ -3778,6 +3870,10 @@ u64 get_partition_size(const char *dev)
 	return result;
 }
 
+/*
+ * Check if the BTRFS_IOC_TREE_SEARCH_V2 ioctl is supported on a given
+ * filesystem, opened at fd
+ */
 int btrfs_tree_search2_ioctl_supported(int fd)
 {
 	struct btrfs_ioctl_search_args_v2 *args2;
@@ -3785,10 +3881,6 @@ int btrfs_tree_search2_ioctl_supported(int fd)
 	int args2_size = 1024;
 	char args2_buf[args2_size];
 	int ret;
-	static int v2_supported = -1;
-
-	if (v2_supported != -1)
-		return v2_supported;
 
 	args2 = (struct btrfs_ioctl_search_args_v2 *)args2_buf;
 	sk = &(args2->key);
@@ -3809,13 +3901,10 @@ int btrfs_tree_search2_ioctl_supported(int fd)
 	args2->buf_size = args2_size - sizeof(struct btrfs_ioctl_search_args_v2);
 	ret = ioctl(fd, BTRFS_IOC_TREE_SEARCH_V2, args2);
 	if (ret == -EOPNOTSUPP)
-		v2_supported = 0;
+		return 0;
 	else if (ret == 0)
-		v2_supported = 1;
-	else
-		return ret;
-
-	return v2_supported;
+		return 1;
+	return ret;
 }
 
 int btrfs_check_nodesize(u32 nodesize, u32 sectorsize, u64 features)
@@ -4113,27 +4202,20 @@ int get_subvol_info(const char *fullpath, struct root_info *get_ri)
 		goto out;
 
 	ret = btrfs_list_get_path_rootid(fd, &sv_id);
-	if (ret) {
-		error("can't get rootid for '%s'", fullpath);
+	if (ret)
 		goto out;
-	}
 
 	mntfd = btrfs_open_dir(mnt, &dirstream2, 1);
 	if (mntfd < 0)
 		goto out;
 
-	if (sv_id == BTRFS_FS_TREE_OBJECTID) {
-		ret = 2;
-		/*
-		 * So that caller may decide if thats an error or just fine.
-		 */
-		goto out;
-	}
-
 	memset(get_ri, 0, sizeof(*get_ri));
 	get_ri->root_id = sv_id;
 
-	ret = btrfs_get_subvol(mntfd, get_ri);
+	if (sv_id == BTRFS_FS_TREE_OBJECTID)
+		ret = btrfs_get_toplevel_subvol(mntfd, get_ri);
+	else
+		ret = btrfs_get_subvol(mntfd, get_ri);
 	if (ret)
 		error("can't find '%s': %d", svpath, ret);
 
