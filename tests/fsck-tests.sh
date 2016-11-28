@@ -36,11 +36,14 @@ run_one_test() {
 		# Type 2
 		./test.sh
 		if [ $? -ne 0 ]; then
+			if [[ $TEST_LOG =~ dump ]]; then
+				cat "$RESULTS"
+			fi
 			_fail "test failed for case $(basename $testname)"
 		fi
 	else
 		# Type 1
-		check_all_images `pwd`
+		check_all_images
 	fi
 	cd "$TOP"
 }
