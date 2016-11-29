@@ -1,8 +1,10 @@
 btrfs-progs (4.8.4-0.1) unstable; urgency=medium
 
   * New upstream release.
+  * Drop btrfs-calc-size or btrfs-show-super.  Upstream CHANGES states
+    "deprecated and not build by default: btrfs-calc-size, btrfs-show-super"
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Mon, 28 Nov 2016 10:26:50 -0500
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 29 Nov 2016 16:52:53 -0500
 
 btrfs-progs (4.8.3-0.1) unstable; urgency=medium
 
