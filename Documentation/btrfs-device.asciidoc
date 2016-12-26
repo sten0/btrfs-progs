@@ -98,15 +98,21 @@ remain as such. Reloading the kernel module will drop this information. There's
 an alternative way of mounting multiple-device filesystem without the need for
 prior scanning. See the mount option 'device'.
 
-*stats* [-z] <path>|<device>::
+*stats* [options] <path>|<device>::
 Read and print the device IO error statistics for all devices of the given
-filesystem identified by <path> or for a single <device>. See section *DEVICE
-STATS* for more information.
+filesystem identified by <path> or for a single <device>. The filesystem must
+be mounted.  See section *DEVICE STATS* for more information about the reported
+statistics and the meaning.
 +
 `Options`
 +
--z::::
+-z|--reset::::
 Print the stats and reset the values to zero afterwards.
+
+-c|--check::::
+Check if the stats are all zeros and return 0 it it is so. Set bit 6 of the
+return code if any of the statistics is no-zero. The error values is 65 if
+reading stats from at least one device failed, otherwise it's 64.
 
 *usage* [options] <path> [<path>...]::
 Show detailed information about internal allocations in devices.
@@ -230,6 +236,9 @@ EXIT STATUS
 -----------
 *btrfs device* returns a zero exit status if it succeeds. Non zero is
 returned in case of failure.
+
+If the '-s' option is used, *btrfs device stats* will add 64 to the
+exit status if any of the error counters is non-zero.
 
 AVAILABILITY
 ------------

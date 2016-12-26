@@ -336,7 +336,7 @@ static int record_file_blocks(struct blk_iterate_data *data,
 		       key.offset > cur_off);
 		fi = btrfs_item_ptr(node, slot, struct btrfs_file_extent_item);
 		extent_disk_bytenr = btrfs_file_extent_disk_bytenr(node, fi);
-		extent_num_bytes = btrfs_file_extent_disk_num_bytes(node, fi);
+		extent_num_bytes = btrfs_file_extent_num_bytes(node, fi);
 		BUG_ON(cur_off - key.offset >= extent_num_bytes);
 		btrfs_release_path(&path);
 
@@ -1360,7 +1360,7 @@ err:
 /*
  * Migrate super block to its default position and zero 0 ~ 16k
  */
-static int migrate_super_block(int fd, u64 old_bytenr, u32 sectorsize)
+static int migrate_super_block(int fd, u64 old_bytenr)
 {
 	int ret;
 	struct extent_buffer *buf;
@@ -1368,13 +1368,13 @@ static int migrate_super_block(int fd, u64 old_bytenr, u32 sectorsize)
 	u32 len;
 	u32 bytenr;
 
-	buf = malloc(sizeof(*buf) + sectorsize);
+	buf = malloc(sizeof(*buf) + BTRFS_SUPER_INFO_SIZE);
 	if (!buf)
 		return -ENOMEM;
 
-	buf->len = sectorsize;
-	ret = pread(fd, buf->data, sectorsize, old_bytenr);
-	if (ret != sectorsize)
+	buf->len = BTRFS_SUPER_INFO_SIZE;
+	ret = pread(fd, buf->data, BTRFS_SUPER_INFO_SIZE, old_bytenr);
+	if (ret != BTRFS_SUPER_INFO_SIZE)
 		goto fail;
 
 	super = (struct btrfs_super_block *)buf->data;
@@ -1382,19 +1382,20 @@ static int migrate_super_block(int fd, u64 old_bytenr, u32 sectorsize)
 	btrfs_set_super_bytenr(super, BTRFS_SUPER_INFO_OFFSET);
 
 	csum_tree_block_size(buf, BTRFS_CRC32_SIZE, 0);
-	ret = pwrite(fd, buf->data, sectorsize, BTRFS_SUPER_INFO_OFFSET);
-	if (ret != sectorsize)
+	ret = pwrite(fd, buf->data, BTRFS_SUPER_INFO_SIZE,
+		BTRFS_SUPER_INFO_OFFSET);
+	if (ret != BTRFS_SUPER_INFO_SIZE)
 		goto fail;
 
 	ret = fsync(fd);
 	if (ret)
 		goto fail;
 
-	memset(buf->data, 0, sectorsize);
+	memset(buf->data, 0, BTRFS_SUPER_INFO_SIZE);
 	for (bytenr = 0; bytenr < BTRFS_SUPER_INFO_OFFSET; ) {
 		len = BTRFS_SUPER_INFO_OFFSET - bytenr;
-		if (len > sectorsize)
-			len = sectorsize;
+		if (len > BTRFS_SUPER_INFO_SIZE)
+			len = BTRFS_SUPER_INFO_SIZE;
 		ret = pwrite(fd, buf->data, len, bytenr);
 		if (ret != len) {
 			fprintf(stderr, "unable to zero fill device\n");
@@ -1525,6 +1526,9 @@ static int __ext2_add_one_block(ext2_filsys fs, char *bitmap,
 	offset /= EXT2FS_CLUSTER_RATIO(fs);
 	offset += group_nr * EXT2_CLUSTERS_PER_GROUP(fs->super);
 	for (i = 0; i < EXT2_CLUSTERS_PER_GROUP(fs->super); i++) {
+		if ((i + offset) >= ext2fs_blocks_count(fs->super))
+			break;
+
 		if (ext2fs_test_bit(i, bitmap)) {
 			u64 start;
 
@@ -2516,7 +2520,7 @@ static int do_convert(const char *devname, int datacsum, int packing,
 	 * If this step succeed, we get a mountable btrfs. Otherwise
 	 * the source fs is left unchanged.
 	 */
-	ret = migrate_super_block(fd, mkfs_cfg.super_bytenr, blocksize);
+	ret = migrate_super_block(fd, mkfs_cfg.super_bytenr);
 	if (ret) {
 		error("unable to migrate super block: %d", ret);
 		goto fail;

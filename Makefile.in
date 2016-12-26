@@ -98,7 +98,7 @@ objects = ctree.o disk-io.o kernel-lib/radix-tree.o extent-tree.o print-tree.o \
 	  extent-cache.o extent_io.o volumes.o utils.o repair.o \
 	  qgroup.o raid56.o free-space-cache.o kernel-lib/list_sort.o props.o \
 	  ulist.o qgroup-verify.o backref.o string-table.o task-utils.o \
-	  inode.o file.o find-root.o free-space-tree.o help.o
+	  inode.o file.o find-root.o free-space-tree.o help.o send-dump.o
 cmds_objects = cmds-subvolume.o cmds-filesystem.o cmds-device.o cmds-scrub.o \
 	       cmds-inspect.o cmds-balance.o cmds-send.o cmds-receive.o \
 	       cmds-quota.o cmds-qgroup.o cmds-replace.o cmds-check.o \
@@ -257,11 +257,13 @@ endif
 	@$(check_echo) "    [SP]     $<"
 	$(Q)$(check) $(CFLAGS) $(CHECKER_FLAGS) $<
 	@echo "    [CC]     $@"
-	$(Q)$(CC) $(CFLAGS) -c $< -o $@ $($(subst -,_,$(@:%.o=%)-cflags))
+	$(Q)$(CC) $(CFLAGS) -c $< -o $@ $($(subst -,_,$(@:%.o=%)-cflags)) \
+		$($(subst -,_,btrfs-$(@:%/$(notdir $@)=%)-cflags))
 
 %.static.o: %.c
 	@echo "    [CC]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -c $< -o $@ $($(subst -,_,$(@:%.static.o=%)-cflags))
+	$(Q)$(CC) $(STATIC_CFLAGS) -c $< -o $@ $($(subst -,_,$(@:%.static.o=%)-cflags)) \
+		$($(subst -,_,btrfs-$(@:%/$(notdir $@)=%)-cflags))
 
 all: $(progs) $(BUILDDIRS)
 $(SUBDIRS): $(BUILDDIRS)
@@ -372,13 +374,13 @@ btrfsck.static: btrfs.static
 	@echo "    [LN]     $@"
 	$(Q)$(LN_S) -f $^ $@
 
-mkfs.btrfs: $(objects) $(libs_static) mkfs.o
+mkfs.btrfs: $(objects) $(libs_static) mkfs/main.o
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -o mkfs.btrfs $(objects) $(libs_static) mkfs.o $(LDFLAGS) $(LIBS)
+	$(Q)$(CC) $(CFLAGS) -o mkfs.btrfs $(objects) $(libs_static) mkfs/main.o $(LDFLAGS) $(LIBS)
 
-mkfs.btrfs.static: $(static_objects) mkfs.static.o $(static_libbtrfs_objects)
+mkfs.btrfs.static: $(static_objects) mkfs/main.static.o $(static_libbtrfs_objects)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -o mkfs.btrfs.static mkfs.static.o $(static_objects) \
+	$(Q)$(CC) $(STATIC_CFLAGS) -o mkfs.btrfs.static mkfs/main.static.o $(static_objects) \
 		$(static_libbtrfs_objects) $(STATIC_LDFLAGS) $(STATIC_LIBS)
 
 btrfstune: $(objects) $(libs_static) btrfstune.o
@@ -398,6 +400,16 @@ btrfs-image.static: $(static_objects) image/main.static.o $(static_libbtrfs_obje
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ image/main.static.o $(static_objects) \
 		$(static_libbtrfs_objects) $(STATIC_LDFLAGS) $(STATIC_LIBS)
+
+btrfs-convert: $(objects) $(libs_static) convert/main.o
+	@echo "    [LD]     $@"
+	$(Q)$(CC) $(CFLAGS) -I$(TOPDIR)/convert -o btrfs-convert $(objects) convert/main.o $(libs_static) \
+		$(LDFLAGS) $(btrfs_convert_libs) $(LIBS)
+
+btrfs-convert.static: $(static_objects) convert/main.static.o $(static_libbtrfs_objects)
+	@echo "    [LD]     $@"
+	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ convert/main.static.o $(static_objects) \
+		$(static_libbtrfs_objects) $(STATIC_LDFLAGS) $(btrfs_convert_libs) $(STATIC_LIBS)
 
 dir-test: $(objects) $(libs) dir-test.o
 	@echo "    [LD]     $@"
@@ -480,6 +492,8 @@ clean: $(CLEANDIRS)
 	$(Q)$(RM) -f -- $(progs) cscope.out *.o *.o.d \
 		kernel-lib/*.o kernel-lib/*.o.d \
 		image/*.o image/*.o.d \
+		convert/*.o convert/*.o.d \
+		mkfs/*.o mkfs/*.o.d \
 	      dir-test ioctl-test quick-test library-test library-test-static \
 	      btrfs.static mkfs.btrfs.static \
 	      $(check_defs) \
