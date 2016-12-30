@@ -70,8 +70,12 @@ static int get_root_id(struct btrfs_send *sctx, const char *path, u64 *root_id)
 
 	si = subvol_uuid_search(&sctx->sus, 0, NULL, 0, path,
 			subvol_search_by_path);
-	if (!si)
-		return -ENOENT;
+	if (IS_ERR_OR_NULL(si)) {
+		if (!si)
+			return -ENOENT;
+		else
+			return PTR_ERR(si);
+	}
 	*root_id = si->root_id;
 	free(si->path);
 	free(si);
@@ -85,8 +89,8 @@ static struct subvol_info *get_parent(struct btrfs_send *sctx, u64 root_id)
 
 	si_tmp = subvol_uuid_search(&sctx->sus, root_id, NULL, 0, NULL,
 			subvol_search_by_root_id);
-	if (!si_tmp)
-		return NULL;
+	if (IS_ERR_OR_NULL(si_tmp))
+		return si_tmp;
 
 	si = subvol_uuid_search(&sctx->sus, 0, si_tmp->parent_uuid, 0, NULL,
 			subvol_search_by_uuid);
@@ -105,8 +109,11 @@ static int find_good_parent(struct btrfs_send *sctx, u64 root_id, u64 *found)
 	int i;
 
 	parent = get_parent(sctx, root_id);
-	if (!parent) {
-		ret = -ENOENT;
+	if (IS_ERR_OR_NULL(parent)) {
+		if (!parent)
+			ret = -ENOENT;
+		else
+			ret = PTR_ERR(parent);
 		goto out;
 	}
 
@@ -122,7 +129,7 @@ static int find_good_parent(struct btrfs_send *sctx, u64 root_id, u64 *found)
 		s64 tmp;
 
 		parent2 = get_parent(sctx, sctx->clone_sources[i]);
-		if (!parent2)
+		if (IS_ERR_OR_NULL(parent2))
 			continue;
 		if (parent2->root_id != parent->root_id) {
 			free(parent2->path);
@@ -136,9 +143,11 @@ static int find_good_parent(struct btrfs_send *sctx, u64 root_id, u64 *found)
 		parent2 = subvol_uuid_search(&sctx->sus,
 				sctx->clone_sources[i], NULL, 0, NULL,
 				subvol_search_by_root_id);
-
-		if (!parent2) {
-			ret = -ENOENT;
+		if (IS_ERR_OR_NULL(parent2)) {
+			if (!parent2)
+				ret = -ENOENT;
+			else
+				ret = PTR_ERR(parent2);
 			goto out;
 		}
 		tmp = parent2->ctransid - parent->ctransid;
@@ -197,6 +206,7 @@ static int add_clone_source(struct btrfs_send *sctx, u64 root_id)
 	return 0;
 }
 
+#if 0
 static int write_buf(int fd, const char *buf, size_t size)
 {
 	int ret;
@@ -224,7 +234,7 @@ out:
 	return ret;
 }
 
-static void *dump_thread(void *arg)
+static void* read_sent_data_copy(void *arg)
 {
 	int ret;
 	struct btrfs_send *sctx = (struct btrfs_send*)arg;
@@ -236,7 +246,7 @@ static void *dump_thread(void *arg)
 		rbytes = read(sctx->send_fd, buf, sizeof(buf));
 		if (rbytes < 0) {
 			ret = -errno;
-			error("failed to read stream from kernel: %s\n",
+			error("failed to read stream from kernel: %s",
 				strerror(-ret));
 			goto out;
 		}
@@ -247,6 +257,37 @@ static void *dump_thread(void *arg)
 		ret = write_buf(sctx->dump_fd, buf, rbytes);
 		if (ret < 0)
 			goto out;
+	}
+
+out:
+	if (ret < 0)
+		exit(-ret);
+
+	return ERR_PTR(ret);
+}
+#endif
+
+static void *read_sent_data(void *arg)
+{
+	int ret;
+	struct btrfs_send *sctx = (struct btrfs_send*)arg;
+
+	while (1) {
+		ssize_t sbytes;
+
+		/* Source is a pipe, output is either file or stdout */
+		sbytes = splice(sctx->send_fd, NULL, sctx->dump_fd,
+				NULL, SEND_BUFFER_SIZE, SPLICE_F_MORE);
+		if (sbytes < 0) {
+			ret = -errno;
+			error("failed to read stream from kernel: %s",
+				strerror(-ret));
+			goto out;
+		}
+		if (!sbytes) {
+			ret = 0;
+			goto out;
+		}
 	}
 
 out:
@@ -286,8 +327,7 @@ static int do_send(struct btrfs_send *send, u64 parent_root_id,
 	send->send_fd = pipefd[0];
 
 	if (!ret)
-		ret = pthread_create(&t_read, NULL, dump_thread,
-					send);
+		ret = pthread_create(&t_read, NULL, read_sent_data, send);
 	if (ret) {
 		ret = -ret;
 		error("thread setup failed: %s", strerror(-ret));
