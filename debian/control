@@ -13,6 +13,7 @@ Build-Depends: debhelper (>= 9),
                zlib1g-dev,
                asciidoc,
                xmlto,
+               bash-completion,
 Standards-Version: 3.9.8
 Homepage: http://btrfs.wiki.kernel.org/
 Vcs-Browser: https://browse.dgit.debian.org/btrfs-progs.git
