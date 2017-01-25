@@ -6,7 +6,24 @@ btrfs-progs (4.9-0.1~bpo8+1) jessie-backports; urgency=medium
 
 btrfs-progs (4.9-0.1) unstable; urgency=medium
 
+  [ Nicholas D Steeves ]
+  * Non-maintainer upload.
   * New upstream release.
+  * Merge Hideki's Yamane's patch to use upstream-provided bash-completion.
+    (Closes: #840302)
+
+  [ Hideki Yamane ]
+  * debian/control
+    - add Build-Depends: bash-completion to use dh_bash-completion
+  * debian/rules
+    - call dh_bash-completion
+  * add debian/btrfs-progs.bash-completion
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 24 Jan 2017 14:11:58 -0700
+
+btrfs-progs (4.9-0.1) unstable; urgency=medium
+
+
 
  -- Nicholas D Steeves <nsteeves@gmail.com>  Sun, 25 Dec 2016 23:21:44 -0700
 

@@ -23,7 +23,7 @@ override_dh_auto_build:
 
 override_dh_auto_install:
 	dh_auto_install --destdir=debian/btrfs-progs
-
+	dh_bash-completion
 	# Adding initramfs-tools integration
 	install -D -m 0755 debian/local/btrfs.hook debian/btrfs-progs/usr/share/initramfs-tools/hooks/btrfs
 	install -D -m 0755 debian/local/btrfs.local-premount debian/btrfs-progs/usr/share/initramfs-tools/scripts/local-premount/btrfs
