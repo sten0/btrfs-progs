@@ -1,3 +1,9 @@
+btrfs-progs (4.9.1-0.2~bpo8+1) jessie-backports; urgency=medium
+
+  * Rebuild for jessie-backports.
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 02 Feb 2017 16:11:18 -0500
+
 btrfs-progs (4.9.1-0.2) unstable; urgency=medium
 
   * Update debian/copyright for new locations of radix-tree.c
