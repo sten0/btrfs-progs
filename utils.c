@@ -943,7 +943,7 @@ out:
  *    Split into small blocks and reuse codes.
  *    TODO: Reuse tree operation facilities by introducing new flags
  */
-static int make_convert_btrfs(int fd, struct btrfs_mkfs_config *cfg,
+int make_convert_btrfs(int fd, struct btrfs_mkfs_config *cfg,
 			      struct btrfs_convert_context *cctx)
 {
 	struct cache_tree *free = &cctx->free;
@@ -1052,8 +1052,7 @@ out:
  * The superblock signature is not valid, denotes a partially created
  * filesystem, needs to be finalized.
  */
-int make_btrfs(int fd, struct btrfs_mkfs_config *cfg,
-		struct btrfs_convert_context *cctx)
+int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 {
 	struct btrfs_super_block super;
 	struct extent_buffer *buf;
@@ -1078,8 +1077,6 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg,
 				 BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA);
 	u64 num_bytes;
 
-	if (cctx)
-		return make_convert_btrfs(fd, cfg, cctx);
 	buf = malloc(sizeof(*buf) + max(cfg->sectorsize, cfg->nodesize));
 	if (!buf)
 		return -ENOMEM;
@@ -1869,8 +1866,8 @@ int btrfs_prepare_device(int fd, const char *file, u64 *block_count_ret,
 		 */
 		if (discard_range(fd, 0, 0) == 0) {
 			if (opflags & PREP_DEVICE_VERBOSE)
-				printf("Performing full device TRIM (%s) ...\n",
-						pretty_size(block_count));
+				printf("Performing full device TRIM %s (%s) ...\n",
+						file, pretty_size(block_count));
 			discard_blocks(fd, 0, block_count);
 		}
 	}
@@ -2606,12 +2603,19 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_size, unsigned unit_mod
 	int mult = 0;
 	const char** suffix = NULL;
 	u64 last_size;
+	int negative;
 
 	if (str_size == 0)
 		return 0;
 
+	negative = !!(unit_mode & UNITS_NEGATIVE);
+	unit_mode &= ~UNITS_NEGATIVE;
+
 	if ((unit_mode & ~UNITS_MODE_MASK) == UNITS_RAW) {
-		snprintf(str, str_size, "%llu", size);
+		if (negative)
+			snprintf(str, str_size, "%lld", size);
+		else
+			snprintf(str, str_size, "%llu", size);
 		return 0;
 	}
 
@@ -2646,10 +2650,22 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_size, unsigned unit_mod
 			   num_divs = 0;
 			   break;
 	default:
-		while (size >= mult) {
-			last_size = size;
-			size /= mult;
-			num_divs++;
+		if (negative) {
+			s64 ssize = (s64)size;
+			s64 last_ssize = ssize;
+
+			while ((ssize < 0 ? -ssize : ssize) >= mult) {
+				last_ssize = ssize;
+				ssize /= mult;
+				num_divs++;
+			}
+			last_size = (u64)last_ssize;
+		} else {
+			while (size >= mult) {
+				last_size = size;
+				size /= mult;
+				num_divs++;
+			}
 		}
 		/*
 		 * If the value is smaller than base, we didn't do any
@@ -2667,7 +2683,12 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_size, unsigned unit_mod
 		assert(0);
 		return -1;
 	}
-	fraction = (float)last_size / base;
+
+	if (negative) {
+		fraction = (float)(s64)last_size / base;
+	} else {
+		fraction = (float)last_size / base;
+	}
 
 	return snprintf(str, str_size, "%.2f%s", fraction, suffix[num_divs]);
 }
