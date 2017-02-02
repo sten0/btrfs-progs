@@ -1,3 +1,10 @@
+btrfs-progs (4.9.1-0.2) unstable; urgency=medium
+
+  * Update debian/copyright for new locations of radix-tree.c
+    and radix-tree.h.
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 02 Feb 2017 16:02:43 -0500
+
 btrfs-progs (4.9.1-0.1) unstable; urgency=medium
 
   * Non-maintainer upload.
