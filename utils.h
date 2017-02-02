@@ -95,6 +95,8 @@ void set_argv0(char **argv);
 #define UNITS_RAW			(1U << UNITS_MODE_SHIFT)
 #define UNITS_BINARY			(2U << UNITS_MODE_SHIFT)
 #define UNITS_DECIMAL			(3U << UNITS_MODE_SHIFT)
+/* Interpret the u64 value as s64 */
+#define UNITS_NEGATIVE			(4U << UNITS_MODE_SHIFT)
 #define UNITS_MODE_MASK			((1U << UNITS_MODE_SHIFT) - 1)
 #define UNITS_MODE_SHIFT		(8)
 #define UNITS_HUMAN_BINARY		(UNITS_BINARY)
@@ -153,8 +155,9 @@ struct btrfs_convert_context {
 #define	PREP_DEVICE_DISCARD	(1U << 1)
 #define	PREP_DEVICE_VERBOSE	(1U << 2)
 
-int make_btrfs(int fd, struct btrfs_mkfs_config *cfg,
-		struct btrfs_convert_context *cctx);
+int make_btrfs(int fd, struct btrfs_mkfs_config *cfg);
+int make_convert_btrfs(int fd, struct btrfs_mkfs_config *cfg,
+			      struct btrfs_convert_context *cctx);
 int btrfs_make_root_dir(struct btrfs_trans_handle *trans,
 			struct btrfs_root *root, u64 objectid);
 int btrfs_prepare_device(int fd, const char *file, u64 *block_count_ret,

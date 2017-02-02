@@ -1,8 +1,16 @@
-btrfs-progs (4.9-0.1~bpo8+1) jessie-backports; urgency=medium
+btrfs-progs (4.9.1-0.2) unstable; urgency=medium
 
-  * Rebuild for jessie-backports.
+  * Update debian/copyright for new locations of radix-tree.c
+    and radix-tree.h.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 24 Jan 2017 20:55:44 -0700
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 02 Feb 2017 16:02:43 -0500
+
+btrfs-progs (4.9.1-0.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * New upstream release.
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 02 Feb 2017 15:29:47 -0500
 
 btrfs-progs (4.9-0.1) unstable; urgency=medium
 
@@ -20,12 +28,6 @@ btrfs-progs (4.9-0.1) unstable; urgency=medium
   * add debian/btrfs-progs.bash-completion
 
  -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 24 Jan 2017 14:11:58 -0700
-
-btrfs-progs (4.9-0.1) unstable; urgency=medium
-
-
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Sun, 25 Dec 2016 23:21:44 -0700
 
 btrfs-progs (4.8.5-0.1) unstable; urgency=medium
 
