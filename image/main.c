@@ -550,7 +550,7 @@ static void sanitize_name(struct metadump_struct *md, u8 *dst,
 		return;
 	}
 
-	memcpy(eb->data, dst, eb->len);
+	memcpy(eb->data, src->data, src->len);
 
 	switch (key->type) {
 	case BTRFS_DIR_ITEM_KEY:
@@ -2533,7 +2533,7 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 	ret = mdrestore_init(&mdrestore, in, out, old_restore, num_threads,
 			     fixup_offset, info, multi_devices);
 	if (ret) {
-		error("failed to intialize metadata restore state: %d", ret);
+		error("failed to initialize metadata restore state: %d", ret);
 		goto failed_cluster;
 	}
 
