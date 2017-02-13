@@ -13,7 +13,7 @@ CFLAGS := $(shell dpkg-buildflags --get CFLAGS)
 CFLAGS := $(patsubst -O2,-Os,$(CFLAGS))
 
 %:
-	dh ${@} --parallel
+	dh ${@} --parallel --with bash-completion
 
 override_dh_auto_configure:
 	dh_auto_configure -- --bindir=/bin
