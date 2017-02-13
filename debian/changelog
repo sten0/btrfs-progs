@@ -3,6 +3,7 @@ btrfs-progs (4.9.1-1) UNRELEASED; urgency=medium
   [ Dimitri John Ledkov ]
   * New upstream release Closes: #849353, #817806, #854915, #845473
   * Use dh addon for bash completion (--with bash-completion)
+  * Suggest duperemove Closes: #703169
 
   [ Hideki Yamane ]
   * debian/control
