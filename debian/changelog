@@ -1,4 +1,4 @@
-btrfs-progs (4.9.1-1) UNRELEASED; urgency=medium
+btrfs-progs (4.9.1-1) unstable; urgency=medium
 
   [ Dimitri John Ledkov ]
   * New upstream release Closes: #849353, #817806, #854915, #845473
@@ -16,7 +16,7 @@ btrfs-progs (4.9.1-1) UNRELEASED; urgency=medium
   * Fix FTCBFS: cross.patch: Indirect pkg-config invocations through
     $PKG_CONFIG and autoreconf (Closes: #845816)
 
- -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 13 Feb 2017 11:25:12 +0000
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 13 Feb 2017 11:45:42 +0000
 
 btrfs-progs (4.7.3-1) unstable; urgency=medium
 
