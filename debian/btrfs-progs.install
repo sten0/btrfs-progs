@@ -1,3 +1,1 @@
-btrfs-calc-size        /bin
-btrfs-select-super     /bin
 ioctl.h                /usr/include/btrfs
