@@ -11,6 +11,10 @@ btrfs-progs (4.9.1-1) UNRELEASED; urgency=medium
     - call dh_bash-completion
   * add debian/btrfs-progs.bash-completion Closes: #840302, #800790.
 
+  [ Helmut Grohne ]
+  * Fix FTCBFS: cross.patch: Indirect pkg-config invocations through
+    $PKG_CONFIG and autoreconf (Closes: #845816)
+
  -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 13 Feb 2017 11:25:12 +0000
 
 btrfs-progs (4.7.3-1) unstable; urgency=medium
