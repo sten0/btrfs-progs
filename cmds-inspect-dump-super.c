@@ -37,7 +37,7 @@
 
 static int check_csum_sblock(void *sb, int csum_size)
 {
-	char result[BTRFS_CSUM_SIZE];
+	u8 result[BTRFS_CSUM_SIZE];
 	u32 crc = ~(u32)0;
 
 	crc = btrfs_csum_data(NULL, (char *)sb + BTRFS_CSUM_SIZE,
@@ -100,20 +100,19 @@ static void print_sys_chunk_array(struct btrfs_super_block *sb)
 			if (cur_offset + len > array_size)
 				goto out_short_read;
 
-			print_chunk(buf, chunk);
 			num_stripes = btrfs_chunk_num_stripes(buf, chunk);
 			if (!num_stripes) {
-				printk(
-	    "ERROR: invalid number of stripes %u in sys_array at offset %u\n",
+				error(
+			"invalid number of stripes %u in sys_array at offset %u",
 					num_stripes, cur_offset);
 				break;
 			}
 			len = btrfs_chunk_item_size(num_stripes);
 			if (cur_offset + len > array_size)
 				goto out_short_read;
+			print_chunk(buf, chunk);
 		} else {
-			printk(
-		"ERROR: unexpected item type %u in sys_array at offset %u\n",
+			error("unexpected item type %u in sys_array at offset %u",
 				(u32)key.type, cur_offset);
 			break;
 		}
@@ -129,7 +128,7 @@ out:
 	return;
 
 out_short_read:
-	printk("ERROR: sys_array too short to read %u bytes at offset %u\n",
+	error("sys_array too short to read %u bytes at offset %u",
 			len, cur_offset);
 	free(buf);
 }
@@ -197,6 +196,16 @@ struct readable_flag_entry {
 	u64 bit;
 	char *output;
 };
+
+#define DEF_COMPAT_RO_FLAG_ENTRY(bit_name)		\
+	{BTRFS_FEATURE_COMPAT_RO_##bit_name, #bit_name}
+
+static struct readable_flag_entry compat_ro_flags_array[] = {
+	DEF_COMPAT_RO_FLAG_ENTRY(FREE_SPACE_TREE),
+	DEF_COMPAT_RO_FLAG_ENTRY(FREE_SPACE_TREE_VALID),
+};
+static const int compat_ro_flags_num = sizeof(compat_ro_flags_array) /
+				       sizeof(struct readable_flag_entry);
 
 #define DEF_INCOMPAT_FLAG_ENTRY(bit_name)		\
 	{BTRFS_FEATURE_INCOMPAT_##bit_name, #bit_name}
@@ -267,6 +276,19 @@ static void __print_readable_flag(u64 flag, struct readable_flag_entry *array,
 			printf("|\n\t\t\t  unknown flag: 0x%llx ", flag);
 	}
 	printf(")\n");
+}
+
+static void print_readable_compat_ro_flag(u64 flag)
+{
+	/*
+	 * We know about the FREE_SPACE_TREE{,_VALID} bits, but we don't
+	 * actually support them yet.
+	 */
+	return __print_readable_flag(flag, compat_ro_flags_array,
+				     compat_ro_flags_num,
+				     BTRFS_FEATURE_COMPAT_RO_SUPP |
+				     BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE |
+				     BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE_VALID);
 }
 
 static void print_readable_incompat_flag(u64 flag)
@@ -378,6 +400,7 @@ static void dump_superblock(struct btrfs_super_block *sb, int full)
 	       (unsigned long long)btrfs_super_compat_flags(sb));
 	printf("compat_ro_flags\t\t0x%llx\n",
 	       (unsigned long long)btrfs_super_compat_ro_flags(sb));
+	print_readable_compat_ro_flag(btrfs_super_compat_ro_flags(sb));
 	printf("incompat_flags\t\t0x%llx\n",
 	       (unsigned long long)btrfs_super_incompat_flags(sb));
 	print_readable_incompat_flag(btrfs_super_incompat_flags(sb));

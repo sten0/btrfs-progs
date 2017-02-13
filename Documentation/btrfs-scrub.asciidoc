@@ -20,7 +20,7 @@ structural damage in the filesystem.
 
 The user is supposed to run it manually or via a periodic system service. The
 recommended period is a month but could be less. The estimated device bandwidth
-utilization is about 80% on an idle filesytem. The IO priority class is by
+utilization is about 80% on an idle filesystem. The IO priority class is by
 default 'idle' so background scrub should not interfere with normal filesystem
 operation significantly.
 
@@ -34,7 +34,7 @@ saved position.
 SUBCOMMAND
 ----------
 *cancel* <path>|<device>::
-If a scrub is running on the filesystem identified by 'path>' cancel it.
+If a scrub is running on the filesystem identified by 'path' cancel it.
 +
 If a 'device' is specified, the corresponding filesystem is found and
 *btrfs scrub cancel* behaves as if it was called on that filesystem.
@@ -95,7 +95,14 @@ print separate statistics for each device of the filesystem
 EXIT STATUS
 -----------
 *btrfs scrub* returns a zero exit status if it succeeds. Non zero is
-returned in case of failure.
+returned in case of failure:
+
+1::::
+scrub couldn't be performed
+2::::
+there is nothing to resume
+3::::
+scrub found uncorrectable errors
 
 AVAILABILITY
 ------------

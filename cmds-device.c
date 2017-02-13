@@ -283,7 +283,7 @@ static int cmd_device_scan(int argc, char **argv)
 
 	if (all || argc - optind == 0) {
 		printf("Scanning for Btrfs filesystems\n");
-		ret = btrfs_scan_lblkid();
+		ret = btrfs_scan_devices();
 		error_on(ret, "error %d while scanning", ret);
 		ret = btrfs_register_all_devices();
 		error_on(ret, "there are %d errors while registering devices", ret);
@@ -372,10 +372,13 @@ out:
 }
 
 static const char * const cmd_device_stats_usage[] = {
-	"btrfs device stats [-z] <path>|<device>",
-	"Show current device IO stats.",
+	"btrfs device stats [options] <path>|<device>",
+	"Show device IO error statistics",
+	"Show device IO error statistics for all devices of the given filesystem",
+	"identified by PATH or DEVICE. The filesystem must be mounted.",
 	"",
-	"-z                     show current stats and reset values to zero",
+	"-c|--check             return non-zero if any stat counter is not zero",
+	"-z|--reset             show current stats and reset values to zero",
 	NULL
 };
 
@@ -387,13 +390,26 @@ static int cmd_device_stats(int argc, char **argv)
 	int ret;
 	int fdmnt;
 	int i;
-	int c;
 	int err = 0;
+	int check = 0;
 	__u64 flags = 0;
 	DIR *dirstream = NULL;
 
-	while ((c = getopt(argc, argv, "z")) != -1) {
+	while (1) {
+		int c;
+		static const struct option long_options[] = {
+			{"reset", no_argument, NULL, 'z'},
+			{NULL, 0, NULL, 0}
+		};
+
+		c = getopt_long(argc, argv, "cz", long_options, NULL);
+		if (c < 0)
+			break;
+
 		switch (c) {
+		case 'c':
+			check = 1;
+			break;
 		case 'z':
 			flags = BTRFS_DEV_STATS_RESET;
 			break;
@@ -414,7 +430,7 @@ static int cmd_device_stats(int argc, char **argv)
 
 	ret = get_fs_info(dev_path, &fi_args, &di_args);
 	if (ret) {
-		error("getting dev info for devstats failed: %s",
+		error("getting device info for %s failed: %s", dev_path,
 			strerror(-ret));
 		err = 1;
 		goto out;
@@ -427,24 +443,37 @@ static int cmd_device_stats(int argc, char **argv)
 
 	for (i = 0; i < fi_args.num_devices; i++) {
 		struct btrfs_ioctl_get_dev_stats args = {0};
-		__u8 path[BTRFS_DEVICE_PATH_NAME_MAX + 1];
+		char path[BTRFS_DEVICE_PATH_NAME_MAX + 1];
 
-		strncpy((char *)path, (char *)di_args[i].path,
+		strncpy(path, (char *)di_args[i].path,
 			BTRFS_DEVICE_PATH_NAME_MAX);
-		path[BTRFS_DEVICE_PATH_NAME_MAX] = '\0';
+		path[BTRFS_DEVICE_PATH_NAME_MAX] = 0;
 
 		args.devid = di_args[i].devid;
 		args.nr_items = BTRFS_DEV_STAT_VALUES_MAX;
 		args.flags = flags;
 
 		if (ioctl(fdmnt, BTRFS_IOC_GET_DEV_STATS, &args) < 0) {
-			error("DEV_STATS ioctl failed on %s: %s",
+			error("device stats ioctl failed on %s: %s",
 			      path, strerror(errno));
-			err = 1;
+			err |= 1;
 		} else {
 			char *canonical_path;
+			int j;
+			static const struct {
+				const char name[32];
+				u64 num;
+			} dev_stats[] = {
+				{ "write_io_errs", BTRFS_DEV_STAT_WRITE_ERRS },
+				{ "read_io_errs", BTRFS_DEV_STAT_READ_ERRS },
+				{ "flush_io_errs", BTRFS_DEV_STAT_FLUSH_ERRS },
+				{ "corruption_errs",
+					BTRFS_DEV_STAT_CORRUPTION_ERRS },
+				{ "generation_errs",
+					BTRFS_DEV_STAT_GENERATION_ERRS },
+			};
 
-			canonical_path = canonicalize_path((char *)path);
+			canonical_path = canonicalize_path(path);
 
 			/* No path when device is missing. */
 			if (!canonical_path) {
@@ -457,31 +486,18 @@ static int cmd_device_stats(int argc, char **argv)
 					 "devid:%llu", args.devid);
 			}
 
-			if (args.nr_items >= BTRFS_DEV_STAT_WRITE_ERRS + 1)
-				printf("[%s].write_io_errs   %llu\n",
-				       canonical_path,
-				       (unsigned long long) args.values[
-					BTRFS_DEV_STAT_WRITE_ERRS]);
-			if (args.nr_items >= BTRFS_DEV_STAT_READ_ERRS + 1)
-				printf("[%s].read_io_errs    %llu\n",
-				       canonical_path,
-				       (unsigned long long) args.values[
-					BTRFS_DEV_STAT_READ_ERRS]);
-			if (args.nr_items >= BTRFS_DEV_STAT_FLUSH_ERRS + 1)
-				printf("[%s].flush_io_errs   %llu\n",
-				       canonical_path,
-				       (unsigned long long) args.values[
-					BTRFS_DEV_STAT_FLUSH_ERRS]);
-			if (args.nr_items >= BTRFS_DEV_STAT_CORRUPTION_ERRS + 1)
-				printf("[%s].corruption_errs %llu\n",
-				       canonical_path,
-				       (unsigned long long) args.values[
-					BTRFS_DEV_STAT_CORRUPTION_ERRS]);
-			if (args.nr_items >= BTRFS_DEV_STAT_GENERATION_ERRS + 1)
-				printf("[%s].generation_errs %llu\n",
-				       canonical_path,
-				       (unsigned long long) args.values[
-					BTRFS_DEV_STAT_GENERATION_ERRS]);
+			for (j = 0; j < ARRAY_SIZE(dev_stats); j++) {
+				/* We got fewer items than we know */
+				if (args.nr_items < dev_stats[j].num + 1)
+					continue;
+				printf("[%s].%-16s %llu\n", canonical_path,
+					dev_stats[j].name,
+					(unsigned long long)
+					 args.values[dev_stats[j].num]);
+				if ((check == 1)
+				    && (args.values[dev_stats[j].num] > 0))
+					err |= 64;
+			}
 
 			free(canonical_path);
 		}

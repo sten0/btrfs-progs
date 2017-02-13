@@ -1,3 +1,113 @@
+btrfs-progs-4.9.1 (2017-01-27)
+  * check:
+    * use correct inode number for lost+found files
+    * lowmem mode: fix false alert on dropped leaf
+  * size reports: negative numbers might appear in size reports during device
+    deletes (previously in EiB units)
+  * mkfs: print device being trimmed
+  * defrag: v1 ioctl support dropped
+  * quota: print message before starting to wait for rescan
+  * qgroup show: new option to sync before printing the stats
+  * other:
+    * corrupt-block enhancements
+    * backtrace and co. cleanups
+    * doc fixes
+
+btrfs-progs-4.9 (2016-12-23)
+  * check: many lowmem mode updates
+  * send: use splice syscall to copy buffer from kernel
+  * receive: new option to dump the stream in textual form
+  * convert:
+    * move sources to own directory
+    * prevent accounting of blocks beyond end of the device
+    * make it work with 64k sectorsize
+  * mkfs: move sources to own directory
+  * defrag: warns if directory used without -r
+  * dev stats:
+    * new option to check stats for non-zero values
+    * add long option for -z
+  * library: version bump to 0.1.2, added subvol_uuid_search2
+  * other:
+    * cleanups
+    * docs updates
+
+btrfs-progs-4.8.5 (2016-11-30)
+  * receive: fix detection of end of stream (error reported even for valid
+    streams)
+  * other:
+    * added test for the receive bug
+    * fix linking of library-test
+
+btrfs-progs-4.8.4 (2016-11-25)
+  * check: support for clearing space cache v2 (free-space-tree)
+  * send:
+    * more sanity checks (with tests), cleanups
+    * fix for fstests/btrfs/038 and btrfs/117 failures
+  * build:
+    * fix compilation of standalone ioctl.h, pull NULL definition
+    * fix library link errors introduced in 4.8.3
+  * tests:
+    * add more fuzzed images from bugzilla
+    * add bogus send stream checks
+    * fixups and enhancements for CI environment builds
+    * misc refinements and updates of testing framework
+  * other:
+    * move sources for btrfs-image to own directory
+    * deprecated and not build by default: btrfs-calc-size, btrfs-show-super
+    * docs updates
+
+btrfs-progs-4.8.3 (2016-11-11)
+  * check:
+    * support for clearing space cache (v1)
+    * size reduction of inode backref structure
+  * send:
+    * fix handling of multiple snapshots (-p and -c options)
+    * transfer buffer increased (should reduce number of context switches)
+    * reuse existing file for output (-f), eg. when root cannot create files (NFS)
+  * dump-tree:
+    * print missing items for various structures
+    * new: dev stats, balance status item
+    * sync key names with kernel (the persistent items)
+  * subvol show: now able to print the toplevel subvolume -- the creation time
+    might be wrong though
+  * mkfs:
+    * store the creation time of toplevel root inode
+    * print UUID in the summary
+  * build: travis CI for devel
+  * other:
+    * lots of cleanups and refactoring
+    * switched to on-stack path structure
+    * fixes from coverity, asan, ubsan
+    * new tests
+    * updates in testing infrastructure
+    * fixed convert test 005
+
+btrfs-progs-4.8.2 (2016-10-26)
+  * convert: also convert file attributes
+  * convert: fix wrong tree block alignment for unalianged block group
+  * check: quota verify fixes, handle reloc tree
+  * build: add stub for FIEMAP_EXTENT_SHARED, compiles on ancient kernels
+  * build: add stub for BUILD_ASSERT when ioctl.h is included
+  * dump-tree: don't crash on unrecognized tree id for -t
+  * tests:
+    * add more ioctl tests
+    * convert: more symlink tests, attribute tests
+    * quota verify for reloc tree
+  * other cleanups
+
+btrfs-progs-4.8.1 (2016-10-12)
+  * 32bit builds fixed
+  * build without backtrace support fixed
+
+btrfs-progs-4.8 (2016-10-05)
+  * error handling improvements all over the place
+  * new fuzzed images, test updates
+  * doc fixups
+  * minor cleanups and improvements
+  * kernel library helpers moved to own directory
+  * qgroup: fix regression leading to incorrect status after check,
+    introduced in 4.7
+
 btrfs-progs-4.7.3 (2016-09-21)
   * fixed free space tree compat status
   * check: low-mem mode: handle partially dropped snapshots

@@ -1,3 +1,9 @@
+btrfs-progs (4.9.1-1) UNRELEASED; urgency=medium
+
+  * New upstream release Closes: #849353, #817806, #854915, #845473
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 13 Feb 2017 11:21:54 +0000
+
 btrfs-progs (4.7.3-1) unstable; urgency=medium
 
   * New upstream release.

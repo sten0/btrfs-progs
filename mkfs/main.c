@@ -48,8 +48,8 @@ static u64 index_cnt = 2;
 static int verbose = 1;
 
 struct directory_name_entry {
-	char *dir_name;
-	char *path;
+	const char *dir_name;
+	const char *path;
 	ino_t inum;
 	struct list_head list;
 };
@@ -344,28 +344,34 @@ static int create_data_reloc_tree(struct btrfs_trans_handle *trans,
 
 static void print_usage(int ret)
 {
-	printf("usage: mkfs.btrfs [options] dev [ dev ... ]\n");
-	printf("options:\n");
-	printf("\t-A|--alloc-start START  the offset to start the FS\n");
-	printf("\t-b|--byte-count SIZE    total number of bytes in the FS\n");
+	printf("Usage: mkfs.btrfs [options] dev [ dev ... ]\n");
+	printf("Options:\n");
+	printf("  allocation profiles:\n");
 	printf("\t-d|--data PROFILE       data profile, raid0, raid1, raid5, raid6, raid10, dup or single\n");
-	printf("\t-f|--force              force overwrite of existing filesystem\n");
-	printf("\t-l|--leafsize SIZE      deprecated, alias for nodesize\n");
-	printf("\t-L|--label LABEL        set a label\n");
-	printf("\t-m|--metadata PROFILE   metadata profile, values like data profile\n");
+	printf("\t-m|--metadata PROFILE   metadata profile, values like for data profile\n");
 	printf("\t-M|--mixed              mix metadata and data together\n");
+	printf("  features:\n");
 	printf("\t-n|--nodesize SIZE      size of btree nodes\n");
-	printf("\t-s|--sectorsize SIZE    min block allocation (may not mountable by current kernel)\n");
-	printf("\t-r|--rootdir DIR        the source directory\n");
+	printf("\t-s|--sectorsize SIZE    data block size (may not be mountable by current kernel)\n");
+	printf("\t-O|--features LIST      comma separated list of filesystem features (use '-O list-all' to list features)\n");
+	printf("\t-L|--label LABEL        set the filesystem label\n");
+	printf("\t-U|--uuid UUID          specify the filesystem UUID (must be unique)\n");
+	printf("  creation:\n");
+	printf("\t-b|--byte-count SIZE    set filesystem size to SIZE (on the first device)\n");
+	printf("\t-r|--rootdir DIR        copy files from DIR to the image root directory\n");
 	printf("\t-K|--nodiscard          do not perform whole device TRIM\n");
-	printf("\t-O|--features LIST      comma separated list of filesystem features, use '-O list-all' to list features\n");
-	printf("\t-U|--uuid UUID          specify the filesystem UUID\n");
+	printf("\t-f|--force              force overwrite of existing filesystem\n");
+	printf("  general:\n");
 	printf("\t-q|--quiet              no messages except errors\n");
 	printf("\t-V|--version            print the mkfs.btrfs version and exit\n");
+	printf("\t--help                  print this help and exit\n");
+	printf("  deprecated:\n");
+	printf("\t-A|--alloc-start START  the offset to start the filesystem\n");
+	printf("\t-l|--leafsize SIZE      deprecated, alias for nodesize\n");
 	exit(ret);
 }
 
-static u64 parse_profile(char *s)
+static u64 parse_profile(const char *s)
 {
 	if (strcasecmp(s, "raid0") == 0) {
 		return BTRFS_BLOCK_GROUP_RAID0;
@@ -389,7 +395,7 @@ static u64 parse_profile(char *s)
 	return 0;
 }
 
-static char *parse_label(char *input)
+static char *parse_label(const char *input)
 {
 	int len = strlen(input);
 
@@ -415,7 +421,7 @@ static int add_directory_items(struct btrfs_trans_handle *trans,
 
 	location.objectid = objectid;
 	location.offset = 0;
-	btrfs_set_key_type(&location, BTRFS_INODE_ITEM_KEY);
+	location.type = BTRFS_INODE_ITEM_KEY;
 
 	if (S_ISDIR(st->st_mode))
 		filetype = BTRFS_FT_DIR;
@@ -494,11 +500,11 @@ static int fill_inode_item(struct btrfs_trans_handle *trans,
 
 static int directory_select(const struct direct *entry)
 {
-	if ((strncmp(entry->d_name, ".", entry->d_reclen) == 0) ||
-		(strncmp(entry->d_name, "..", entry->d_reclen) == 0))
+	if (entry->d_name[0] == '.' &&
+		(entry->d_name[1] == 0 ||
+		 (entry->d_name[1] == '.' && entry->d_name[2] == 0)))
 		return 0;
-	else
-		return 1;
+	return 1;
 }
 
 static void free_namelist(struct direct **files, int count)
@@ -513,7 +519,7 @@ static void free_namelist(struct direct **files, int count)
 	free(files);
 }
 
-static u64 calculate_dir_inode_size(char *dirname)
+static u64 calculate_dir_inode_size(const char *dirname)
 {
 	int count, i;
 	struct direct **files, *cur_file;
@@ -534,12 +540,11 @@ static u64 calculate_dir_inode_size(char *dirname)
 
 static int add_inode_items(struct btrfs_trans_handle *trans,
 			   struct btrfs_root *root,
-			   struct stat *st, char *name,
+			   struct stat *st, const char *name,
 			   u64 self_objectid, ino_t parent_inum,
 			   int dir_index_cnt, struct btrfs_inode_item *inode_ret)
 {
 	int ret;
-	struct btrfs_key inode_key;
 	struct btrfs_inode_item btrfs_inode;
 	u64 objectid;
 	u64 inode_size = 0;
@@ -551,10 +556,6 @@ static int add_inode_items(struct btrfs_trans_handle *trans,
 		inode_size = calculate_dir_inode_size(name);
 		btrfs_set_stack_inode_size(&btrfs_inode, inode_size);
 	}
-
-	inode_key.objectid = objectid;
-	inode_key.offset = 0;
-	btrfs_set_key_type(&inode_key, BTRFS_INODE_ITEM_KEY);
 
 	ret = btrfs_insert_inode(trans, root, objectid, &btrfs_inode);
 
@@ -779,7 +780,7 @@ end:
 	return ret;
 }
 
-static char *make_path(char *dir, char *name)
+static char *make_path(const char *dir, const char *name)
 {
 	char *path;
 
@@ -794,7 +795,7 @@ static char *make_path(char *dir, char *name)
 }
 
 static int traverse_directory(struct btrfs_trans_handle *trans,
-			      struct btrfs_root *root, char *dir_name,
+			      struct btrfs_root *root, const char *dir_name,
 			      struct directory_name_entry *dir_head, int out_fd)
 {
 	int ret = 0;
@@ -808,7 +809,7 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 	struct direct *cur_file;
 	ino_t parent_inum, cur_inum;
 	ino_t highest_inum = 0;
-	char *parent_dir_name;
+	const char *parent_dir_name;
 	char real_path[PATH_MAX];
 	struct btrfs_path path;
 	struct extent_buffer *leaf;
@@ -835,7 +836,7 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 
 	root_dir_key.objectid = btrfs_root_dirid(&root->root_item);
 	root_dir_key.offset = 0;
-	btrfs_set_key_type(&root_dir_key, BTRFS_INODE_ITEM_KEY);
+	root_dir_key.type = BTRFS_INODE_ITEM_KEY;
 	ret = btrfs_lookup_inode(trans, root, &path, &root_dir_key, 1);
 	if (ret) {
 		error("failed to lookup root dir: %d", ret);
@@ -905,8 +906,9 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 			if (ret == -EEXIST) {
 				if (st.st_nlink <= 1) {
 					error(
-			"item %s already exists but has wrong st_nlink %ld <= 1",
-						cur_file->d_name, st.st_nlink);
+			"item %s already exists but has wrong st_nlink %lu <= 1",
+						cur_file->d_name,
+						(unsigned long)st.st_nlink);
 					goto fail;
 				}
 				continue;
@@ -976,15 +978,6 @@ fail_no_dir:
 	goto out;
 }
 
-static int open_target(char *output_name)
-{
-	int output_fd;
-	output_fd = open(output_name, O_CREAT | O_RDWR,
-		         S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-
-	return output_fd;
-}
-
 static int create_chunks(struct btrfs_trans_handle *trans,
 			 struct btrfs_root *root, u64 num_of_meta_chunks,
 			 u64 size_of_data,
@@ -1031,7 +1024,8 @@ static int create_chunks(struct btrfs_trans_handle *trans,
 	return ret;
 }
 
-static int make_image(char *source_dir, struct btrfs_root *root, int out_fd)
+static int make_image(const char *source_dir, struct btrfs_root *root,
+		int out_fd)
 {
 	int ret;
 	struct btrfs_trans_handle *trans;
@@ -1091,7 +1085,7 @@ static int ftw_add_entry_size(const char *fpath, const struct stat *st,
 	return 0;
 }
 
-static u64 size_sourcedir(char *dir_name, u64 sectorsize,
+static u64 size_sourcedir(const char *dir_name, u64 sectorsize,
 			  u64 *num_of_meta_chunks_ret, u64 *size_of_data_ret)
 {
 	u64 dir_size = 0;
@@ -1322,15 +1316,10 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 	struct btrfs_root *root = fs_info->extent_root;
 	struct btrfs_key key;
 	struct btrfs_key found_key;
-	struct btrfs_path *path;
+	struct btrfs_path path;
 	int ret = 0;
 
-	path = btrfs_alloc_path();
-	if (!path) {
-		ret = -ENOMEM;
-		goto out;
-	}
-
+	btrfs_init_path(&path);
 	trans = btrfs_start_transaction(root, 1);
 
 	key.objectid = 0;
@@ -1342,32 +1331,32 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 		 * as the rest of the loop may modify the tree, we need to
 		 * start a new search each time.
 		 */
-		ret = btrfs_search_slot(trans, root, &key, path, 0, 0);
+		ret = btrfs_search_slot(trans, root, &key, &path, 0, 0);
 		if (ret < 0)
 			goto out;
 
-		btrfs_item_key_to_cpu(path->nodes[0], &found_key,
-				      path->slots[0]);
+		btrfs_item_key_to_cpu(path.nodes[0], &found_key,
+				      path.slots[0]);
 		if (found_key.objectid < key.objectid)
 			goto out;
 		if (found_key.type != BTRFS_BLOCK_GROUP_ITEM_KEY) {
-			ret = next_block_group(root, path);
+			ret = next_block_group(root, &path);
 			if (ret < 0)
 				goto out;
 			if (ret > 0) {
 				ret = 0;
 				goto out;
 			}
-			btrfs_item_key_to_cpu(path->nodes[0], &found_key,
-					      path->slots[0]);
+			btrfs_item_key_to_cpu(path.nodes[0], &found_key,
+					      path.slots[0]);
 		}
 
-		bgi = btrfs_item_ptr(path->nodes[0], path->slots[0],
+		bgi = btrfs_item_ptr(path.nodes[0], path.slots[0],
 				     struct btrfs_block_group_item);
-		if (is_temp_block_group(path->nodes[0], bgi,
+		if (is_temp_block_group(path.nodes[0], bgi,
 					data_profile, meta_profile,
 					sys_profile)) {
-			u64 flags = btrfs_disk_block_group_flags(path->nodes[0],
+			u64 flags = btrfs_disk_block_group_flags(path.nodes[0],
 							     bgi);
 
 			ret = btrfs_free_block_group(trans, fs_info,
@@ -1389,13 +1378,13 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 				  BTRFS_BLOCK_GROUP_DATA))
 				alloc->mixed -= found_key.offset;
 		}
-		btrfs_release_path(path);
+		btrfs_release_path(&path);
 		key.objectid = found_key.objectid + found_key.offset;
 	}
 out:
 	if (trans)
 		btrfs_commit_transaction(trans, root);
-	btrfs_free_path(path);
+	btrfs_release_path(&path);
 	return ret;
 }
 
@@ -1479,6 +1468,7 @@ int main(int argc, char **argv)
 				break;
 			case 'l':
 				warning("--leafsize is deprecated, use --nodesize");
+				/* fall through */
 			case 'n':
 				nodesize = parse_size(optarg);
 				nodesize_forced = 1;
@@ -1636,6 +1626,12 @@ int main(int argc, char **argv)
 				 features))
 		exit(1);
 
+	if (sectorsize < sizeof(struct btrfs_super_block)) {
+		error("sectorsize smaller than superblock: %u < %zu",
+				sectorsize, sizeof(struct btrfs_super_block));
+		exit(1);
+	}
+
 	/* Check device/block_count after the nodesize is determined */
 	if (block_count && block_count < btrfs_min_dev_size(nodesize)) {
 		error("size %llu is too small to make a usable filesystem",
@@ -1697,7 +1693,8 @@ int main(int argc, char **argv)
 			exit(1);
 		}
 	} else {
-		fd = open_target(file);
+		fd = open(file, O_CREAT | O_RDWR,
+				S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
 		if (fd < 0) {
 			error("unable to open %s: %s", file, strerror(errno));
 			exit(1);
@@ -1743,7 +1740,7 @@ int main(int argc, char **argv)
 	mkfs_cfg.stripesize = stripesize;
 	mkfs_cfg.features = features;
 
-	ret = make_btrfs(fd, &mkfs_cfg, NULL);
+	ret = make_btrfs(fd, &mkfs_cfg);
 	if (ret) {
 		error("error during mkfs: %s", strerror(-ret));
 		exit(1);
@@ -1899,7 +1896,7 @@ raid_groups:
 		char features_buf[64];
 
 		printf("Label:              %s\n", label);
-		printf("UUID:               %s\n", fs_uuid);
+		printf("UUID:               %s\n", mkfs_cfg.fs_uuid);
 		printf("Node size:          %u\n", nodesize);
 		printf("Sector size:        %u\n", sectorsize);
 		printf("Filesystem size:    %s\n",

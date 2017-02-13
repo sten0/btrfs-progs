@@ -471,7 +471,7 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 	printf("    Device allocated:\t\t%*s\n", width,
 		pretty_size_mode(r_total_chunks, unit_mode));
 	printf("    Device unallocated:\t\t%*s\n", width,
-		pretty_size_mode(r_total_unused, unit_mode));
+		pretty_size_mode(r_total_unused, unit_mode | UNITS_NEGATIVE));
 	printf("    Device missing:\t\t%*s\n", width,
 		pretty_size_mode(r_total_missing, unit_mode));
 	printf("    Used:\t\t\t%*s\n", width,
@@ -535,7 +535,11 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 	}
 
 	for (i = 0, ndevs = 0 ; i <= fi_args.max_id ; i++) {
-		BUG_ON(ndevs >= fi_args.num_devices);
+		if (ndevs >= fi_args.num_devices) {
+			error("unexpected number of devices: %d >= %llu", ndevs,
+				(unsigned long long)fi_args.num_devices);
+			goto out;
+		}
 		memset(&dev_info, 0, sizeof(dev_info));
 		ret = get_device_info(fd, i, &dev_info);
 
@@ -543,8 +547,7 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 			continue;
 		if (ret) {
 			error("cannot get info about device devid=%d", i);
-			free(info);
-			return ret;
+			goto out;
 		}
 
 		info[ndevs].devid = dev_info.devid;
@@ -559,7 +562,12 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 		++ndevs;
 	}
 
-	BUG_ON(ndevs != fi_args.num_devices);
+	if (ndevs != fi_args.num_devices) {
+		error("unexpected number of devices: %d != %llu", ndevs,
+				(unsigned long long)fi_args.num_devices);
+		goto out;
+	}
+
 	qsort(info, fi_args.num_devices,
 		sizeof(struct device_info), cmp_device_info);
 
@@ -567,6 +575,10 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 	*device_info_ptr = info;
 
 	return 0;
+
+out:
+	free(info);
+	return ret;
 }
 
 int load_chunk_and_device_info(int fd, struct chunk_info **chunkinfo,
@@ -724,8 +736,8 @@ static void _cmd_filesystem_usage_tabular(unsigned unit_mode,
 		unused = get_partition_size(device_info_ptr[i].path)
 				- total_allocated;
 
-		table_printf(matrix, unallocated_col, vhdr_skip + i,
-			       ">%s", pretty_size_mode(unused, unit_mode));
+		table_printf(matrix, unallocated_col, vhdr_skip + i, ">%s",
+			pretty_size_mode(unused, unit_mode | UNITS_NEGATIVE));
 		total_unused += unused;
 
 	}
@@ -759,7 +771,8 @@ static void _cmd_filesystem_usage_tabular(unsigned unit_mode,
 	}
 
 	table_printf(matrix, unallocated_col, vhdr_skip + device_info_count + 1,
-			">%s", pretty_size_mode(total_unused, unit_mode));
+		">%s",
+		pretty_size_mode(total_unused, unit_mode | UNITS_NEGATIVE));
 
 	table_printf(matrix, 1, vhdr_skip + device_info_count + 2, "<Used");
 	for (i = 0, col = spaceinfos_col; i < sargs->total_spaces; i++) {
@@ -872,7 +885,7 @@ static void _cmd_filesystem_usage_linear(unsigned unit_mode,
 
 	printf("Unallocated:\n");
 	print_unused(info_ptr, info_count, device_info_ptr, device_info_count,
-			unit_mode);
+			unit_mode | UNITS_NEGATIVE);
 }
 
 static int print_filesystem_usage_by_chunk(int fd,
@@ -1015,7 +1028,8 @@ void print_device_chunks(int fd, struct device_info *devinfo,
 	}
 	printf("   Unallocated: %*s%10s\n",
 		(int)(20 - strlen("Unallocated")), "",
-		pretty_size_mode(devinfo->size - allocated, unit_mode));
+		pretty_size_mode(devinfo->size - allocated,
+			unit_mode | UNITS_NEGATIVE));
 }
 
 void print_device_sizes(int fd, struct device_info *devinfo, unsigned unit_mode)

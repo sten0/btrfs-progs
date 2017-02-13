@@ -330,9 +330,18 @@ static int find_parent_roots(struct ulist *roots, u64 parent)
 	 * For each unresolved root, we recurse
 	 */
 	ref = find_ref_bytenr(parent);
+	if (!ref) {
+		error("bytenr ref not found for parent %llu",
+				(unsigned long long)parent);
+		return -EIO;
+	}
 	node = &ref->bytenr_node;
-	BUG_ON(ref == NULL);
-	BUG_ON(ref->bytenr != parent);
+	if (ref->bytenr != parent) {
+		error("found bytenr ref does not match parent: %llu != %llu",
+				(unsigned long long)ref->bytenr,
+				(unsigned long long)parent);
+		return -EIO;
+	}
 
 	{
 		/*
@@ -341,9 +350,15 @@ static int find_parent_roots(struct ulist *roots, u64 parent)
 		 */
 		struct rb_node *prev_node = rb_prev(&ref->bytenr_node);
 		struct ref *prev;
+
 		if (prev_node) {
 			prev = rb_entry(prev_node, struct ref, bytenr_node);
-			BUG_ON(prev->bytenr == parent);
+			if (prev->bytenr == parent) {
+				error(
+				"unexpected: prev bytenr same as parent: %llu",
+						(unsigned long long)parent);
+				return -EIO;
+			}
 		}
 	}
 
@@ -354,6 +369,11 @@ static int find_parent_roots(struct ulist *roots, u64 parent)
 				if (ret < 0)
 					goto out;
 			}
+		} else if (ref->parent == ref->bytenr) {
+			/*
+			 * Special loop case for tree reloc tree
+			 */
+			ref->root = BTRFS_TREE_RELOC_OBJECTID;
 		} else {
 			ret = find_parent_roots(roots, ref->parent);
 			if (ret < 0)
@@ -563,6 +583,8 @@ static u64 resolve_one_root(u64 bytenr)
 
 	if (ref->root)
 		return ref->root;
+	if (ref->parent == bytenr)
+		return BTRFS_TREE_RELOC_OBJECTID;
 	return resolve_one_root(ref->parent);
 }
 
@@ -733,6 +755,9 @@ static int add_refs_for_implied(struct btrfs_fs_info *info, u64 bytenr,
 	struct btrfs_root *root;
 	struct btrfs_key key;
 
+	/* Tree reloc tree doesn't contribute qgroup, skip it */
+	if (root_id == BTRFS_TREE_RELOC_OBJECTID)
+		return 0;
 	key.objectid = root_id;
 	key.type = BTRFS_ROOT_ITEM_KEY;
 	key.offset = (u64)-1;
@@ -874,15 +899,14 @@ static int add_qgroup_relation(u64 memberid, u64 parentid)
 	return 0;
 }
 
-static void read_qgroup_status(struct btrfs_path *path,
+static void read_qgroup_status(struct extent_buffer *eb, int slot,
 			      struct counts_tree *counts)
 {
 	struct btrfs_qgroup_status_item *status_item;
 	u64 flags;
 
-	status_item = btrfs_item_ptr(path->nodes[0], path->slots[0],
-				     struct btrfs_qgroup_status_item);
-	flags = btrfs_qgroup_status_flags(path->nodes[0], status_item);
+	status_item = btrfs_item_ptr(eb, slot, struct btrfs_qgroup_status_item);
+	flags = btrfs_qgroup_status_flags(eb, status_item);
 	/*
 	 * Since qgroup_inconsist/rescan_running is just one bit,
 	 * assign value directly won't work.
@@ -946,7 +970,7 @@ loop:
 			}
 
 			if (key.type == BTRFS_QGROUP_STATUS_KEY) {
-				read_qgroup_status(&path, &counts);
+				read_qgroup_status(leaf, i, &counts);
 				continue;
 			}
 
@@ -1455,29 +1479,24 @@ static int repair_qgroup_info(struct btrfs_fs_info *info,
 	int ret;
 	struct btrfs_root *root = info->quota_root;
 	struct btrfs_trans_handle *trans;
-	struct btrfs_path *path;
+	struct btrfs_path path;
 	struct btrfs_qgroup_info_item *info_item;
 	struct btrfs_key key;
 
 	printf("Repair qgroup %llu/%llu\n", btrfs_qgroup_level(count->qgroupid),
 	       btrfs_qgroup_subvid(count->qgroupid));
 
-	path = btrfs_alloc_path();
-	if (!path)
-		return -ENOMEM;
-
 	trans = btrfs_start_transaction(root, 1);
-	if (IS_ERR(trans)) {
-		btrfs_free_path(path);
+	if (IS_ERR(trans))
 		return PTR_ERR(trans);
-	}
 
+	btrfs_init_path(&path);
 	key.objectid = 0;
 	key.type = BTRFS_QGROUP_INFO_KEY;
 	key.offset = count->qgroupid;
-	ret = btrfs_search_slot(trans, root, &key, path, 0, 1);
+	ret = btrfs_search_slot(trans, root, &key, &path, 0, 1);
 	if (ret) {
-		error("Could not find disk item for qgroup %llu/%llu.\n",
+		error("could not find disk item for qgroup %llu/%llu",
 		      btrfs_qgroup_level(count->qgroupid),
 		      btrfs_qgroup_subvid(count->qgroupid));
 		if (ret > 0)
@@ -1485,27 +1504,27 @@ static int repair_qgroup_info(struct btrfs_fs_info *info,
 		goto out;
 	}
 
-	info_item = btrfs_item_ptr(path->nodes[0], path->slots[0],
+	info_item = btrfs_item_ptr(path.nodes[0], path.slots[0],
 				   struct btrfs_qgroup_info_item);
 
-	btrfs_set_qgroup_info_generation(path->nodes[0], info_item,
+	btrfs_set_qgroup_info_generation(path.nodes[0], info_item,
 					 trans->transid);
 
-	btrfs_set_qgroup_info_referenced(path->nodes[0], info_item,
+	btrfs_set_qgroup_info_referenced(path.nodes[0], info_item,
 					 count->info.referenced);
-	btrfs_set_qgroup_info_referenced_compressed(path->nodes[0], info_item,
+	btrfs_set_qgroup_info_referenced_compressed(path.nodes[0], info_item,
 					    count->info.referenced_compressed);
 
-	btrfs_set_qgroup_info_exclusive(path->nodes[0], info_item,
+	btrfs_set_qgroup_info_exclusive(path.nodes[0], info_item,
 					count->info.exclusive);
-	btrfs_set_qgroup_info_exclusive_compressed(path->nodes[0], info_item,
+	btrfs_set_qgroup_info_exclusive_compressed(path.nodes[0], info_item,
 					   count->info.exclusive_compressed);
 
-	btrfs_mark_buffer_dirty(path->nodes[0]);
+	btrfs_mark_buffer_dirty(path.nodes[0]);
 
 out:
 	btrfs_commit_transaction(trans, root);
-	btrfs_free_path(path);
+	btrfs_release_path(&path);
 
 	return ret;
 }
@@ -1515,53 +1534,48 @@ static int repair_qgroup_status(struct btrfs_fs_info *info)
 	int ret;
 	struct btrfs_root *root = info->quota_root;
 	struct btrfs_trans_handle *trans;
-	struct btrfs_path *path;
+	struct btrfs_path path;
 	struct btrfs_key key;
 	struct btrfs_qgroup_status_item *status_item;
 
 	printf("Repair qgroup status item\n");
 
-	path = btrfs_alloc_path();
-	if (!path)
-		return -ENOMEM;
-
 	trans = btrfs_start_transaction(root, 1);
-	if (IS_ERR(trans)) {
-		btrfs_free_path(path);
+	if (IS_ERR(trans))
 		return PTR_ERR(trans);
-	}
 
+	btrfs_init_path(&path);
 	key.objectid = 0;
 	key.type = BTRFS_QGROUP_STATUS_KEY;
 	key.offset = 0;
-	ret = btrfs_search_slot(trans, root, &key, path, 0, 1);
+	ret = btrfs_search_slot(trans, root, &key, &path, 0, 1);
 	if (ret) {
-		error("Could not find qgroup status item\n");
+		error("could not find qgroup status item");
 		if (ret > 0)
 			ret = -ENOENT;
 		goto out;
 	}
 
-	status_item = btrfs_item_ptr(path->nodes[0], path->slots[0],
+	status_item = btrfs_item_ptr(path.nodes[0], path.slots[0],
 				     struct btrfs_qgroup_status_item);
-	btrfs_set_qgroup_status_flags(path->nodes[0], status_item,
+	btrfs_set_qgroup_status_flags(path.nodes[0], status_item,
 				      BTRFS_QGROUP_STATUS_FLAG_ON);
-	btrfs_set_qgroup_status_rescan(path->nodes[0], status_item, 0);
-	btrfs_set_qgroup_status_generation(path->nodes[0], status_item,
+	btrfs_set_qgroup_status_rescan(path.nodes[0], status_item, 0);
+	btrfs_set_qgroup_status_generation(path.nodes[0], status_item,
 					   trans->transid);
 
-	btrfs_mark_buffer_dirty(path->nodes[0]);
+	btrfs_mark_buffer_dirty(path.nodes[0]);
 
 out:
 	btrfs_commit_transaction(trans, root);
-	btrfs_free_path(path);
+	btrfs_release_path(&path);
 
 	return ret;
 }
 
 int repair_qgroups(struct btrfs_fs_info *info, int *repaired)
 {
-	int ret;
+	int ret = 0;
 	struct qgroup_count *count, *tmpcount;
 
 	*repaired = 0;

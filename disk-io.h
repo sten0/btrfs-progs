@@ -74,6 +74,12 @@ enum btrfs_open_ctree_flags {
 
 	/* Allow to open a partially created filesystem */
 	OPEN_CTREE_FS_PARTIAL = (1U << 12),
+
+	/*
+	 * Invalidate the free space tree (i.e., clear the FREE_SPACE_TREE_VALID
+	 * compat_ro bit).
+	 */
+	OPEN_CTREE_INVALIDATE_FST = (1U << 13),
 };
 
 /*
@@ -120,7 +126,7 @@ void readahead_tree_block(struct btrfs_root *root, u64 bytenr, u32 blocksize,
 struct extent_buffer* btrfs_find_create_tree_block(
 		struct btrfs_fs_info *fs_info, u64 bytenr, u32 blocksize);
 
-int __setup_root(u32 nodesize, u32 leafsize, u32 sectorsize,
+void btrfs_setup_root(u32 nodesize, u32 leafsize, u32 sectorsize,
                         u32 stripesize, struct btrfs_root *root,
                         struct btrfs_fs_info *fs_info, u64 objectid);
 int clean_tree_block(struct btrfs_trans_handle *trans,
@@ -128,7 +134,8 @@ int clean_tree_block(struct btrfs_trans_handle *trans,
 
 void btrfs_free_fs_info(struct btrfs_fs_info *fs_info);
 struct btrfs_fs_info *btrfs_new_fs_info(int writable, u64 sb_bytenr);
-int btrfs_check_fs_compatibility(struct btrfs_super_block *sb, int writable);
+int btrfs_check_fs_compatibility(struct btrfs_super_block *sb,
+				 unsigned int flags);
 int btrfs_setup_all_roots(struct btrfs_fs_info *fs_info, u64 root_tree_bytenr,
 			  unsigned flags);
 void btrfs_release_all_roots(struct btrfs_fs_info *fs_info);
@@ -175,7 +182,7 @@ int btrfs_set_buffer_uptodate(struct extent_buffer *buf);
 int wait_on_tree_block_writeback(struct btrfs_root *root,
 				 struct extent_buffer *buf);
 u32 btrfs_csum_data(struct btrfs_root *root, char *data, u32 seed, size_t len);
-void btrfs_csum_final(u32 crc, char *result);
+void btrfs_csum_final(u32 crc, u8 *result);
 
 int btrfs_commit_transaction(struct btrfs_trans_handle *trans,
 			     struct btrfs_root *root);
@@ -190,7 +197,8 @@ int write_tree_block(struct btrfs_trans_handle *trans,
 int write_and_map_eb(struct btrfs_trans_handle *trans, struct btrfs_root *root,
 		     struct extent_buffer *eb);
 
-/* raid6.c */
+/* raid56.c */
 void raid6_gen_syndrome(int disks, size_t bytes, void **ptrs);
+int raid5_gen_result(int nr_devs, size_t stripe_len, int dest, void **data);
 
 #endif

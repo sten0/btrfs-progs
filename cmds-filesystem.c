@@ -149,7 +149,7 @@ static int get_df(int fd, struct btrfs_ioctl_space_args **sargs_ret)
 
 	ret = ioctl(fd, BTRFS_IOC_SPACE_INFO, sargs);
 	if (ret < 0) {
-		error("cannot get space info: %s\n", strerror(errno));
+		error("cannot get space info: %s", strerror(errno));
 		free(sargs);
 		return -errno;
 	}
@@ -248,7 +248,7 @@ static int match_search_item_kernel(__u8 *fsid, char *mnt, char *label,
 	return 0;
 }
 
-static int uuid_search(struct btrfs_fs_devices *fs_devices, char *search)
+static int uuid_search(struct btrfs_fs_devices *fs_devices, const char *search)
 {
 	char uuidbuf[BTRFS_UUID_UNPARSED_SIZE];
 	struct list_head *cur;
@@ -495,7 +495,7 @@ static int btrfs_scan_kernel(void *search, unsigned unit_mode)
 		if ((fd != -1) && !get_df(fd, &space_info_arg)) {
 			print_one_fs(&fs_info_arg, dev_info_arg,
 				     space_info_arg, label, unit_mode);
-			kfree(space_info_arg);
+			free(space_info_arg);
 			memset(label, 0, sizeof(label));
 			found = 1;
 		}
@@ -509,7 +509,7 @@ out:
 	return !found;
 }
 
-static int dev_to_fsid(char *dev, __u8 *fsid)
+static int dev_to_fsid(const char *dev, __u8 *fsid)
 {
 	struct btrfs_super_block *disk_super;
 	char buf[BTRFS_SUPER_INFO_SIZE];
@@ -872,10 +872,10 @@ static int cmd_filesystem_show(int argc, char **argv)
 		goto out;
 
 devs_only:
-	ret = btrfs_scan_lblkid();
+	ret = btrfs_scan_devices();
 
 	if (ret) {
-		error("blkid device scan returned %d\n", ret);
+		error("blkid device scan returned %d", ret);
 		return 1;
 	}
 
@@ -972,20 +972,6 @@ static const char * const cmd_filesystem_defrag_usage[] = {
 	NULL
 };
 
-static int do_defrag(int fd, int fancy_ioctl,
-		struct btrfs_ioctl_defrag_range_args *range)
-{
-	int ret;
-
-	if (!fancy_ioctl)
-		ret = ioctl(fd, BTRFS_IOC_DEFRAG, NULL);
-	else
-		ret = ioctl(fd, BTRFS_IOC_DEFRAG_RANGE, range);
-
-	return ret;
-}
-
-static int defrag_global_fancy_ioctl;
 static struct btrfs_ioctl_defrag_range_args defrag_global_range;
 static int defrag_global_verbose;
 static int defrag_global_errors;
@@ -1004,12 +990,11 @@ static int defrag_callback(const char *fpath, const struct stat *sb,
 			err = errno;
 			goto error;
 		}
-		ret = do_defrag(fd, defrag_global_fancy_ioctl, &defrag_global_range);
+		ret = ioctl(fd, BTRFS_IOC_DEFRAG_RANGE, &defrag_global_range);
 		close(fd);
-		if (ret && errno == ENOTTY && defrag_global_fancy_ioctl) {
-			error("defrag range ioctl not "
-				"supported in this kernel, please try "
-				"without any options.");
+		if (ret && errno == ENOTTY) {
+			error(
+"defrag range ioctl not supported in this kernel version, 2.6.33 and newer is required");
 			defrag_global_errors++;
 			return ENOTTY;
 		}
@@ -1036,21 +1021,20 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 	int i;
 	int recursive = 0;
 	int ret = 0;
-	int e = 0;
 	int compress_type = BTRFS_COMPRESS_NONE;
 	DIR *dirstream;
 
 	/*
 	 * Kernel has a different default (256K) that is supposed to be safe,
 	 * but it does not defragment very well. The 32M will likely lead to
-	 * better results and is independent of the kernel default.
+	 * better results and is independent of the kernel default. We have to
+	 * use the v2 defrag ioctl.
 	 */
 	thresh = 32 * 1024 * 1024;
 
 	defrag_global_errors = 0;
 	defrag_global_verbose = 0;
 	defrag_global_errors = 0;
-	defrag_global_fancy_ioctl = 0;
 	while(1) {
 		int c = getopt(argc, argv, "vrc::fs:l:t:");
 		if (c < 0)
@@ -1061,22 +1045,18 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 			compress_type = BTRFS_COMPRESS_ZLIB;
 			if (optarg)
 				compress_type = parse_compress_type(optarg);
-			defrag_global_fancy_ioctl = 1;
 			break;
 		case 'f':
 			flush = 1;
-			defrag_global_fancy_ioctl = 1;
 			break;
 		case 'v':
 			defrag_global_verbose = 1;
 			break;
 		case 's':
 			start = parse_size(optarg);
-			defrag_global_fancy_ioctl = 1;
 			break;
 		case 'l':
 			len = parse_size(optarg);
-			defrag_global_fancy_ioctl = 1;
 			break;
 		case 't':
 			thresh = parse_size(optarg);
@@ -1086,7 +1066,6 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 					thresh, (u32)-1);
 				thresh = (u32)-1;
 			}
-			defrag_global_fancy_ioctl = 1;
 			break;
 		case 'r':
 			recursive = 1;
@@ -1110,13 +1089,43 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 	if (flush)
 		defrag_global_range.flags |= BTRFS_DEFRAG_RANGE_START_IO;
 
+	/*
+	 * Look for directory arguments and warn if the recursive mode is not
+	 * requested, as this is not implemented as recursive defragmentation
+	 * in kernel. The stat errors are silent here as we check them below.
+	 */
+	if (!recursive) {
+		int found = 0;
+
+		for (i = optind; i < argc; i++) {
+			struct stat st;
+
+			if (stat(argv[i], &st))
+				continue;
+
+			if (S_ISDIR(st.st_mode)) {
+				warning(
+			"directory specified but recursive mode not requested: %s",
+					argv[i]);
+				found = 1;
+			}
+		}
+		if (found) {
+			warning(
+"a directory passed to the defrag ioctl will not process the files\n"
+"recursively but will defragment the subvolume tree and the extent tree.\n"
+"If this is not intended, please use option -r .");
+		}
+	}
+
 	for (i = optind; i < argc; i++) {
 		struct stat st;
+		int defrag_err = 0;
 
 		dirstream = NULL;
 		fd = open_file_or_dir(argv[i], &dirstream);
 		if (fd < 0) {
-			error("cannot open %s: %s\n", argv[i],
+			error("cannot open %s: %s", argv[i],
 					strerror(errno));
 			defrag_global_errors++;
 			close_file_or_dir(fd, dirstream);
@@ -1130,44 +1139,36 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 			continue;
 		}
 		if (!(S_ISDIR(st.st_mode) || S_ISREG(st.st_mode))) {
-			error("%s is not a directory or a regular file\n",
+			error("%s is not a directory or a regular file",
 					argv[i]);
 			defrag_global_errors++;
 			close_file_or_dir(fd, dirstream);
 			continue;
 		}
-		if (recursive) {
-			if (S_ISDIR(st.st_mode)) {
-				ret = nftw(argv[i], defrag_callback, 10,
+		if (recursive && S_ISDIR(st.st_mode)) {
+			ret = nftw(argv[i], defrag_callback, 10,
 						FTW_MOUNT | FTW_PHYS);
-				if (ret == ENOTTY)
-					exit(1);
-				/* errors are handled in the callback */
-				ret = 0;
-			} else {
-				if (defrag_global_verbose)
-					printf("%s\n", argv[i]);
-				ret = do_defrag(fd, defrag_global_fancy_ioctl,
-						&defrag_global_range);
-				e = errno;
-			}
+			if (ret == ENOTTY)
+				exit(1);
+			/* errors are handled in the callback */
+			ret = 0;
 		} else {
 			if (defrag_global_verbose)
 				printf("%s\n", argv[i]);
-			ret = do_defrag(fd, defrag_global_fancy_ioctl,
+			ret = ioctl(fd, BTRFS_IOC_DEFRAG_RANGE,
 					&defrag_global_range);
-			e = errno;
+			defrag_err = errno;
 		}
 		close_file_or_dir(fd, dirstream);
-		if (ret && e == ENOTTY && defrag_global_fancy_ioctl) {
-			error("defrag range ioctl not "
-				"supported in this kernel, please try "
-				"without any options.");
+		if (ret && defrag_err == ENOTTY) {
+			error(
+"defrag range ioctl not supported in this kernel version, 2.6.33 and newer is required");
 			defrag_global_errors++;
 			break;
 		}
 		if (ret) {
-			error("defrag failed on %s: %s", argv[i], strerror(e));
+			error("defrag failed on %s: %s", argv[i],
+					strerror(defrag_err));
 			defrag_global_errors++;
 		}
 	}

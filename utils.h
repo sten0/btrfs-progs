@@ -95,6 +95,8 @@ void set_argv0(char **argv);
 #define UNITS_RAW			(1U << UNITS_MODE_SHIFT)
 #define UNITS_BINARY			(2U << UNITS_MODE_SHIFT)
 #define UNITS_DECIMAL			(3U << UNITS_MODE_SHIFT)
+/* Interpret the u64 value as s64 */
+#define UNITS_NEGATIVE			(4U << UNITS_MODE_SHIFT)
 #define UNITS_MODE_MASK			((1U << UNITS_MODE_SHIFT) - 1)
 #define UNITS_MODE_SHIFT		(8)
 #define UNITS_HUMAN_BINARY		(UNITS_BINARY)
@@ -109,6 +111,8 @@ void btrfs_list_all_fs_features(u64 mask_disallowed);
 char* btrfs_parse_fs_features(char *namelist, u64 *flags);
 void btrfs_process_fs_features(u64 flags);
 void btrfs_parse_features_to_string(char *buf, u64 flags);
+void print_kernel_version(FILE *stream, u32 version);
+u32 get_running_kernel_version(void);
 
 struct btrfs_mkfs_config {
 	char *label;
@@ -151,14 +155,15 @@ struct btrfs_convert_context {
 #define	PREP_DEVICE_DISCARD	(1U << 1)
 #define	PREP_DEVICE_VERBOSE	(1U << 2)
 
-int make_btrfs(int fd, struct btrfs_mkfs_config *cfg,
-		struct btrfs_convert_context *cctx);
+int make_btrfs(int fd, struct btrfs_mkfs_config *cfg);
+int make_convert_btrfs(int fd, struct btrfs_mkfs_config *cfg,
+			      struct btrfs_convert_context *cctx);
 int btrfs_make_root_dir(struct btrfs_trans_handle *trans,
 			struct btrfs_root *root, u64 objectid);
 int btrfs_prepare_device(int fd, const char *file, u64 *block_count_ret,
 		u64 max_block_count, unsigned opflags);
 int btrfs_add_to_fsid(struct btrfs_trans_handle *trans,
-		      struct btrfs_root *root, int fd, char *path,
+		      struct btrfs_root *root, int fd, const char *path,
 		      u64 block_count, u32 io_width, u32 io_align,
 		      u32 sectorsize);
 int btrfs_scan_for_fsid(int run_ioctls);
@@ -176,7 +181,6 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_bytes, unsigned unit_mo
 #define pretty_size(size) 	pretty_size_mode(size, UNITS_DEFAULT)
 const char *pretty_size_mode(u64 size, unsigned mode);
 
-int get_mountpt(char *dev, char *mntpt, size_t size);
 u64 parse_size(char *s);
 u64 parse_qgroupid(const char *p);
 u64 arg_strtou64(const char *str);
@@ -184,7 +188,7 @@ int arg_copy_path(char *dest, const char *src, int destlen);
 int open_file_or_dir(const char *fname, DIR **dirstream);
 int open_file_or_dir3(const char *fname, DIR **dirstream, int open_flags);
 void close_file_or_dir(int fd, DIR *dirstream);
-int get_fs_info(char *path, struct btrfs_ioctl_fs_info_args *fi_args,
+int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 		struct btrfs_ioctl_dev_info_args **di_ret);
 int get_label(const char *btrfs_dev, char *label);
 int set_label(const char *btrfs_dev, const char *label);
@@ -208,8 +212,8 @@ int is_vol_small(const char *file);
 int csum_tree_block(struct btrfs_root *root, struct extent_buffer *buf,
 			   int verify);
 int ask_user(const char *question);
-int lookup_ino_rootid(int fd, u64 *rootid);
-int btrfs_scan_lblkid(void);
+int lookup_path_rootid(int fd, u64 *rootid);
+int btrfs_scan_devices(void);
 int get_btrfs_mount(const char *dev, char *mp, size_t mp_size);
 int find_mount_root(const char *path, char **mount_root);
 int get_device_info(int fd, u64 devid,

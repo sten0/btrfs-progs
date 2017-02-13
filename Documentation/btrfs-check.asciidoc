@@ -20,7 +20,7 @@ by the option '--readonly'.
 
 *btrfsck* is an alias of *btrfs check* command and is now deprecated.
 
-WARNING: Do not use '--repair' unless you are adviced to by a developer, an
+WARNING: Do not use '--repair' unless you are advised to by a developer, an
 experienced user or accept the fact that 'fsck' cannot possibly fix all sorts
 of damage that could happen to a filesystem because of software and hardware
 bugs.
@@ -77,6 +77,20 @@ respective superblock offset is within the device size
 +
 This can be used to use a different starting point if some of the primary
 superblock is damaged.
+
+--clear-space-cache v1|v2::
+completely wipe all free space cache of given type
++
+For free space cache 'v1', the 'clear_cache' kernel mount option only rebuilds
+the free space cache for block groups that are modified while the filesystem is
+mounted with that option. Thus, using this option with 'v1' makes it possible
+to actually clear the entire free space cache.
++
+For free space cache 'v2', the 'clear_cache' kernel mount option does destroy
+the entire free space cache. This option with 'v2' provides an alternative
+method of clearing the free space cache that doesn't require mounting the
+filesystem.
+
 
 DANGEROUS OPTIONS
 -----------------

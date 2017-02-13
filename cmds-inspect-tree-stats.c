@@ -155,7 +155,7 @@ static int walk_nodes(struct btrfs_root *root, struct btrfs_path *path,
 					      root->nodesize,
 					      btrfs_node_ptr_generation(b, i));
 			if (!extent_buffer_uptodate(tmp)) {
-				fprintf(stderr, "Failed to read blocknr %llu\n",
+				error("failed to read blocknr %llu",
 					btrfs_node_blockptr(b, i));
 				continue;
 			}
@@ -175,7 +175,8 @@ static int walk_nodes(struct btrfs_root *root, struct btrfs_path *path,
 			if (stat->max_seek_len < distance)
 				stat->max_seek_len = distance;
 			if (add_seek(&stat->seek_root, distance)) {
-				fprintf(stderr, "Error adding new seek\n");
+				error("cannot add new seek at distance %llu",
+						(unsigned long long)distance);
 				ret = -ENOMEM;
 				break;
 			}
@@ -203,7 +204,7 @@ static int walk_nodes(struct btrfs_root *root, struct btrfs_path *path,
 			stat->highest_bytenr = cur_blocknr;
 		free_extent_buffer(tmp);
 		if (ret) {
-			fprintf(stderr, "Error walking down path\n");
+			error("walking down path failed: %d",  ret);
 			break;
 		}
 	}
@@ -312,7 +313,7 @@ static int calc_root_size(struct btrfs_root *tree_root, struct btrfs_key *key,
 			  int find_inline)
 {
 	struct btrfs_root *root;
-	struct btrfs_path *path;
+	struct btrfs_path path;
 	struct rb_node *n;
 	struct timeval start, end, diff = {0};
 	struct root_stats stat;
@@ -322,39 +323,34 @@ static int calc_root_size(struct btrfs_root *tree_root, struct btrfs_key *key,
 
 	root = btrfs_read_fs_root(tree_root->fs_info, key);
 	if (IS_ERR(root)) {
-		fprintf(stderr, "Failed to read root %llu\n", key->objectid);
+		error("failed to read root %llu", key->objectid);
 		return 1;
 	}
 
-	path = btrfs_alloc_path();
-	if (!path) {
-		fprintf(stderr, "Could not allocate path\n");
-		return 1;
-	}
-
+	btrfs_init_path(&path);
 	memset(&stat, 0, sizeof(stat));
 	level = btrfs_header_level(root->node);
 	stat.lowest_bytenr = btrfs_header_bytenr(root->node);
 	stat.highest_bytenr = stat.lowest_bytenr;
 	stat.min_cluster_size = (u64)-1;
 	stat.max_cluster_size = root->nodesize;
-	path->nodes[level] = root->node;
+	path.nodes[level] = root->node;
 	if (gettimeofday(&start, NULL)) {
-		fprintf(stderr, "Error getting time: %d\n", errno);
+		error("cannot get time: %s", strerror(errno));
 		goto out;
 	}
 	if (!level) {
-		ret = walk_leaf(root, path, &stat, find_inline);
+		ret = walk_leaf(root, &path, &stat, find_inline);
 		if (ret)
 			goto out;
 		goto out_print;
 	}
 
-	ret = walk_nodes(root, path, &stat, level, find_inline);
+	ret = walk_nodes(root, &path, &stat, level, find_inline);
 	if (ret)
 		goto out;
 	if (gettimeofday(&end, NULL)) {
-		fprintf(stderr, "Error getting time: %d\n", errno);
+		error("cannot get time: %s", strerror(errno));
 		goto out;
 	}
 	timeval_subtract(&diff, &end, &start);
@@ -416,13 +412,11 @@ out:
 	}
 
 	/*
-	 * We only use path to save node data in iterating,
-	 * without holding eb's ref_cnt in path.
-	 * Don't use btrfs_free_path() here, it will free these
-	 * eb again, and cause many problems, as negative ref_cnt
-	 * or invalid memory access.
+	 * We only use path to save node data in iterating, without holding
+	 * eb's ref_cnt in path.  Don't use btrfs_release_path() here, it will
+	 * free these eb again, and cause many problems, as negative ref_cnt or
+	 * invalid memory access.
 	 */
-	free(path);
 	return ret;
 }
 
@@ -468,7 +462,7 @@ int cmd_inspect_tree_stats(int argc, char **argv)
 
 	root = open_ctree(argv[optind], 0, 0);
 	if (!root) {
-		fprintf(stderr, "Couldn't open ctree\n");
+		error("cannot open ctree");
 		exit(1);
 	}
 
