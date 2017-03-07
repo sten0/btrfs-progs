@@ -1,1 +1,8 @@
 cross.patch
+0002-btrfs-progs-docs-fix-typo-in-receive-man-page.patch
+0003-btrfs-progs-better-document-btrfs-receive-security.patch
+0004-btrfs-progs-docs-fix-typo-in-btrfs-scrub-manual-page.patch
+0005-btrfs-progs-readme-fix-link-to-issue-tracker-on-gith.patch
+0006-btrfs-progs-docs-fix-typo-in-btrfs-quota.patch
+0007-btrfs-progs-docs-fix-typo-in-btrfs-quota.patch
+0008-btrfs-progs-docs-fix-many-typos-plus-three-edits-for.patch

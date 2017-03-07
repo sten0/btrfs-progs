@@ -1,0 +1,295 @@
+From: Nicholas D Steeves <nsteeves@gmail.com>
+Date: Tue, 21 Feb 2017 18:14:38 -0500
+Subject: btrfs-progs: docs: fix many typos, plus three edits for clarity
+
+Signed-off-by: Nicholas D Steeves <nsteeves@gmail.com>
+Signed-off-by: David Sterba <dsterba@suse.com>
+---
+ Documentation/btrfs-balance.asciidoc          |  2 +-
+ Documentation/btrfs-check.asciidoc            |  8 ++++----
+ Documentation/btrfs-device.asciidoc           |  6 +++---
+ Documentation/btrfs-filesystem.asciidoc       |  6 +++---
+ Documentation/btrfs-inspect-internal.asciidoc |  6 +++---
+ Documentation/btrfs-man5.asciidoc             | 15 ++++++++-------
+ Documentation/btrfs-quota.asciidoc            |  4 ++--
+ Documentation/btrfs-receive.asciidoc          |  4 ++--
+ Documentation/btrfs-restore.asciidoc          |  2 +-
+ Documentation/btrfs-scrub.asciidoc            |  9 ++++-----
+ Documentation/btrfs-send.asciidoc             |  6 +++---
+ 11 files changed, 34 insertions(+), 34 deletions(-)
+
+diff --git a/Documentation/btrfs-balance.asciidoc b/Documentation/btrfs-balance.asciidoc
+index c456898e..0b687eaf 100644
+--- a/Documentation/btrfs-balance.asciidoc
++++ b/Documentation/btrfs-balance.asciidoc
+@@ -89,7 +89,7 @@ warned and has a few seconds to cancel the operation before it starts. The
+ warning and delay can be skipped with '--full-balance' option.
+ +
+ Please note that the filters must be written together with the '-d', '-m' and
+-'-s' options, because they're optional and bare '-d' etc alwo work and mean no
++'-s' options, because they're optional and bare '-d' etc also work and mean no
+ filters.
+ +
+ `Options`
+diff --git a/Documentation/btrfs-check.asciidoc b/Documentation/btrfs-check.asciidoc
+index 633cbbf6..28ed9dd7 100644
+--- a/Documentation/btrfs-check.asciidoc
++++ b/Documentation/btrfs-check.asciidoc
+@@ -30,11 +30,11 @@ data structures satisfy the constraints, point to the right objects or are
+ correctly connected together.
+ 
+ There are several cross checks that can detect wrong reference counts of shared
+-extents, backrefrences, missing extents of inodes, directory and inode
++extents, backreferences, missing extents of inodes, directory and inode
+ connectivity etc.
+ 
+ The amount of memory required can be high, depending on the size of the
+-filesystem, smililarly the run time.
++filesystem, similarly the run time.
+ 
+ SAFE OR ADVISORY OPTIONS
+ ------------------------
+@@ -49,7 +49,7 @@ verify checksums of data blocks
+ +
+ This expects that the filesystem is otherwise
+ OK, so this is basically and offline 'scrub' but does not repair data from
+-spare coipes.
++spare copies.
+ 
+ --chunk-root <bytenr>::
+ use the given offset 'bytenr' for the chunk tree root
+@@ -111,7 +111,7 @@ NOTE: Do not use unless you know what you're doing.
+ select mode of operation regarding memory and IO
+ +
+ The 'MODE' can be one of 'original' and 'lowmem'. The original mode is mostly
+-unoptimized regarding memory consumpption and can lead to out-of-memory
++unoptimized regarding memory consumption and can lead to out-of-memory
+ conditions on large filesystems. The possible workaround is to export the block
+ device over network to a machine with enough memory. The low memory mode is
+ supposed to address the memory consumption, at the cost of increased IO when it
+diff --git a/Documentation/btrfs-device.asciidoc b/Documentation/btrfs-device.asciidoc
+index eedcac85..b7f27c44 100644
+--- a/Documentation/btrfs-device.asciidoc
++++ b/Documentation/btrfs-device.asciidoc
+@@ -24,14 +24,14 @@ similarity, the RAID terminology is widely used in the documentation.  See
+ constraints.
+ 
+ The device management works on a mounted filesystem. Devices can be added,
+-removed or replaced, by commands profided by *btrfs device* and *btrfs replace*.
++removed or replaced, by commands provided by *btrfs device* and *btrfs replace*.
+ 
+ The profiles can be also changed, provided there's enough workspace to do the
+ conversion, using the *btrfs balance* command and namely the filter 'convert'.
+ 
+ Profile::
+ A profile describes an allocation policy based on the redundancy/replication
+-constrants in connection with the number of devices. The profile applies to
++constraints in connection with the number of devices. The profile applies to
+ data and metadata block groups separately.
+ 
+ RAID level::
+@@ -182,7 +182,7 @@ blocks, the disk seeking is the key factor affecting performance.
+ 
+ You'll note that the system block group has been also converted to RAID1, this
+ normally happens as the system block group also holds metadata (the physical to
+-logial mappings).
++logical mappings).
+ 
+ What changed:
+ 
+diff --git a/Documentation/btrfs-filesystem.asciidoc b/Documentation/btrfs-filesystem.asciidoc
+index 0f7ea495..d57f28fb 100644
+--- a/Documentation/btrfs-filesystem.asciidoc
++++ b/Documentation/btrfs-filesystem.asciidoc
+@@ -14,7 +14,7 @@ DESCRIPTION
+ *btrfs filesystem* is used to perform several whole filesystem level tasks,
+ including all the regular filesystem operations like resizing, space stats,
+ label setting/getting, and defragmentation. There are other whole filesystem
+-taks like scrub or balance that are grouped in separate commands.
++tasks like scrub or balance that are grouped in separate commands.
+ 
+ SUBCOMMAND
+ ----------
+@@ -120,7 +120,7 @@ defragment files recursively in given directories
+ flush data for each file before going to the next file.
+ +
+ This will limit the amount of dirty data to current file, otherwise the amount
+-cumulates from several files and will increase system load. This can also lead
++accumulates from several files and will increase system load. This can also lead
+ to ENOSPC if there's too much dirty data to write and it's not possible to make
+ the reservations for the new data (ie. how the COW design works).
+ +
+@@ -196,7 +196,7 @@ If the prefix '+' or '-' is present the size is increased or decreased
+ by the quantity 'size'.
+ If no units are specified, bytes are assumed for 'size'.
+ Optionally, the size parameter may be suffixed by one of the following
+-units designators: \'K', \'M', \'G', \'T', \'P', or \'E', which represent
++unit designators: \'K', \'M', \'G', \'T', \'P', or \'E', which represent
+ KiB, MiB, GiB, TiB, PiB, or EiB, respectively (case does not matter).
+ +
+ If 'max' is passed, the filesystem will occupy all available space on the
+diff --git a/Documentation/btrfs-inspect-internal.asciidoc b/Documentation/btrfs-inspect-internal.asciidoc
+index 44615e76..62b10294 100644
+--- a/Documentation/btrfs-inspect-internal.asciidoc
++++ b/Documentation/btrfs-inspect-internal.asciidoc
+@@ -26,7 +26,7 @@ Show btrfs superblock information stored on given devices in textual form.
+ By default the first superblock is printed, more details about all copies or
+ additional backup data can be printed.
+ +
+-Besides verifictaion of the filesystem signature, there are no other sanity
++Besides verification of the filesystem signature, there are no other sanity
+ checks. The superblock checksum status is reported, the device item and
+ filesystem UUIDs are checked and reported.
+ +
+@@ -51,8 +51,8 @@ for debugging (disables the '-f' option)
+ If there are multiple options specified, only the last one applies.
+ +
+ -F|--force::::
+-attempt to print the superblock even if thre's no valid BTRFS signature found,
+-the result may be completely wrong if the data do not resemble a superblock
++attempt to print the superblock even if a valid BTRFS signature is not found;
++the result may be completely wrong if the data does not resemble a superblock
+ +
+ -s|--super <bytenr>::::
+ (see compatibility note above)
+diff --git a/Documentation/btrfs-man5.asciidoc b/Documentation/btrfs-man5.asciidoc
+index acc4e429..c8ef1c96 100644
+--- a/Documentation/btrfs-man5.asciidoc
++++ b/Documentation/btrfs-man5.asciidoc
+@@ -314,9 +314,10 @@ normally be needed.
+ *skip_balance*::
+ (since: 3.3, default: off)
+ +
+-Skip automatic resume of interrupted balance operation after mount.
+-May be resumed with *btrfs balance resume* or the paused state can be removed
+-by *btrfs balance cancel*. The default behaviour is to start interrutpd balance.
++Skip automatic resume of an interrupted balance operation. The operation can
++later be resumed with *btrfs balance resume*, or the paused state can be
++removed with *btrfs balance cancel*. The default behaviour is to resume an
++interrupted balance immediately after a volume is mounted.
+ 
+ *space_cache*::
+ *space_cache='version'*::
+@@ -440,9 +441,9 @@ dump-super device* will dump a superblock, you can map the value of
+ 
+ after mkfs, on a mounted filesystem::
+ The features of a filesystem (with a given UUID) are listed in
+-`/sys/fs/btrfs/UUID/features/`, one file per feature. The status of is stored
+-insid the file. The value '1' is for enabled, '0' means the feature had
+-been enabled at the mount time and turned off afterwards.
++`/sys/fs/btrfs/UUID/features/`, one file per feature. The status is stored
++inside the file. The value '1' is for enabled and active, while '0' means the
++feature was enabled at mount time but turned off afterwards.
+ +
+ Whether a particular feature can be turned on a mounted filesystem can be found
+ in the directory `/sys/fs/btrfs/features/`, one file per feature. The value '1'
+@@ -567,7 +568,7 @@ crw------- 1 root root 10, 234 Jan  1 12:00 /dev/btrfs-control
+ --------------------
+ 
+ The device accepts some ioctl calls that can perform following actions on the
+-filesyste module:
++filesystem module:
+ 
+ * scan devices for btrfs filesystem (ie. to let multi-device filesystems mount
+   automatically) and register them with the kernel module
+diff --git a/Documentation/btrfs-quota.asciidoc b/Documentation/btrfs-quota.asciidoc
+index 56c1d19b..ef2e5d33 100644
+--- a/Documentation/btrfs-quota.asciidoc
++++ b/Documentation/btrfs-quota.asciidoc
+@@ -84,7 +84,7 @@ from within this qgroup.
+ SUBVOLUME QUOTA GROUPS
+ ~~~~~~~~~~~~~~~~~~~~~~
+ 
+-The basic notion of the Subvolume Quota feature is the qouta group, short
++The basic notion of the Subvolume Quota feature is the quota group, short
+ qgroup.  Qgroups are notated as 'level/id', eg.  the qgroup 3/2 is a qgroup of
+ level 3. For level 0, the leading '0/' can be omitted.
+ Qgroups of level 0 get created automatically when a subvolume/snapshot gets
+@@ -182,7 +182,7 @@ when the subvolume is deleted.
+ 
+ When you have several users on a machine, with home directories probably under
+ /home, you might want to restrict /home as a whole, while restricting every
+-user to an indiviual limit as well.  This is easily accomplished by creating a
++user to an individual limit as well.  This is easily accomplished by creating a
+ qgroup for /home , eg. 1/1, and assigning all user subvolumes to it.
+ Restricting this qgroup will limit /home, while every user subvolume can get
+ its own (lower) limit.
+diff --git a/Documentation/btrfs-receive.asciidoc b/Documentation/btrfs-receive.asciidoc
+index 822b2687..1f6847a9 100644
+--- a/Documentation/btrfs-receive.asciidoc
++++ b/Documentation/btrfs-receive.asciidoc
+@@ -31,7 +31,7 @@ the stream, and print the stream metadata, one operation per line.
+ 
+ 3. default subvolume has changed or you didn't mount the filesystem at the toplevel subvolume
+ 
+-A subvolume is made read-only after the receiving process finishes succesfully (see BUGS below).
++A subvolume is made read-only after the receiving process finishes successfully (see BUGS below).
+ 
+ `Options`
+ 
+@@ -66,7 +66,7 @@ tell us where this filesystem is mounted.
+ --dump::
+ dump the stream metadata, one line per operation
+ +
+-Does not require the 'path' parameter. The filesystem chanded.
++Does not require the 'path' parameter. The filesystem remains unchanged.
+ 
+ BUGS
+ ----
+diff --git a/Documentation/btrfs-restore.asciidoc b/Documentation/btrfs-restore.asciidoc
+index 41e90e2f..090dcc55 100644
+--- a/Documentation/btrfs-restore.asciidoc
++++ b/Documentation/btrfs-restore.asciidoc
+@@ -36,7 +36,7 @@ https://btrfs.wiki.kernel.org/index.php/Restore
+ OPTIONS
+ -------
+ -s|--snapshots::
+-get also snapshots that are skippped by default
++get also snapshots that are skipped by default
+ 
+ -x|--xattr::
+ get extended attributes
+diff --git a/Documentation/btrfs-scrub.asciidoc b/Documentation/btrfs-scrub.asciidoc
+index 149c9bd9..eb90a1c4 100644
+--- a/Documentation/btrfs-scrub.asciidoc
++++ b/Documentation/btrfs-scrub.asciidoc
+@@ -25,11 +25,10 @@ default 'idle' so background scrub should not interfere with normal filesystem
+ operation significantly.
+ 
+ The scrubbing status is recorded in '/var/lib/btrfs/' in textual files named
+-'scrub.status.UUID' for a filesystem identified by the given UUID. (An
+-itermediate progress is communicated through a named pipe in file
+-'scrub.progress.UUID' in the same directory.) The status file is updated
+-periodically every 5 seconds. A resumed scrub will continue from the last
+-saved position.
++'scrub.status.UUID' for a filesystem identified by the given UUID. (Progress
++state is communicated through a named pipe in file 'scrub.progress.UUID' in the
++same directory.) The status file is updated every 5 seconds. A resumed scrub
++will continue from the last saved position.
+ 
+ SUBCOMMAND
+ ----------
+diff --git a/Documentation/btrfs-send.asciidoc b/Documentation/btrfs-send.asciidoc
+index 96659eed..1c5ccbe6 100644
+--- a/Documentation/btrfs-send.asciidoc
++++ b/Documentation/btrfs-send.asciidoc
+@@ -45,8 +45,8 @@ send an incremental stream from 'parent' to 'subvol'
+ -c <clone-src>::
+ use this snapshot as a clone source for an incremental send (multiple allowed)
+ -f <outfile>::
+-output is normally written to standard outout so it can be eg. piped to
+-receive, use this option to write it to a file
++output is normally written to standard output so it can be, for example, piped
++to btrfs receive. Use this option to write it to a file instead.
+ --no-data::
+ send in 'NO_FILE_DATA' mode
+ +
+@@ -58,7 +58,7 @@ useful to show the differences in metadata.
+ enable verbose output, print generated commands in a readable form, (each
+ occurrence of this option increases the verbosity level)
+ -q|--quiet::
+-suppress all messagese except errors
++suppress all messages except errors
+ 
+ EXIT STATUS
+ -----------

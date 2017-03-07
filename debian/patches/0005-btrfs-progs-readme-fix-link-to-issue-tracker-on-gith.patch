@@ -1,0 +1,26 @@
+From: =?utf-8?q?Matthias_Kr=C3=BCger?= <matthias.krueger@famsik.de>
+Date: Sat, 18 Feb 2017 11:11:33 +0100
+Subject: btrfs-progs: readme: fix link to issue tracker on github.
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Matthias Krüger <matthias.krueger@famsik.de>
+Signed-off-by: David Sterba <dsterba@suse.com>
+---
+ README.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index b9d3d913..1dce8f8c 100644
+--- a/README.md
++++ b/README.md
+@@ -41,7 +41,7 @@ feedback or work on a fix.
+   report
+ * to the mailing list *linux-btrfs@vger.kernel.org* -- (not required to
+   subscribe), beware that the mail might get overlooked in other traffic
+-* [github issue tracker](https://github.com/kdave/btrfs-sprogs/issues)
++* [github issue tracker](https://github.com/kdave/btrfs-progs/issues)
+ * IRC (irc.freenode.net #btrfs) -- good for discussions eg. if a bug is already
+   known, but reports could miss developers' attention
+ 
