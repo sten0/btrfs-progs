@@ -1,3 +1,12 @@
+btrfs-progs (4.9.1-1.1) unstable; urgency=medium
+
+  * d/control: add whitespace (cosmetic fix)
+  * Update changelog for new release
+  * Update copyright for new locations of: radix-tree.c and radix-tree.h
+  * Backport upstream fixes for documentation
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Mon, 06 Mar 2017 22:37:41 -0500
+
 btrfs-progs (4.9.1-1) unstable; urgency=medium
 
   [ Dimitri John Ledkov ]
