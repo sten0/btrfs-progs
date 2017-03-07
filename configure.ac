@@ -55,8 +55,8 @@ dnl
 dnl Calls pkg-config --static
 dnl
 AC_DEFUN([PKG_STATIC], [
-  if AC_RUN_LOG([$PKG_CONFIG --exists --print-errors "$2"]); then
-    $1=`$PKG_CONFIG --libs --static "$2"`
+  if AC_RUN_LOG([pkg-config --exists --print-errors "$2"]); then
+    $1=`pkg-config --libs --static "$2"`
     AC_SUBST([$1])
   else
     AC_MSG_ERROR([pkg-config description of $2, needed for static build, is not available])
@@ -173,8 +173,8 @@ PKG_STATIC(ZLIB_LIBS_STATIC, [zlib])
 # Our udev rule gives us the friendly dm names but isn't required (or valid)
 # on earlier releases.
 UDEVDIR=
-if $PKG_CONFIG udev --atleast-version 190; then
-	UDEVDIR="$($PKG_CONFIG udev --variable=udevdir)"
+if pkg-config udev --atleast-version 190; then
+	UDEVDIR="$(pkg-config udev --variable=udevdir)"
 fi
 AC_SUBST(UDEVDIR)
 
