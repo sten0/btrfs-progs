@@ -118,7 +118,7 @@ static void print_tree_block_error(struct btrfs_fs_info *fs_info,
 	}
 }
 
-u32 btrfs_csum_data(struct btrfs_root *root, char *data, u32 seed, size_t len)
+u32 btrfs_csum_data(char *data, u32 seed, size_t len)
 {
 	return crc32c(seed, data, len);
 }
@@ -207,7 +207,7 @@ void readahead_tree_block(struct btrfs_root *root, u64 bytenr, u32 blocksize,
 			     bytenr, &length, &multi, 0, NULL)) {
 		device = multi->stripes[0].dev;
 		device->total_ios++;
-		blocksize = min(blocksize, (u32)(64 * 1024));
+		blocksize = min(blocksize, (u32)SZ_64K);
 		readahead(device->fd, multi->stripes[0].physical, blocksize);
 	}
 
@@ -426,9 +426,7 @@ err:
 	return ret;
 }
 
-int write_and_map_eb(struct btrfs_trans_handle *trans,
-		     struct btrfs_root *root,
-		     struct extent_buffer *eb)
+int write_and_map_eb(struct btrfs_root *root, struct extent_buffer *eb)
 {
 	int ret;
 	int dev_nr;
@@ -475,7 +473,7 @@ int write_tree_block(struct btrfs_trans_handle *trans,
 	btrfs_set_header_flag(eb, BTRFS_HEADER_FLAG_WRITTEN);
 	csum_tree_block(root, eb, 0);
 
-	return write_and_map_eb(trans, root, eb);
+	return write_and_map_eb(root, eb);
 }
 
 void btrfs_setup_root(u32 nodesize, u32 leafsize, u32 sectorsize,
@@ -617,7 +615,7 @@ commit_tree:
 	write_ctree_super(trans, root);
 	btrfs_finish_extent_commit(trans, fs_info->extent_root,
 			           &fs_info->pinned_extents);
-	btrfs_free_transaction(root, trans);
+	kfree(trans);
 	free_extent_buffer(root->commit_root);
 	root->commit_root = NULL;
 	fs_info->running_transaction = NULL;
@@ -1463,7 +1461,7 @@ static int check_super(struct btrfs_super_block *sb, unsigned sbflags)
 	csum_size = btrfs_csum_sizes[csum_type];
 
 	crc = ~(u32)0;
-	crc = btrfs_csum_data(NULL, (char *)sb + BTRFS_CSUM_SIZE, crc,
+	crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE, crc,
 			      BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
 	btrfs_csum_final(crc, result);
 
@@ -1669,7 +1667,7 @@ static int write_dev_supers(struct btrfs_root *root,
 	if (root->fs_info->super_bytenr != BTRFS_SUPER_INFO_OFFSET) {
 		btrfs_set_super_bytenr(sb, root->fs_info->super_bytenr);
 		crc = ~(u32)0;
-		crc = btrfs_csum_data(NULL, (char *)sb + BTRFS_CSUM_SIZE, crc,
+		crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE, crc,
 				      BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
 		btrfs_csum_final(crc, &sb->csum[0]);
 
@@ -1693,7 +1691,7 @@ static int write_dev_supers(struct btrfs_root *root,
 		btrfs_set_super_bytenr(sb, bytenr);
 
 		crc = ~(u32)0;
-		crc = btrfs_csum_data(NULL, (char *)sb + BTRFS_CSUM_SIZE, crc,
+		crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE, crc,
 				      BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
 		btrfs_csum_final(crc, &sb->csum[0]);
 
@@ -1801,7 +1799,7 @@ int close_ctree_fs_info(struct btrfs_fs_info *fs_info)
 		ret = __commit_transaction(trans, root);
 		BUG_ON(ret);
 		write_ctree_super(trans, root);
-		btrfs_free_transaction(root, trans);
+		kfree(trans);
 	}
 
 	if (fs_info->finalize_on_close) {
@@ -1817,22 +1815,16 @@ int close_ctree_fs_info(struct btrfs_fs_info *fs_info)
 	free_fs_roots_tree(&fs_info->fs_root_tree);
 
 	btrfs_release_all_roots(fs_info);
-	btrfs_close_devices(fs_info->fs_devices);
+	ret = btrfs_close_devices(fs_info->fs_devices);
 	btrfs_cleanup_all_caches(fs_info);
 	btrfs_free_fs_info(fs_info);
-	return 0;
+	return ret;
 }
 
 int clean_tree_block(struct btrfs_trans_handle *trans, struct btrfs_root *root,
 		     struct extent_buffer *eb)
 {
 	return clear_extent_buffer_dirty(eb);
-}
-
-int wait_on_tree_block_writeback(struct btrfs_root *root,
-				 struct extent_buffer *eb)
-{
-	return 0;
 }
 
 void btrfs_mark_buffer_dirty(struct extent_buffer *eb)
