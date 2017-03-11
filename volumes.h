@@ -22,7 +22,7 @@
 #include "kerncompat.h"
 #include "ctree.h"
 
-#define BTRFS_STRIPE_LEN	(64 * 1024)
+#define BTRFS_STRIPE_LEN	SZ_64K
 
 struct btrfs_device {
 	struct list_head dev_list;
@@ -230,8 +230,7 @@ int btrfs_scan_one_device(int fd, const char *path,
 			  u64 *total_devs, u64 super_offset, unsigned sbflags);
 int btrfs_num_copies(struct btrfs_mapping_tree *map_tree, u64 logical, u64 len);
 struct list_head *btrfs_scanned_uuids(void);
-int btrfs_add_system_chunk(struct btrfs_trans_handle *trans,
-			   struct btrfs_root *root, struct btrfs_key *key,
+int btrfs_add_system_chunk(struct btrfs_root *root, struct btrfs_key *key,
 			   struct btrfs_chunk *chunk, int item_size);
 int btrfs_chunk_readonly(struct btrfs_root *root, u64 chunk_offset);
 struct btrfs_device *

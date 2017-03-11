@@ -34,6 +34,7 @@
 #include "cmds-inspect-dump-tree.h"
 #include "cmds-inspect-dump-super.h"
 #include "cmds-inspect-tree-stats.h"
+#include "help.h"
 
 static const char * const inspect_cmd_group_usage[] = {
 	"btrfs inspect-internal <command> <args>",
@@ -173,7 +174,7 @@ static int cmd_inspect_logical_resolve(int argc, char **argv)
 	if (check_argc_exact(argc - optind, 2))
 		usage(cmd_inspect_logical_resolve_usage);
 
-	size = min(size, (u64)64 * 1024);
+	size = min(size, (u64)SZ_64K);
 	inodes = malloc(size);
 	if (!inodes)
 		return 1;
@@ -486,7 +487,7 @@ static void adjust_dev_min_size(struct list_head *extents,
 		 * chunk tree, so often this can lead to the need of allocating
 		 * a new system chunk too, which has a maximum size of 32Mb.
 		 */
-		*min_size += 32 * 1024 * 1024;
+		*min_size += SZ_32M;
 	}
 }
 
@@ -500,7 +501,7 @@ static int print_min_dev_size(int fd, u64 devid)
 	 * possibility of deprecating/removing it has been discussed, so we
 	 * ignore it here.
 	 */
-	u64 min_size = 1 * 1024 * 1024ull;
+	u64 min_size = SZ_1M;
 	struct btrfs_ioctl_search_args args;
 	struct btrfs_ioctl_search_key *sk = &args.key;
 	u64 last_pos = (u64)-1;

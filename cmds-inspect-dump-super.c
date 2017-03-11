@@ -34,13 +34,14 @@
 #include "commands.h"
 #include "crc32c.h"
 #include "cmds-inspect-dump-super.h"
+#include "help.h"
 
 static int check_csum_sblock(void *sb, int csum_size)
 {
 	u8 result[BTRFS_CSUM_SIZE];
 	u32 crc = ~(u32)0;
 
-	crc = btrfs_csum_data(NULL, (char *)sb + BTRFS_CSUM_SIZE,
+	crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE,
 				crc, BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
 	btrfs_csum_final(crc, result);
 
