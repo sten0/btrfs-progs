@@ -1,3 +1,15 @@
+btrfs-progs (4.10-0.1) unstable; urgency=medium
+
+  * Non-maintainer upload
+  * New upstream version
+  * Drop redundant patches for documentation (merged upstream)
+  * Override dh_auto_clean to work around upstream bug where make clean
+    cannot be run before ./configure
+  * Drop btrfs-convert (Closes: #824895, #854489)
+  * Move all binaries back to /sbin (Closes: #786893)
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Sat, 11 Mar 2017 21:53:44 -0500
+
 btrfs-progs (4.9.1-1.1) unstable; urgency=medium
 
   * d/control: add whitespace (cosmetic fix)
