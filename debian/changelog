@@ -1,3 +1,9 @@
+btrfs-progs (4.10.1+dfsg-0.2) unstable; urgency=medium
+
+  * debian/watch: Add dversionmangle to handle dfsg version suffix
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Sun, 19 Mar 2017 16:06:08 -0400
+
 btrfs-progs (4.10.1+dfsg-0.1) unstable; urgency=medium
 
   * Non-maintainer upload
