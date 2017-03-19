@@ -1,3 +1,16 @@
+btrfs-progs (4.10.1+dfsg-0.1) unstable; urgency=medium
+
+  * Non-maintainer upload
+  * New upstream version
+  * debian/copyright
+    - Exclude non-free-RFC-BCP78 files (affects test suite)
+    - Update Source, because Chris Mason's branch has not been updated
+      since v4.4
+    - 4.6.1-1 did not fix license.  Btrfs-progs is explicitly GPL2
+      and not GPL2+
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Sun, 19 Mar 2017 15:26:37 -0400
+
 btrfs-progs (4.10-0.1) unstable; urgency=medium
 
   * Non-maintainer upload
