@@ -1,8 +1,8 @@
-btrfs-progs (4.10.1+dfsg-0.1~bpo8+1) jessie-backports; urgency=medium
+btrfs-progs (4.10.1+dfsg-0.2) unstable; urgency=medium
 
-  * Rebuild for jessie-backports.
+  * debian/watch: Add dversionmangle to handle dfsg version suffix
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Sun, 19 Mar 2017 15:45:42 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Sun, 19 Mar 2017 16:06:08 -0400
 
 btrfs-progs (4.10.1+dfsg-0.1) unstable; urgency=medium
 
