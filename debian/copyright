@@ -5,7 +5,7 @@ Files-Excluded: tests/sha224-256.c tests/sha.h tests/sha-private.h
 
 Files: *
 Copyright: 2007-2012 Oracle <http://www.oracle.com/>
-License: GPL-2+
+License: GPL-2
 
 Files: radix-tree.c
 Copyright: 2007-2009 Oracle <http://www.oracle.com/>
