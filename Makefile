@@ -108,7 +108,7 @@ libbtrfs_objects = send-stream.o send-utils.o kernel-lib/rbtree.o btrfs-list.o \
 		   uuid-tree.o utils-lib.o rbtree-utils.o
 libbtrfs_headers = send-stream.h send-utils.h send.h kernel-lib/rbtree.h btrfs-list.h \
 	       kernel-lib/crc32c.h kernel-lib/list.h kerncompat.h \
-	       kernel-lib/radix-tree.h extent-cache.h \
+	       kernel-lib/radix-tree.h kernel-lib/sizes.h extent-cache.h \
 	       extent_io.h ioctl.h ctree.h btrfsck.h version.h
 convert_objects = convert/main.o convert/common.o convert/source-fs.o \
 		  convert/source-ext2.o
@@ -276,7 +276,7 @@ test-fsck: btrfs btrfs-image btrfs-corrupt-block mkfs.btrfs
 	@echo "    [TEST]   fsck-tests.sh"
 	$(Q)bash tests/fsck-tests.sh
 
-test-misc: btrfs btrfs-image btrfs-corrupt-block mkfs.btrfs btrfstune
+test-misc: btrfs btrfs-image btrfs-corrupt-block mkfs.btrfs btrfstune fssum
 	@echo "    [TEST]   misc-tests.sh"
 	$(Q)bash tests/misc-tests.sh
 
@@ -446,17 +446,29 @@ test-ioctl: ioctl-test ioctl-test-32 ioctl-test-64
 	$(Q)./ioctl-test-32 > ioctl-test-32.log
 	$(Q)./ioctl-test-64 > ioctl-test-64.log
 
-library-test: library-test.o messages.o $(libs_shared)
-	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -Wl,-rpath=$(TOPDIR) -lbtrfs
-	@echo "    [TEST]   $@"
-	$(Q)./$@
+library-test: library-test.c messages.o $(libs_shared)
+	@echo "    [TEST PREP]  $@"$(eval TMPD=$(shell mktemp -d))
+	$(Q)mkdir -p $(TMPD)/include/btrfs && \
+	cp $(libbtrfs_headers) $(TMPD)/include/btrfs && \
+	cd $(TMPD) && $(CC) -I$(TMPD)/include -o $@ $(addprefix $(TOPDIR)/,$^) -Wl,-rpath=$(TOPDIR) -lbtrfs
+	@echo "    [TEST RUN]   $@"
+	$(Q)cd $(TMPD) && ./$@
+	@echo "    [TEST CLEAN] $@"
+	$(Q)$(RM) -rf -- $(TMPD)
 
-library-test.static: library-test.static.o messages.static.o $(libs_static)
-	@echo "    [LD]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ $^ $(STATIC_LDFLAGS) $(libs_static) $(STATIC_LIBS)
-	@echo "    [TEST]   $@"
-	$(Q)./$@
+library-test.static: library-test.c messages.static.o $(libs_static)
+	@echo "    [TEST PREP]  $@"$(eval TMPD=$(shell mktemp -d))
+	$(Q)mkdir -p $(TMPD)/include/btrfs && \
+	cp $(libbtrfs_headers) $(TMPD)/include/btrfs && \
+	cd $(TMPD) && $(CC) -I$(TMPD)/include -o $@ $(addprefix $(TOPDIR)/,$^) $(STATIC_LDFLAGS) $(STATIC_LIBS)
+	@echo "    [TEST RUN]   $@"
+	$(Q)cd $(TMPD) && ./$@
+	@echo "    [TEST CLEAN] $@"
+	$(Q)$(RM) -rf -- $(TMPD)
+
+fssum: tests/fssum.c tests/sha224-256.c
+	@echo "    [LD]   $@"
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test-build: test-build-pre test-build-real
 
@@ -494,7 +506,7 @@ clean: $(CLEANDIRS)
 		convert/*.o convert/*.o.d \
 		mkfs/*.o mkfs/*.o.d \
 	      dir-test ioctl-test quick-test library-test library-test-static \
-	      btrfs.static mkfs.btrfs.static \
+	      btrfs.static mkfs.btrfs.static fssum \
 	      $(check_defs) \
 	      $(libs) $(lib_links) \
 	      $(progs_static) $(progs_extra)
