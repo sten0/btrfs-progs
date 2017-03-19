@@ -4,7 +4,7 @@ Source: https://git.kernel.org/pub/scm/linux/kernel/git/kdave/btrfs-progs.git
 
 Files: *
 Copyright: 2007-2012 Oracle <http://www.oracle.com/>
-License: GPL-2+
+License: GPL-2
 
 Files: radix-tree.c
 Copyright: 2007-2009 Oracle <http://www.oracle.com/>
