@@ -35,6 +35,7 @@
 #include "utils.h"
 #include "volumes.h"
 #include "extent_io.h"
+#include "help.h"
 
 #define HEADER_MAGIC		0xbd5c25e27295668bULL
 #define MAX_PENDING_SIZE	(256 * 1024)
@@ -1128,8 +1129,7 @@ static int copy_tree_blocks(struct btrfs_root *root, struct extent_buffer *eb,
 }
 
 static int copy_log_trees(struct btrfs_root *root,
-			  struct metadump_struct *metadump,
-			  struct btrfs_path *path)
+			  struct metadump_struct *metadump)
 {
 	u64 blocknr = btrfs_super_log_root(root->fs_info->super_copy);
 
@@ -1374,7 +1374,7 @@ static int create_metadump(const char *input, FILE *out, int num_threads,
 		}
 	}
 
-	ret = copy_log_trees(root, &metadump, &path);
+	ret = copy_log_trees(root, &metadump);
 	if (ret) {
 		err = ret;
 		goto out;

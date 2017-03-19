@@ -22,6 +22,7 @@
 #include "crc32c.h"
 #include "commands.h"
 #include "utils.h"
+#include "help.h"
 
 static const char * const btrfs_cmd_group_usage[] = {
 	"btrfs [--help] [--version] <group> [<group>...] <command> [<args>]",
@@ -211,6 +212,8 @@ int main(int argc, char **argv)
 	const struct cmd_struct *cmd;
 	const char *bname;
 	int ret;
+
+	btrfs_config_init();
 
 	if ((bname = strrchr(argv[0], '/')) != NULL)
 		bname++;

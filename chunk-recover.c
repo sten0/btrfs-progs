@@ -1115,8 +1115,8 @@ static int block_group_free_all_extent(struct btrfs_root *root,
 	end = start + cache->key.offset - 1;
 
 	set_extent_bits(&info->block_group_cache, start, end,
-			BLOCK_GROUP_DIRTY, GFP_NOFS);
-	set_extent_dirty(&info->free_space_cache, start, end, GFP_NOFS);
+			BLOCK_GROUP_DIRTY);
+	set_extent_dirty(&info->free_space_cache, start, end);
 
 	btrfs_set_block_group_used(&cache->item, 0);
 
@@ -1309,7 +1309,7 @@ static int rebuild_sys_array(struct recover_control *rc,
 		key.type = BTRFS_CHUNK_ITEM_KEY;
 		key.offset = chunk_rec->offset;
 
-		ret = btrfs_add_system_chunk(NULL, root, &key, chunk,
+		ret = btrfs_add_system_chunk(root, &key, chunk,
 				btrfs_chunk_item_size(num_stripes));
 		free(chunk);
 		if (ret)
@@ -1911,7 +1911,7 @@ static int check_one_csum(int fd, u64 start, u32 len, u32 tree_csum)
 		goto out;
 	}
 	ret = 0;
-	csum_result = btrfs_csum_data(NULL, data, csum_result, len);
+	csum_result = btrfs_csum_data(data, csum_result, len);
 	btrfs_csum_final(csum_result, (u8 *)&csum_result);
 	if (csum_result != tree_csum)
 		ret = 1;

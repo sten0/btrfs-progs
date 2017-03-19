@@ -1,2 +1,2 @@
-btrfs		/bin
-mkfs.btrfs	/bin
+btrfs		/sbin
+mkfs.btrfs	/sbin

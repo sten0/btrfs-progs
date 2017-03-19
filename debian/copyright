@@ -1,10 +1,11 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Contact: linux-btrfs@vger.kernel.org
-Source: http://git.kernel.org/?p=linux/kernel/git/mason/btrfs-progs.git
+Source: https://git.kernel.org/pub/scm/linux/kernel/git/kdave/btrfs-progs.git
+Files-Excluded: tests/sha224-256.c tests/sha.h tests/sha-private.h
 
 Files: *
 Copyright: 2007-2012 Oracle <http://www.oracle.com/>
-License: GPL-2+
+License: GPL-2
 
 Files: kernel-lib/radix-tree.c
 Copyright: 2007-2009 Oracle <http://www.oracle.com/>

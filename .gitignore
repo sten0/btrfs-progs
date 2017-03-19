@@ -41,6 +41,7 @@ libbtrfs.so.0
 libbtrfs.so.0.1
 library-test
 library-test-static
+/fssum
 
 /tests/*-tests-results.txt
 /tests/test-console.txt
@@ -67,7 +68,7 @@ cscope.out
 .clang_complete
 depcomp
 libtool
-Makefile
+Makefile.inc
 Documentation/Makefile
 missing
 mkinstalldirs
@@ -76,3 +77,4 @@ stamp-h.in
 stamp-h1
 config/*
 
+.pc

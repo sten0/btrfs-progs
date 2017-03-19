@@ -43,6 +43,9 @@
 #include "transaction.h"
 #include "utils.h"
 #include "list_sort.h"
+#include "help.h"
+#include "mkfs/common.h"
+#include "fsfeatures.h"
 
 static u64 index_cnt = 2;
 static int verbose = 1;
@@ -158,8 +161,8 @@ err:
 	return ret;
 }
 
-static int make_root_dir(struct btrfs_trans_handle *trans, struct btrfs_root *root,
-		struct mkfs_allocation *allocation)
+static int make_root_dir(struct btrfs_trans_handle *trans,
+		struct btrfs_root *root)
 {
 	struct btrfs_key location;
 	int ret;
@@ -541,8 +544,8 @@ static u64 calculate_dir_inode_size(const char *dirname)
 static int add_inode_items(struct btrfs_trans_handle *trans,
 			   struct btrfs_root *root,
 			   struct stat *st, const char *name,
-			   u64 self_objectid, ino_t parent_inum,
-			   int dir_index_cnt, struct btrfs_inode_item *inode_ret)
+			   u64 self_objectid,
+			   struct btrfs_inode_item *inode_ret)
 {
 	int ret;
 	struct btrfs_inode_item btrfs_inode;
@@ -642,8 +645,7 @@ fail:
 static int add_file_items(struct btrfs_trans_handle *trans,
 			  struct btrfs_root *root,
 			  struct btrfs_inode_item *btrfs_inode, u64 objectid,
-			  ino_t parent_inum, struct stat *st,
-			  const char *path_name, int out_fd)
+			  struct stat *st, const char *path_name)
 {
 	int ret = -1;
 	ssize_t ret_read;
@@ -751,7 +753,7 @@ again:
 		if (ret)
 			goto end;
 
-		ret = write_and_map_eb(trans, root, eb);
+		ret = write_and_map_eb(root, eb);
 		if (ret) {
 			error("failed to write %s", path_name);
 			goto end;
@@ -901,7 +903,6 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 
 			ret = add_inode_items(trans, root, &st,
 					      cur_file->d_name, cur_inum,
-					      parent_inum, dir_index_cnt,
 					      &cur_inode);
 			if (ret == -EEXIST) {
 				if (st.st_nlink <= 1) {
@@ -941,8 +942,8 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 				list_add_tail(&dir_entry->list,	&dir_head->list);
 			} else if (S_ISREG(st.st_mode)) {
 				ret = add_file_items(trans, root, &cur_inode,
-						     cur_inum, parent_inum, &st,
-						     cur_file->d_name, out_fd);
+						     cur_inum, &st,
+						     cur_file->d_name);
 				if (ret) {
 					error("unable to add file items for %s: %d",
 						cur_file->d_name, ret);
@@ -1003,7 +1004,7 @@ static int create_chunks(struct btrfs_trans_handle *trans,
 		if (ret)
 			return ret;
 		set_extent_dirty(&root->fs_info->free_space_cache,
-				 chunk_start, chunk_start + chunk_size - 1, 0);
+				 chunk_start, chunk_start + chunk_size - 1);
 	}
 
 	if (size_of_data < minimum_data_chunk_size)
@@ -1020,7 +1021,7 @@ static int create_chunks(struct btrfs_trans_handle *trans,
 	if (ret)
 		return ret;
 	set_extent_dirty(&root->fs_info->free_space_cache,
-			 chunk_start, chunk_start + size_of_data - 1, 0);
+			 chunk_start, chunk_start + size_of_data - 1);
 	return ret;
 }
 
@@ -1397,7 +1398,6 @@ int main(int argc, char **argv)
 	char *label = NULL;
 	u64 block_count = 0;
 	u64 dev_block_count = 0;
-	u64 blocks[7];
 	u64 alloc_start = 0;
 	u64 metadata_profile = 0;
 	u64 data_profile = 0;
@@ -1720,12 +1720,6 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	blocks[0] = BTRFS_SUPER_INFO_OFFSET;
-	for (i = 1; i < 7; i++) {
-		blocks[i] = BTRFS_SUPER_INFO_OFFSET + 1024 * 1024 +
-			nodesize * i;
-	}
-
 	if (group_profile_max_safe_loss(metadata_profile) <
 		group_profile_max_safe_loss(data_profile)){
 		warning("metadata has lower redundancy than data!\n");
@@ -1733,7 +1727,6 @@ int main(int argc, char **argv)
 
 	mkfs_cfg.label = label;
 	memcpy(mkfs_cfg.fs_uuid, fs_uuid, sizeof(mkfs_cfg.fs_uuid));
-	memcpy(mkfs_cfg.blocks, blocks, sizeof(blocks));
 	mkfs_cfg.num_bytes = dev_block_count;
 	mkfs_cfg.nodesize = nodesize;
 	mkfs_cfg.sectorsize = sectorsize;
@@ -1774,7 +1767,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	ret = make_root_dir(trans, root, &allocation);
+	ret = make_root_dir(trans, root);
 	if (ret) {
 		error("failed to setup the root directory: %d", ret);
 		exit(1);

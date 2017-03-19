@@ -3,6 +3,7 @@ Section: admin
 Priority: optional
 Maintainer: Dimitri John Ledkov <xnox@debian.org>
 Build-Depends: debhelper (>= 9),
+               dh-autoreconf,
                e2fslibs-dev,
                pkg-config,
                libacl1-dev,
@@ -24,6 +25,7 @@ Architecture: linux-any
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Replaces: btrfs-tools (<< 4.4.1-1)
 Breaks: btrfs-tools (<< 4.4.1-1)
+Suggests: duperemove
 Description: Checksumming Copy on Write Filesystem utilities
  Btrfs is a new copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy

@@ -50,6 +50,7 @@
 #include "send-stream.h"
 #include "send-utils.h"
 #include "send-dump.h"
+#include "help.h"
 
 static int g_verbose = 0;
 
@@ -314,8 +315,8 @@ static int process_snapshot(const char *path, const u8 *uuid, u64 ctransid,
 		sub_len = strlen(parent_subvol->path);
 
 		/* First make sure the parent subvol is actually in our path */
-		if (sub_len < root_len ||
-		    strstr(parent_subvol->path, rctx->full_root_path) == NULL) {
+		if (strstr(parent_subvol->path, rctx->full_root_path) != parent_subvol->path ||
+		    (sub_len > root_len && parent_subvol->path[root_len] != '/')) {
 			error(
 		"parent subvol is not reachable from inside the root subvol");
 			ret = -ENOENT;
@@ -323,7 +324,7 @@ static int process_snapshot(const char *path, const u8 *uuid, u64 ctransid,
 		}
 
 		if (sub_len == root_len) {
-			parent_subvol->path[0] = '/';
+			parent_subvol->path[0] = '.';
 			parent_subvol->path[1] = '\0';
 		} else {
 			/*
@@ -782,7 +783,24 @@ static int process_clone(const char *path, u64 offset, u64 len,
 						r->subvol_parent_name);
 			}
 		}*/
-		subvol_path = strdup(si->path);
+
+		/* strip the subvolume that we are receiving to from the start of subvol_path */
+		if (rctx->full_root_path) {
+			size_t root_len = strlen(rctx->full_root_path);
+			size_t sub_len = strlen(si->path);
+
+			if (sub_len > root_len &&
+			    strstr(si->path, rctx->full_root_path) == si->path &&
+			    si->path[root_len] == '/') {
+				subvol_path = strdup(si->path + root_len + 1);
+			} else {
+				error("clone: source subvol path %s unreachable from %s",
+					si->path, rctx->full_root_path);
+				goto out;
+			}
+		} else {
+			subvol_path = strdup(si->path);
+		}
 	}
 
 	ret = path_cat_out(full_clone_path, subvol_path, clone_path);

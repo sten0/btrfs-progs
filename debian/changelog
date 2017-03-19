@@ -1,65 +1,56 @@
-btrfs-progs (4.9.1-0.2~bpo8+1) jessie-backports; urgency=medium
+btrfs-progs (4.10.1+dfsg-0.1) unstable; urgency=medium
 
-  * Rebuild for jessie-backports.
+  * Non-maintainer upload
+  * New upstream version
+  * debian/copyright
+    - Exclude non-free-RFC-BCP78 files (affects test suite)
+    - Update Source, because Chris Mason's branch has not been updated
+      since v4.4
+    - 4.6.1-1 did not fix license.  Btrfs-progs is explicitly GPL2
+      and not GPL2+
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 02 Feb 2017 16:11:18 -0500
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Sun, 19 Mar 2017 15:26:37 -0400
 
-btrfs-progs (4.9.1-0.2) unstable; urgency=medium
+btrfs-progs (4.10-0.1) unstable; urgency=medium
 
-  * Update debian/copyright for new locations of radix-tree.c
-    and radix-tree.h.
+  * Non-maintainer upload
+  * New upstream version
+  * Drop redundant patches for documentation (merged upstream)
+  * Override dh_auto_clean to work around upstream bug where make clean
+    cannot be run before ./configure
+  * Drop btrfs-convert (Closes: #824895, #854489)
+  * Move all binaries back to /sbin (Closes: #786893)
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 02 Feb 2017 16:02:43 -0500
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Sat, 11 Mar 2017 21:53:44 -0500
 
-btrfs-progs (4.9.1-0.1) unstable; urgency=medium
+btrfs-progs (4.9.1-1.1) unstable; urgency=medium
 
-  * Non-maintainer upload.
-  * New upstream release.
+  * d/control: add whitespace (cosmetic fix)
+  * Update changelog for new release
+  * Update copyright for new locations of: radix-tree.c and radix-tree.h
+  * Backport upstream fixes for documentation
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 02 Feb 2017 15:29:47 -0500
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Mon, 06 Mar 2017 22:37:41 -0500
 
-btrfs-progs (4.9-0.1) unstable; urgency=medium
+btrfs-progs (4.9.1-1) unstable; urgency=medium
 
-  [ Nicholas D Steeves ]
-  * Non-maintainer upload.
-  * New upstream release.
-  * Merge Hideki's Yamane's patch to use upstream-provided bash-completion.
-    (Closes: #840302)
+  [ Dimitri John Ledkov ]
+  * New upstream release Closes: #849353, #817806, #854915, #845473
+  * Use dh addon for bash completion (--with bash-completion)
+  * Suggest duperemove Closes: #703169
 
   [ Hideki Yamane ]
   * debian/control
     - add Build-Depends: bash-completion to use dh_bash-completion
   * debian/rules
     - call dh_bash-completion
-  * add debian/btrfs-progs.bash-completion
+  * add debian/btrfs-progs.bash-completion Closes: #840302, #800790.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 24 Jan 2017 14:11:58 -0700
+  [ Helmut Grohne ]
+  * Fix FTCBFS: cross.patch: Indirect pkg-config invocations through
+    $PKG_CONFIG and autoreconf (Closes: #845816)
 
-btrfs-progs (4.8.5-0.1) unstable; urgency=medium
-
-  * New upstream release.
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Sat, 03 Dec 2016 22:58:28 -0500
-
-btrfs-progs (4.8.4-0.1) unstable; urgency=medium
-
-  * New upstream release.
-  * Drop btrfs-calc-size or btrfs-show-super.  Upstream CHANGES states
-    "deprecated and not build by default: btrfs-calc-size, btrfs-show-super"
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 29 Nov 2016 16:52:53 -0500
-
-btrfs-progs (4.8.3-0.1) unstable; urgency=medium
-
-  * New upstream release.
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 17 Nov 2016 15:23:29 -0500
-
-btrfs-progs (4.8.1-0.1) unstable; urgency=medium
-
-  * New upstream release.
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Wed, 12 Oct 2016 13:59:12 -0400
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 13 Feb 2017 11:45:42 +0000
 
 btrfs-progs (4.7.3-1) unstable; urgency=medium
 
