@@ -1,6 +1,7 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Contact: linux-btrfs@vger.kernel.org
 Source: https://git.kernel.org/pub/scm/linux/kernel/git/kdave/btrfs-progs.git
+Files-Excluded: tests/sha224-256.c tests/sha.h tests/sha-private.h
 
 Files: *
 Copyright: 2007-2012 Oracle <http://www.oracle.com/>
