@@ -1,8 +1,12 @@
-btrfs-progs (4.10.1+dfsg-0.2~bpo8+1) jessie-backports; urgency=medium
+btrfs-progs (4.10.2+dfsg-0.1) unstable; urgency=medium
 
-  * Rebuild for jessie-backports.
+  * Non-maintainer upload
+  * New upstream version
+  * debian/rules: Tighten override_dh_auto_clean to only run auto_clean if
+    Makefile.inc exists
+  * debian/watch: Switch to version 4 and add repacksuffix=+dfsg
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Sun, 19 Mar 2017 16:12:53 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 06 Apr 2017 19:23:45 -0400
 
 btrfs-progs (4.10.1+dfsg-0.2) unstable; urgency=medium
 
