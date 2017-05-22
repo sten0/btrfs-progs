@@ -1512,13 +1512,19 @@ static int process_dir_item(struct extent_buffer *eb,
 		filetype = btrfs_dir_type(eb, di);
 
 		rec->found_size += name_len;
-		if (name_len <= BTRFS_NAME_LEN) {
+		if (cur + sizeof(*di) + name_len > total ||
+		    name_len > BTRFS_NAME_LEN) {
+			error = REF_ERR_NAME_TOO_LONG;
+
+			if (cur + sizeof(*di) > total)
+				break;
+			len = min_t(u32, total - cur - sizeof(*di),
+				    BTRFS_NAME_LEN);
+		} else {
 			len = name_len;
 			error = 0;
-		} else {
-			len = BTRFS_NAME_LEN;
-			error = REF_ERR_NAME_TOO_LONG;
 		}
+
 		read_extent_buffer(eb, namebuf, (unsigned long)(di + 1), len);
 
 		if (location.type == BTRFS_INODE_ITEM_KEY) {
@@ -1569,13 +1575,22 @@ static int process_inode_ref(struct extent_buffer *eb,
 	while (cur < total) {
 		name_len = btrfs_inode_ref_name_len(eb, ref);
 		index = btrfs_inode_ref_index(eb, ref);
-		if (name_len <= BTRFS_NAME_LEN) {
+
+		/* inode_ref + namelen should not cross item boundary */
+		if (cur + sizeof(*ref) + name_len > total ||
+		    name_len > BTRFS_NAME_LEN) {
+			if (total < cur + sizeof(*ref))
+				break;
+
+			/* Still try to read out the remaining part */
+			len = min_t(u32, total - cur - sizeof(*ref),
+				    BTRFS_NAME_LEN);
+			error = REF_ERR_NAME_TOO_LONG;
+		} else {
 			len = name_len;
 			error = 0;
-		} else {
-			len = BTRFS_NAME_LEN;
-			error = REF_ERR_NAME_TOO_LONG;
 		}
+
 		read_extent_buffer(eb, namebuf, (unsigned long)(ref + 1), len);
 		add_inode_backref(inode_cache, key->objectid, key->offset,
 				  index, namebuf, len, 0, key->type, error);
@@ -2185,6 +2200,7 @@ static int walk_down_tree(struct btrfs_root *root, struct btrfs_path *path,
 
 		ret = check_child_node(cur, path->slots[*level], next);
 		if (ret) {
+			free_extent_buffer(next);
 			err = ret;
 			goto out;
 		}
@@ -2666,6 +2682,7 @@ static int repair_inode_backrefs(struct btrfs_root *root,
 			repaired++;
 			list_del(&backref->list);
 			free(backref);
+			continue;
 		}
 
 		if (!delete && !backref->found_dir_index &&
@@ -2676,12 +2693,12 @@ static int repair_inode_backrefs(struct btrfs_root *root,
 				break;
 			repaired++;
 			if (backref->found_dir_item &&
-			    backref->found_dir_index &&
 			    backref->found_dir_index) {
 				if (!backref->errors &&
 				    backref->found_inode_ref) {
 					list_del(&backref->list);
 					free(backref);
+					continue;
 				}
 			}
 		}
@@ -4224,16 +4241,22 @@ static int find_dir_item(struct btrfs_root *root, struct btrfs_key *ref_key,
 		if (imode_to_type(mode) != filetype)
 			goto next;
 
-		if (name_len <= BTRFS_NAME_LEN) {
-			len = name_len;
-		} else {
-			len = BTRFS_NAME_LEN;
+		if (cur + sizeof(*di) + name_len > total ||
+		    name_len > BTRFS_NAME_LEN) {
 			warning("root %llu %s[%llu %llu] name too long %u, trimmed",
-			root->objectid,
-			key->type == BTRFS_DIR_ITEM_KEY ?
-			"DIR_ITEM" : "DIR_INDEX",
-			key->objectid, key->offset, name_len);
+				root->objectid,
+				key->type == BTRFS_DIR_ITEM_KEY ?
+				"DIR_ITEM" : "DIR_INDEX",
+				key->objectid, key->offset, name_len);
+
+			if (cur + sizeof(*di) > total)
+				break;
+			len = min_t(u32, total - cur - sizeof(*di),
+				    BTRFS_NAME_LEN);
+		} else {
+			len = name_len;
 		}
+
 		read_extent_buffer(node, namebuf, (unsigned long)(di + 1), len);
 		if (len != namelen || strncmp(namebuf, name, len))
 			goto next;
@@ -4294,12 +4317,16 @@ next:
 
 	index = btrfs_inode_ref_index(node, ref);
 	name_len = btrfs_inode_ref_name_len(node, ref);
-	if (name_len <= BTRFS_NAME_LEN) {
-		len = name_len;
-	} else {
-		len = BTRFS_NAME_LEN;
+	if (cur + sizeof(*ref) + name_len > total ||
+	    name_len > BTRFS_NAME_LEN) {
 		warning("root %llu INODE_REF[%llu %llu] name too long",
 			root->objectid, ref_key->objectid, ref_key->offset);
+
+		if (total < cur + sizeof(*ref))
+			goto out;
+		len = min_t(u32, total - cur - sizeof(*ref), BTRFS_NAME_LEN);
+	} else {
+		len = name_len;
 	}
 
 	read_extent_buffer(node, namebuf, (unsigned long)(ref + 1), len);
@@ -4332,6 +4359,7 @@ next:
 	if (cur < total)
 		goto next;
 
+out:
 	return err;
 }
 
@@ -4469,16 +4497,22 @@ static int find_inode_ref(struct btrfs_root *root, struct btrfs_key *key,
 		if (index != (u64)-1 && index != ref_index)
 			goto next_ref;
 
-		if (ref_namelen <= BTRFS_NAME_LEN) {
-			len = ref_namelen;
-		} else {
-			len = BTRFS_NAME_LEN;
+		if (cur + sizeof(*ref) + ref_namelen > total ||
+		    ref_namelen > BTRFS_NAME_LEN) {
 			warning("root %llu INODE %s[%llu %llu] name too long",
 				root->objectid,
 				key->type == BTRFS_INODE_REF_KEY ?
 					"REF" : "EXTREF",
 				key->objectid, key->offset);
+
+			if (cur + sizeof(*ref) > total)
+				break;
+			len = min_t(u32, total - cur - sizeof(*ref),
+				    BTRFS_NAME_LEN);
+		} else {
+			len = ref_namelen;
 		}
+
 		read_extent_buffer(node, ref_namebuf, (unsigned long)(ref + 1),
 				   len);
 
@@ -4610,15 +4644,20 @@ static int check_dir_item(struct btrfs_root *root, struct btrfs_key *key,
 			      key->objectid, key->offset, data_len);
 
 		name_len = btrfs_dir_name_len(node, di);
-		if (name_len <= BTRFS_NAME_LEN) {
-			len = name_len;
-		} else {
-			len = BTRFS_NAME_LEN;
+		if (cur + sizeof(*di) + name_len > total ||
+		    name_len > BTRFS_NAME_LEN) {
 			warning("root %llu %s[%llu %llu] name too long",
 				root->objectid,
 				key->type == BTRFS_DIR_ITEM_KEY ?
 				"DIR_ITEM" : "DIR_INDEX",
 				key->objectid, key->offset);
+
+			if (cur + sizeof(*di) > total)
+				break;
+			len = min_t(u32, total - cur - sizeof(*di),
+				    BTRFS_NAME_LEN);
+		} else {
+			len = name_len;
 		}
 		(*size) += name_len;
 
@@ -6029,6 +6068,7 @@ static int add_extent_rec_nolookup(struct cache_tree *extent_cache,
 	struct extent_record *rec;
 	int ret = 0;
 
+	BUG_ON(tmpl->max_size == 0);
 	rec = malloc(sizeof(*rec));
 	if (!rec)
 		return -ENOMEM;
@@ -6192,6 +6232,7 @@ static int add_tree_backref(struct cache_tree *extent_cache, u64 bytenr,
 		tmpl.start = bytenr;
 		tmpl.nr = 1;
 		tmpl.metadata = 1;
+		tmpl.max_size = 1;
 
 		ret = add_extent_rec_nolookup(extent_cache, &tmpl);
 		if (ret)
@@ -6832,14 +6873,16 @@ static int process_extent_item(struct btrfs_root *root,
 			ret = add_tree_backref(extent_cache, key.objectid,
 					0, offset, 0);
 			if (ret < 0)
-				error("add_tree_backref failed: %s",
+				error(
+			"add_tree_backref failed (extent items tree block): %s",
 				      strerror(-ret));
 			break;
 		case BTRFS_SHARED_BLOCK_REF_KEY:
 			ret = add_tree_backref(extent_cache, key.objectid,
 					offset, 0, 0);
 			if (ret < 0)
-				error("add_tree_backref failed: %s",
+				error(
+			"add_tree_backref failed (extent items shared block): %s",
 				      strerror(-ret));
 			break;
 		case BTRFS_EXTENT_DATA_REF_KEY:
@@ -7753,7 +7796,8 @@ static int run_next_block(struct btrfs_root *root,
 				ret = add_tree_backref(extent_cache,
 						key.objectid, 0, key.offset, 0);
 				if (ret < 0)
-					error("add_tree_backref failed: %s",
+					error(
+				"add_tree_backref failed (leaf tree block): %s",
 					      strerror(-ret));
 				continue;
 			}
@@ -7761,7 +7805,8 @@ static int run_next_block(struct btrfs_root *root,
 				ret = add_tree_backref(extent_cache,
 						key.objectid, key.offset, 0, 0);
 				if (ret < 0)
-					error("add_tree_backref failed: %s",
+					error(
+				"add_tree_backref failed (leaf shared block): %s",
 					      strerror(-ret));
 				continue;
 			}
@@ -7866,7 +7911,8 @@ static int run_next_block(struct btrfs_root *root,
 			ret = add_tree_backref(extent_cache, ptr, parent,
 					owner, 1);
 			if (ret < 0) {
-				error("add_tree_backref failed: %s",
+				error(
+				"add_tree_backref failed (non-leaf block): %s",
 				      strerror(-ret));
 				continue;
 			}
@@ -9972,6 +10018,8 @@ out:
 	free_extent_cache_tree(&pending);
 	free_extent_cache_tree(&reada);
 	free_extent_cache_tree(&nodes);
+	free_root_item_list(&normal_trees);
+	free_root_item_list(&dropping_trees);
 	return ret;
 loop:
 	free_corrupt_blocks_tree(root->fs_info->corrupt_blocks);
