@@ -34,13 +34,6 @@ Description: Checksumming Copy on Write Filesystem utilities
  This package contains utilities (mkfs, fsck) used to work with btrfs
  and an utility (btrfs-convert) to make a btrfs filesystem from an ext3.
 
-Package: btrfs-tools
-Section: oldlibs
-Architecture: linux-any
-Depends: btrfs-progs, ${misc:Depends}, ${shlibs:Depends}
-Description: transitional dummy package
- This is a transitional dummy package. It can safely be removed.
-
 Package: btrfs-progs-udeb
 Package-Type: udeb
 Section: debian-installer
@@ -62,11 +55,3 @@ Description: Checksumming Copy on Write Filesystem utilities (debug)
  administration.
  .
  This package contains the debugging symbols.
-
-Package: btrfs-tools-dbg
-Section: oldlibs
-Priority: extra
-Architecture: linux-any
-Depends: btrfs-progs-dbg, ${misc:Depends}
-Description: transitional dummy package
- This is a transitional dummy package. It can safely be removed.
