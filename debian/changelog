@@ -2,7 +2,11 @@ btrfs-progs (4.11.1+dfsg-0.1) unstable; urgency=medium
 
   * Non-maintainer upload
   * New upstream version
-  * debian/control: Drop btrfs-tools transitional dummy package.
+  * debian/control: Drop btrfs-tools transitional dummy packages.
+  * Switch to automatically generated -dbgsym package.
+    - debian/rules: Switch to dh_strip --dbgsym-migration.
+    - debian/control: Drop btrfs-progs-dbg.
+    - debian/control: Bump Build-Depends to debhelper >= 10.
 
  -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 30 Jun 2017 15:34:22 -0400
 
