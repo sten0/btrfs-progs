@@ -1,3 +1,9 @@
+btrfs-progs (4.11.1+dfsg-0.1~bpo8+1) jessie-backports; urgency=medium
+
+  * Rebuild for jessie-backports.
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 30 Jun 2017 16:02:32 -0400
+
 btrfs-progs (4.11.1+dfsg-0.1) unstable; urgency=medium
 
   * Non-maintainer upload
