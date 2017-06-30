@@ -2,7 +2,7 @@ Source: btrfs-progs
 Section: admin
 Priority: optional
 Maintainer: Dimitri John Ledkov <xnox@debian.org>
-Build-Depends: debhelper (>= 9),
+Build-Depends: debhelper (>= 10),
                dh-autoreconf,
                e2fslibs-dev,
                pkg-config,
@@ -48,25 +48,3 @@ Architecture: linux-any
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Provides: btrfs-tools-udeb
 Description: Checksumming Copy on Write Filesystem utilities (udeb)
-
-Package: btrfs-progs-dbg
-Section: debug
-Priority: extra
-Architecture: linux-any
-Depends: btrfs-progs (= ${binary:Version}), ${misc:Depends}
-Replaces: btrfs-tools-dbg (<< 4.4.1-1)
-Breaks: btrfs-tools-dbg (<< 4.4.1-1)
-Description: Checksumming Copy on Write Filesystem utilities (debug)
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
- advanced features while focusing on fault tolerance, repair and easy
- administration.
- .
- This package contains the debugging symbols.
-
-Package: btrfs-tools-dbg
-Section: oldlibs
-Priority: extra
-Architecture: linux-any
-Depends: btrfs-progs-dbg, ${misc:Depends}
-Description: transitional dummy package
- This is a transitional dummy package. It can safely be removed.

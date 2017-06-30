@@ -13,7 +13,7 @@ CFLAGS := $(shell dpkg-buildflags --get CFLAGS)
 CFLAGS := $(patsubst -O2,-Os,$(CFLAGS))
 
 %:
-	dh ${@} --parallel --with bash-completion,autoreconf
+	dh ${@} --with bash-completion
 
 override_dh_autoreconf:
 	dh_autoreconf ./autogen.sh
@@ -35,7 +35,7 @@ override_dh_auto_install:
 override_dh_auto_test:
 
 override_dh_strip:
-	dh_strip --dbg-package=btrfs-progs-dbg
+	dh_strip --dbgsym-migration='btrfs-progs (<< 4.11.1+dfsg-1~)'
 
 override_dh_auto_clean:
 	if test -f Makefile.inc; then \
