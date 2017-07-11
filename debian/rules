@@ -31,8 +31,13 @@ override_dh_auto_install:
 	install -D -m 0755 debian/local/btrfs.hook debian/btrfs-progs/usr/share/initramfs-tools/hooks/btrfs
 	install -D -m 0755 debian/local/btrfs.local-premount debian/btrfs-progs/usr/share/initramfs-tools/scripts/local-premount/btrfs
 
-# Needs autopkgtest
+# Needs autopkgtest to get root?
+# *-tests.sh need to be run as root, otherwise many tests are skipped
 override_dh_auto_test:
+	make fssum
+	cd tests
+	./fsck-tests.sh
+	./misc-tests.sh
 
 override_dh_strip:
 	dh_strip --dbgsym-migration='btrfs-progs (<< 4.11.1+dfsg-1~)'
