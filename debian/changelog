@@ -1,3 +1,13 @@
+btrfs-progs (4.11.1+dfsg-1~exp) UNRELEASED; urgency=medium
+
+  * Enable tests using method that works for non-dfsg upstream v4.11.1
+    - Please note: Tests will currently fail beccause tests/sha224-256.c
+      tests/sha.h tests/sha-private.h are excluded in debian/copyright.
+      Failure message is: "make[2]: *** No rule to make target
+      'tests/sha224-256.c', needed by 'fssum'.  Stop."
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 11 Jul 2017 16:54:55 -0400
+
 btrfs-progs (4.11.1+dfsg-0.1) unstable; urgency=medium
 
   * Non-maintainer upload
