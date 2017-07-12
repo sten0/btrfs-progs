@@ -13,7 +13,7 @@ CFLAGS := $(shell dpkg-buildflags --get CFLAGS)
 CFLAGS := $(patsubst -O2,-Os,$(CFLAGS))
 
 %:
-	dh ${@} --parallel --with bash-completion,autoreconf
+	dh ${@} --with bash-completion,autoreconf
 
 override_dh_autoreconf:
 	dh_autoreconf ./autogen.sh
