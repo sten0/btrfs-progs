@@ -15,7 +15,7 @@ Build-Depends: debhelper (>= 10),
                asciidoc,
                xmlto,
                bash-completion,
-Standards-Version: 3.9.8
+Standards-Version: 4.0.0
 Homepage: http://btrfs.wiki.kernel.org/
 Vcs-Browser: https://browse.dgit.debian.org/btrfs-progs.git
 Vcs-Git: https://git.dgit.debian.org/btrfs-progs
