@@ -3,10 +3,11 @@ btrfs-progs (4.11.1+dfsg-0.2) unstable; urgency=medium
   * debian/control: Bump standards version. (no changes needed)
   * Switch to debhelper 10
     - debian/compat: Bump version.
-    - debian/rules: --parallel is now default
+    - debian/rules: drop --parallel because it is now default
+    - debian/rules: drop --with autoreconf because it is now default
   * debian/rules: Change -dbgsym version dependency for my nmu package.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Wed, 12 Jul 2017 09:33:54 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 13 Jul 2017 19:25:24 -0400
 
 btrfs-progs (4.11.1+dfsg-0.1) unstable; urgency=medium
 
