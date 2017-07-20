@@ -1,14 +1,23 @@
-btrfs-progs (4.11.1+dfsg-0.1~bpo8+1) jessie-backports; urgency=medium
+btrfs-progs (4.11.1+dfsg-0.2) unstable; urgency=medium
 
-  * Rebuild for jessie-backports.
+  * debian/control: Bump standards version. (no changes needed)
+  * Switch to debhelper 10
+    - debian/compat: Bump version.
+    - debian/rules: drop --parallel because it is now default
+    - debian/rules: drop --with autoreconf because it is now default
+  * debian/rules: Change -dbgsym version dependency for my nmu package.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 30 Jun 2017 16:02:32 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 13 Jul 2017 19:25:24 -0400
 
 btrfs-progs (4.11.1+dfsg-0.1) unstable; urgency=medium
 
   * Non-maintainer upload
   * New upstream version
-  * debian/control: Drop btrfs-tools transitional dummy package.
+  * debian/control: Drop btrfs-tools transitional dummy packages.
+  * Switch to automatically generated -dbgsym package.
+    - debian/rules: Switch to dh_strip --dbgsym-migration.
+    - debian/control: Drop btrfs-progs-dbg.
+    - debian/control: Bump Build-Depends to debhelper >= 10.
 
  -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 30 Jun 2017 15:34:22 -0400
 
