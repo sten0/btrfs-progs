@@ -26,7 +26,7 @@ do_test() {
 	nodesize="$3"
 	shift 3
 	convert_test_preamble "$features" "$msg" "$nodesize" "$@"
-	convert_test_prep_fs "$@"
+	convert_test_prep_fs ext4 "$@"
 	populate_fs
 	CHECKSUMTMP=$(mktemp --tmpdir btrfs-progs-convert.XXXXXXXXXX)
 	convert_test_gen_checksums "$CHECKSUMTMP"
@@ -47,12 +47,12 @@ do_test() {
 	run_check_umount_test_dev
 	convert_test_post_rollback
 
-	run_check_mount_test_dev
+	run_check_mount_convert_dev ext4
 	convert_test_post_check_checksums "$CHECKSUMTMP"
 	run_check_umount_test_dev
 
 	# mount again and verify checksums
-	run_check_mount_test_dev
+	run_check_mount_convert_dev ext4
 	convert_test_post_check_checksums "$CHECKSUMTMP"
 	run_check_umount_test_dev
 
