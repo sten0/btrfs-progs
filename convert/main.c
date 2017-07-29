@@ -88,6 +88,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <getopt.h>
+#include <pthread.h>
 #include <stdbool.h>
 
 #include "ctree.h"
@@ -119,10 +120,12 @@ static void *print_copied_inodes(void *p)
 	task_period_start(priv->info, 1000 /* 1s */);
 	while (1) {
 		count++;
+		pthread_mutex_lock(&priv->mutex);
 		printf("copy inodes [%c] [%10llu/%10llu]\r",
 		       work_indicator[count % 4],
 		       (unsigned long long)priv->cur_copy_inodes,
 		       (unsigned long long)priv->max_copy_inodes);
+		pthread_mutex_unlock(&priv->mutex);
 		fflush(stdout);
 		task_period_wait(priv->info);
 	}
@@ -159,7 +162,7 @@ static int csum_disk_extent(struct btrfs_trans_handle *trans,
 			    struct btrfs_root *root,
 			    u64 disk_bytenr, u64 num_bytes)
 {
-	u32 blocksize = root->sectorsize;
+	u32 blocksize = root->fs_info->sectorsize;
 	u64 offset;
 	char *buffer;
 	int ret = 0;
@@ -199,12 +202,12 @@ static int create_image_file_range(struct btrfs_trans_handle *trans,
 	int ret;
 	u32 datacsum = convert_flags & CONVERT_FLAG_DATACSUM;
 
-	if (bytenr != round_down(bytenr, root->sectorsize)) {
+	if (bytenr != round_down(bytenr, root->fs_info->sectorsize)) {
 		error("bytenr not sectorsize aligned: %llu",
 				(unsigned long long)bytenr);
 		return -EINVAL;
 	}
-	if (len != round_down(len, root->sectorsize)) {
+	if (len != round_down(len, root->fs_info->sectorsize)) {
 		error("length not sectorsize aligned: %llu",
 				(unsigned long long)len);
 		return -EINVAL;
@@ -293,7 +296,7 @@ static int create_image_file_range(struct btrfs_trans_handle *trans,
 			    bg_cache->key.offset - bytenr);
 	}
 
-	if (len != round_down(len, root->sectorsize)) {
+	if (len != round_down(len, root->fs_info->sectorsize)) {
 		error("remaining length not sectorsize aligned: %llu",
 				(unsigned long long)len);
 		return -EINVAL;
@@ -346,7 +349,7 @@ static int migrate_one_reserved_range(struct btrfs_trans_handle *trans,
 		cur_off = max(cache->start, cur_off);
 		cur_len = min(cache->start + cache->size, range_end(range)) -
 			  cur_off;
-		BUG_ON(cur_len < root->sectorsize);
+		BUG_ON(cur_len < root->fs_info->sectorsize);
 
 		/* reserve extent for the data */
 		ret = btrfs_reserve_extent(trans, root, cur_len, 0, 0, (u64)-1,
@@ -370,7 +373,7 @@ static int migrate_one_reserved_range(struct btrfs_trans_handle *trans,
 		eb->len = key.offset;
 
 		/* Write the data */
-		ret = write_and_map_eb(root, eb);
+		ret = write_and_map_eb(root->fs_info, eb);
 		free(eb);
 		if (ret < 0)
 			break;
@@ -1011,7 +1014,8 @@ static int make_convert_data_block_groups(struct btrfs_trans_handle *trans,
 	 */
 	max_chunk_size = cfg->num_bytes / 10;
 	max_chunk_size = min((u64)(1024 * 1024 * 1024), max_chunk_size);
-	max_chunk_size = round_down(max_chunk_size, extent_root->sectorsize);
+	max_chunk_size = round_down(max_chunk_size,
+				    extent_root->fs_info->sectorsize);
 
 	for (cache = first_cache_extent(data_chunks); cache;
 	     cache = next_cache_extent(cache)) {
@@ -1023,12 +1027,12 @@ static int make_convert_data_block_groups(struct btrfs_trans_handle *trans,
 
 			len = min(max_chunk_size,
 				  cache->start + cache->size - cur);
-			ret = btrfs_alloc_data_chunk(trans, extent_root,
+			ret = btrfs_alloc_data_chunk(trans, fs_info,
 					&cur_backup, len,
 					BTRFS_BLOCK_GROUP_DATA, 1);
 			if (ret < 0)
 				break;
-			ret = btrfs_make_block_group(trans, extent_root, 0,
+			ret = btrfs_make_block_group(trans, fs_info, 0,
 					BTRFS_BLOCK_GROUP_DATA,
 					BTRFS_FIRST_CHUNK_TREE_OBJECTID,
 					cur, len);
@@ -1286,6 +1290,11 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	}
 
 	printf("creating btrfs metadata");
+	ret = pthread_mutex_init(&ctx.mutex, NULL);
+	if (ret) {
+		error("failed to initialize mutex: %d", ret);
+		goto fail;
+	}
 	ctx.max_copy_inodes = (cctx.inodes_count - cctx.free_inodes_count);
 	ctx.cur_copy_inodes = 0;
 

@@ -197,7 +197,7 @@ static void qgroup_flags_to_str(u64 flags, char *ret)
 
 void print_chunk(struct extent_buffer *eb, struct btrfs_chunk *chunk)
 {
-	int num_stripes = btrfs_chunk_num_stripes(eb, chunk);
+	u16 num_stripes = btrfs_chunk_num_stripes(eb, chunk);
 	int i;
 	u32 chunk_item_size = btrfs_chunk_item_size(num_stripes);
 	char chunk_flags_str[32] = {0};
@@ -336,7 +336,7 @@ static void print_file_extent_item(struct extent_buffer *eb,
 				   int slot,
 				   struct btrfs_file_extent_item *fi)
 {
-	int extent_type = btrfs_file_extent_type(eb, fi);
+	unsigned char extent_type = btrfs_file_extent_type(eb, fi);
 	char compress_str[16];
 
 	compress_type_to_str(btrfs_file_extent_compression(eb, fi),
@@ -1297,7 +1297,7 @@ void btrfs_print_tree(struct btrfs_root *root, struct extent_buffer *eb, int fol
 		(unsigned long long)btrfs_header_owner(eb));
 	print_uuids(eb);
 	fflush(stdout);
-	size = root->nodesize;
+	size = root->fs_info->nodesize;
 	for (i = 0; i < nr; i++) {
 		u64 blocknr = btrfs_node_blockptr(eb, i);
 		btrfs_node_key(eb, &disk_key, i);
@@ -1314,7 +1314,8 @@ void btrfs_print_tree(struct btrfs_root *root, struct extent_buffer *eb, int fol
 		return;
 
 	for (i = 0; i < nr; i++) {
-		next = read_tree_block(root, btrfs_node_blockptr(eb, i), size,
+		next = read_tree_block(root->fs_info,
+				btrfs_node_blockptr(eb, i), size,
 				btrfs_node_ptr_generation(eb, i));
 		if (!extent_buffer_uptodate(next)) {
 			fprintf(stderr, "failed to read %llu in tree %llu\n",
