@@ -49,10 +49,11 @@ static void print_extents(struct btrfs_root *root, struct extent_buffer *eb)
 		return;
 	}
 
-	size = root->nodesize;
+	size = root->fs_info->nodesize;
 	nr = btrfs_header_nritems(eb);
 	for (i = 0; i < nr; i++) {
-		next = read_tree_block(root, btrfs_node_blockptr(eb, i),
+		next = read_tree_block(root->fs_info,
+				btrfs_node_blockptr(eb, i),
 				size, btrfs_node_ptr_generation(eb, i));
 		if (!extent_buffer_uptodate(next))
 			continue;
@@ -311,9 +312,9 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 	}
 
 	if (block_only) {
-		leaf = read_tree_block(root,
+		leaf = read_tree_block(info,
 				      block_only,
-				      root->nodesize, 0);
+				      info->nodesize, 0);
 
 		if (extent_buffer_uptodate(leaf) &&
 		    btrfs_header_level(leaf) != 0) {
@@ -322,9 +323,9 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 		}
 
 		if (!leaf) {
-			leaf = read_tree_block(root,
+			leaf = read_tree_block(info,
 					      block_only,
-					      root->nodesize, 0);
+					      info->nodesize, 0);
 		}
 		if (!extent_buffer_uptodate(leaf)) {
 			error("failed to read %llu",
@@ -439,10 +440,8 @@ again:
 
 			offset = btrfs_item_ptr_offset(leaf, slot);
 			read_extent_buffer(leaf, &ri, offset, sizeof(ri));
-			buf = read_tree_block(tree_root_scan,
-					      btrfs_root_bytenr(&ri),
-					      tree_root_scan->nodesize,
-					      0);
+			buf = read_tree_block(info, btrfs_root_bytenr(&ri),
+					      info->nodesize, 0);
 			if (!extent_buffer_uptodate(buf))
 				goto next;
 			if (tree_id && found_key.objectid != tree_id) {
