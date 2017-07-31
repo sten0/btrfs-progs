@@ -1,8 +1,19 @@
-btrfs-progs (4.12-1) UNRELEASED; urgency=medium
+btrfs-progs (4.12-1) unstable; urgency=medium
 
+  [ Dimitri John Ledkov ]
   * New upstream release.
+  * Update watch file to v4.
 
- -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 31 Jul 2017 14:53:54 +0100
+  [ Nicholas D Steeves ]
+  * Override dh_auto_clean to work around upstream bug where make clean cannot be run before ./configure
+  * Drop btrfs-convert (Closes: #824895, #854489)
+  * Update Source, because Chris Mason's branch hasn't been updated since v4.4
+  * 4.6.1-1 did not fix package license Btrfs-progs is explicitly GPL2 and not GPL2+.
+  * Update copyright for new locations of: radix-tree.c and radix-tree.h
+  * d/control: add whitespace (cosmetic fix)
+  * Switch to debhelper 10 and automatically generated -dbgsym package
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 31 Jul 2017 15:18:39 +0100
 
 btrfs-progs (4.9.1-1) unstable; urgency=medium
 
