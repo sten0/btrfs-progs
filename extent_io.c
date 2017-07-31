@@ -192,8 +192,7 @@ static int clear_state_bit(struct extent_io_tree *tree,
 /*
  * clear some bits on a range in the tree.
  */
-int clear_extent_bits(struct extent_io_tree *tree, u64 start,
-		      u64 end, int bits, gfp_t mask)
+int clear_extent_bits(struct extent_io_tree *tree, u64 start, u64 end, int bits)
 {
 	struct extent_state *state;
 	struct extent_state *prealloc = NULL;
@@ -287,8 +286,7 @@ search_again:
 /*
  * set some bits on a range in the tree.
  */
-int set_extent_bits(struct extent_io_tree *tree, u64 start,
-		    u64 end, int bits, gfp_t mask)
+int set_extent_bits(struct extent_io_tree *tree, u64 start, u64 end, int bits)
 {
 	struct extent_state *state;
 	struct extent_state *prealloc = NULL;
@@ -411,16 +409,14 @@ search_again:
 	goto again;
 }
 
-int set_extent_dirty(struct extent_io_tree *tree, u64 start, u64 end,
-		     gfp_t mask)
+int set_extent_dirty(struct extent_io_tree *tree, u64 start, u64 end)
 {
-	return set_extent_bits(tree, start, end, EXTENT_DIRTY, mask);
+	return set_extent_bits(tree, start, end, EXTENT_DIRTY);
 }
 
-int clear_extent_dirty(struct extent_io_tree *tree, u64 start, u64 end,
-		       gfp_t mask)
+int clear_extent_dirty(struct extent_io_tree *tree, u64 start, u64 end)
 {
-	return clear_extent_bits(tree, start, end, EXTENT_DIRTY, mask);
+	return clear_extent_bits(tree, start, end, EXTENT_DIRTY);
 }
 
 int find_first_extent_bit(struct extent_io_tree *tree, u64 start,
@@ -702,8 +698,8 @@ int read_data_from_disk(struct btrfs_fs_info *info, void *buf, u64 offset,
 
 	while (bytes_left) {
 		read_len = bytes_left;
-		ret = btrfs_map_block(&info->mapping_tree, READ, offset,
-				      &read_len, &multi, mirror, NULL);
+		ret = btrfs_map_block(info, READ, offset, &read_len, &multi,
+				      mirror, NULL);
 		if (ret) {
 			fprintf(stderr, "Couldn't map the block %Lu\n",
 				offset);
@@ -756,8 +752,8 @@ int write_data_to_disk(struct btrfs_fs_info *info, void *buf, u64 offset,
 		this_len = bytes_left;
 		dev_nr = 0;
 
-		ret = btrfs_map_block(&info->mapping_tree, WRITE, offset,
-				      &this_len, &multi, mirror, &raid_map);
+		ret = btrfs_map_block(info, WRITE, offset, &this_len, &multi,
+				      mirror, &raid_map);
 		if (ret) {
 			fprintf(stderr, "Couldn't map the block %Lu\n",
 				offset);
@@ -769,7 +765,7 @@ int write_data_to_disk(struct btrfs_fs_info *info, void *buf, u64 offset,
 			u64 stripe_len = this_len;
 
 			this_len = min(this_len, bytes_left);
-			this_len = min(this_len, (u64)info->tree_root->nodesize);
+			this_len = min(this_len, (u64)info->nodesize);
 
 			eb = malloc(sizeof(struct extent_buffer) + this_len);
 			if (!eb) {
@@ -838,7 +834,7 @@ int set_extent_buffer_dirty(struct extent_buffer *eb)
 	struct extent_io_tree *tree = eb->tree;
 	if (!(eb->flags & EXTENT_DIRTY)) {
 		eb->flags |= EXTENT_DIRTY;
-		set_extent_dirty(tree, eb->start, eb->start + eb->len - 1, 0);
+		set_extent_dirty(tree, eb->start, eb->start + eb->len - 1);
 		extent_buffer_get(eb);
 	}
 	return 0;
@@ -849,7 +845,7 @@ int clear_extent_buffer_dirty(struct extent_buffer *eb)
 	struct extent_io_tree *tree = eb->tree;
 	if (eb->flags & EXTENT_DIRTY) {
 		eb->flags &= ~EXTENT_DIRTY;
-		clear_extent_dirty(tree, eb->start, eb->start + eb->len - 1, 0);
+		clear_extent_dirty(tree, eb->start, eb->start + eb->len - 1);
 		free_extent_buffer(eb);
 	}
 	return 0;

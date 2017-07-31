@@ -1,7 +1,6 @@
-# btrfs-progs
 #
 # Basic build targets:
-#   all		all main tools
+#   all		all main tools and the shared library
 #   static      build static bnaries, requires static version of the libraries
 #   test        run the full testsuite
 #   install     install to default location (/usr/local)
@@ -18,6 +17,7 @@
 #                  abort   - call abort() on first error (dumps core)
 #                  all     - shortcut for all of the above
 #                  asan    - enable address sanitizer compiler feature
+#                  tsan    - enable thread sanitizer compiler feature
 #                  ubsan   - undefined behaviour sanitizer compiler feature
 #                  bcheck  - extended build checks
 #   W=123          build with warnings (default: off)
@@ -38,17 +38,15 @@
 # Export all variables to sub-makes by default
 export
 
-include Makefile.extrawarn
+-include Makefile.inc
+ifneq ($(MAKEFILE_INC_INCLUDED),yes)
+$(error Makefile.inc not generated, please configure first)
+endif
 
-CC = @CC@
-LN_S = @LN_S@
-AR = @AR@
-RM = @RM@
-RMDIR = @RMDIR@
-INSTALL = @INSTALL@
-DISABLE_DOCUMENTATION = @DISABLE_DOCUMENTATION@
-DISABLE_BTRFSCONVERT = @DISABLE_BTRFSCONVERT@
-BTRFSCONVERT_EXT2 = @BTRFSCONVERT_EXT2@
+TAGS_CMD := ctags
+CSCOPE_CMD := cscope -u -b -c -q
+
+include Makefile.extrawarn
 
 EXTRA_CFLAGS :=
 EXTRA_LDFLAGS :=
@@ -60,7 +58,7 @@ DEBUG_CFLAGS :=
 TOPDIR := $(shell pwd)
 
 # Common build flags
-CFLAGS = @CFLAGS@ \
+CFLAGS = $(SUBST_CFLAGS) \
 	 -include config.h \
 	 -DBTRFS_FLAT_INCLUDES \
 	 -D_XOPEN_SOURCE=700  \
@@ -72,17 +70,16 @@ CFLAGS = @CFLAGS@ \
 	 $(DEBUG_CFLAGS_INTERNAL) \
 	 $(EXTRA_CFLAGS)
 
-LDFLAGS = @LDFLAGS@ \
+LDFLAGS = $(SUBST_LDFLAGS) \
 	  -rdynamic -L$(TOPDIR) $(EXTRA_LDFLAGS)
 
-LIBS = @UUID_LIBS@ @BLKID_LIBS@ @ZLIB_LIBS@ @LZO2_LIBS@ -L. -pthread
-LIBBTRFS_LIBS = $(LIBS)
+LIBS = $(LIBS_BASE)
+LIBBTRFS_LIBS = $(LIBS_BASE)
 
 # Static compilation flags
 STATIC_CFLAGS = $(CFLAGS) -ffunction-sections -fdata-sections
 STATIC_LDFLAGS = -static -Wl,--gc-sections
-STATIC_LIBS = @UUID_LIBS_STATIC@ @BLKID_LIBS_STATIC@ \
-	      @ZLIB_LIBS_STATIC@ @LZO2_LIBS_STATIC@ -L. -pthread
+STATIC_LIBS = $(STATIC_LIBS_BASE)
 
 # don't use FORTIFY with sparse because glibc with FORTIFY can
 # generate so many sparse errors that sparse stops parsing,
@@ -96,33 +93,31 @@ CHECKER_FLAGS := -include $(check_defs) -D__CHECKER__ \
 objects = ctree.o disk-io.o kernel-lib/radix-tree.o extent-tree.o print-tree.o \
 	  root-tree.o dir-item.o file-item.o inode-item.o inode-map.o \
 	  extent-cache.o extent_io.o volumes.o utils.o repair.o \
-	  qgroup.o raid56.o free-space-cache.o kernel-lib/list_sort.o props.o \
-	  ulist.o qgroup-verify.o backref.o string-table.o task-utils.o \
-	  inode.o file.o find-root.o free-space-tree.o help.o send-dump.o
+	  qgroup.o free-space-cache.o kernel-lib/list_sort.o props.o \
+	  kernel-shared/ulist.o qgroup-verify.o backref.o string-table.o task-utils.o \
+	  inode.o file.o find-root.o free-space-tree.o help.o send-dump.o \
+	  fsfeatures.o kernel-lib/tables.o kernel-lib/raid56.o
 cmds_objects = cmds-subvolume.o cmds-filesystem.o cmds-device.o cmds-scrub.o \
 	       cmds-inspect.o cmds-balance.o cmds-send.o cmds-receive.o \
 	       cmds-quota.o cmds-qgroup.o cmds-replace.o cmds-check.o \
 	       cmds-restore.o cmds-rescue.o chunk-recover.o super-recover.o \
 	       cmds-property.o cmds-fi-usage.o cmds-inspect-dump-tree.o \
-	       cmds-inspect-dump-super.o cmds-inspect-tree-stats.o cmds-fi-du.o
+	       cmds-inspect-dump-super.o cmds-inspect-tree-stats.o cmds-fi-du.o \
+	       mkfs/common.o
 libbtrfs_objects = send-stream.o send-utils.o kernel-lib/rbtree.o btrfs-list.o \
-		   kernel-lib/crc32c.o \
+		   kernel-lib/crc32c.o messages.o \
 		   uuid-tree.o utils-lib.o rbtree-utils.o
 libbtrfs_headers = send-stream.h send-utils.h send.h kernel-lib/rbtree.h btrfs-list.h \
 	       kernel-lib/crc32c.h kernel-lib/list.h kerncompat.h \
-	       kernel-lib/radix-tree.h extent-cache.h \
-	       extent_io.h ioctl.h ctree.h btrfsck.h version.h
+	       kernel-lib/radix-tree.h kernel-lib/sizes.h kernel-lib/raid56.h \
+	       extent-cache.h extent_io.h ioctl.h ctree.h btrfsck.h version.h
+convert_objects = convert/main.o convert/common.o convert/source-fs.o \
+		  convert/source-ext2.o
+mkfs_objects = mkfs/main.o mkfs/common.o
+
 TESTS = fsck-tests.sh convert-tests.sh
 
 udev_rules = 64-btrfs-dm.rules
-
-prefix ?= @prefix@
-exec_prefix = @exec_prefix@
-bindir = @bindir@
-libdir ?= @libdir@
-incdir = @includedir@/btrfs
-udevdir = @UDEVDIR@
-udevruledir = ${udevdir}/rules.d
 
 ifeq ("$(origin V)", "command line")
   BUILD_VERBOSE = $(V)
@@ -163,6 +158,11 @@ ifneq (,$(findstring asan,$(D)))
   DEBUG_CFLAGS_INTERNAL += -fsanitize=address
 endif
 
+ifneq (,$(findstring tsan,$(D)))
+  DEBUG_CFLAGS_INTERNAL += -fsanitize=thread -fPIE
+  LD_FLAGS += -fsanitize=thread -ltsan -pie
+endif
+
 ifneq (,$(findstring ubsan,$(D)))
   DEBUG_CFLAGS_INTERNAL += -fsanitize=undefined
 endif
@@ -193,7 +193,6 @@ endif
 
 # external libs required by various binaries; for btrfs-foo,
 # specify btrfs_foo_libs = <list of libs>; see $($(subst...)) rules below
-btrfs_convert_libs = @EXT2FS_LIBS@ @COM_ERR_LIBS@
 btrfs_convert_cflags = -DBTRFSCONVERT_EXT2=$(BTRFSCONVERT_EXT2)
 btrfs_fragments_libs = -lgd -lpng -ljpeg -lfreetype
 btrfs_debug_tree_objects = cmds-inspect-dump-tree.o
@@ -219,11 +218,14 @@ endif
 .PHONY: $(TESTDIRS)
 .PHONY: $(CLEANDIRS)
 .PHONY: all install clean
+.PHONY: FORCE
 
 # Create all the static targets
 static_objects = $(patsubst %.o, %.static.o, $(objects))
 static_cmds_objects = $(patsubst %.o, %.static.o, $(cmds_objects))
 static_libbtrfs_objects = $(patsubst %.o, %.static.o, $(libbtrfs_objects))
+static_convert_objects = $(patsubst %.o, %.static.o, $(convert_objects))
+static_mkfs_objects = $(patsubst %.o, %.static.o, $(mkfs_objects))
 
 libs_shared = libbtrfs.so.0.1
 libs_static = libbtrfs.a
@@ -265,7 +267,7 @@ endif
 	$(Q)$(CC) $(STATIC_CFLAGS) -c $< -o $@ $($(subst -,_,$(@:%.static.o=%)-cflags)) \
 		$($(subst -,_,btrfs-$(@:%/$(notdir $@)=%)-cflags))
 
-all: $(progs) $(BUILDDIRS)
+all: $(progs) libbtrfs $(BUILDDIRS)
 $(SUBDIRS): $(BUILDDIRS)
 $(BUILDDIRS):
 	@echo "Making all in $(patsubst build-%,%,$@)"
@@ -276,11 +278,12 @@ test-convert: btrfs btrfs-convert
 	$(Q)bash tests/convert-tests.sh
 
 test-check: test-fsck
-test-fsck: btrfs btrfs-image btrfs-corrupt-block btrfs-debug-tree mkfs.btrfs
+test-fsck: btrfs btrfs-image btrfs-corrupt-block mkfs.btrfs btrfstune
 	@echo "    [TEST]   fsck-tests.sh"
 	$(Q)bash tests/fsck-tests.sh
 
-test-misc: btrfs btrfs-image btrfs-corrupt-block btrfs-debug-tree mkfs.btrfs btrfstune
+test-misc: btrfs btrfs-image btrfs-corrupt-block mkfs.btrfs btrfstune fssum \
+		btrfs-zero-log btrfs-find-root btrfs-select-super
 	@echo "    [TEST]   misc-tests.sh"
 	$(Q)bash tests/misc-tests.sh
 
@@ -303,7 +306,7 @@ test-clean:
 test-inst: all
 	@tmpdest=`mktemp --tmpdir -d btrfs-inst.XXXXXX` && \
 		echo "Test installation to $$tmpdest" && \
-		$(MAKE) DESTDIR=$$tmpdest install && \
+		$(MAKE) $(MAKEOPTS) DESTDIR=$$tmpdest install && \
 		$(RM) -rf -- $$tmpdest
 
 test: test-fsck test-mkfs test-convert test-misc test-fuzz test-cli
@@ -317,6 +320,16 @@ static: $(progs_static)
 version.h: version.sh version.h.in configure.ac
 	@echo "    [SH]     $@"
 	$(Q)bash ./config.status --silent $@
+
+mktables: kernel-lib/mktables.c
+	@echo "    [CC]     $@"
+	$(Q)$(CC) $(CFLAGS) $< -o $@
+
+kernel-lib/tables.c: mktables
+	@echo "    [TABLE]  $@"
+	$(Q)./mktables > $@ || ($(RM) -f $@ && exit 1)
+
+libbtrfs: $(libs_shared) $(lib_links)
 
 $(libs_shared): $(libbtrfs_objects) $(lib_links) send.h
 	@echo "    [LD]     $@"
@@ -341,29 +354,27 @@ $(lib_links):
 # For static variants, use an extra $(subst) to get rid of the ".static"
 # from the target name before translating to list of libs
 
-btrfs-%.static: $(static_objects) btrfs-%.static.o $(static_libbtrfs_objects) $(patsubst %.o,%.static.o,$(standalone_deps))
+btrfs-%.static: btrfs-%.static.o $(static_objects) $(patsubst %.o,%.static.o,$(standalone_deps)) $(static_libbtrfs_objects)
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ $@.o $(static_objects) \
 		$(patsubst %.o, %.static.o, $($(subst -,_,$(subst .static,,$@)-objects))) \
 		$(static_libbtrfs_objects) $(STATIC_LDFLAGS) \
 		$($(subst -,_,$(subst .static,,$@)-libs)) $(STATIC_LIBS)
 
-btrfs-%: $(objects) $(libs_static) btrfs-%.o $(standalone_deps)
+btrfs-%: btrfs-%.o $(objects) $(standalone_deps) $(libs_static)
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) -o $@ $(objects) $@.o \
 		$($(subst -,_,$@-objects)) \
 		$(libs_static) \
 		$(LDFLAGS) $(LIBS) $($(subst -,_,$@-libs))
 
-btrfs: $(objects) btrfs.o $(cmds_objects) $(libs_static)
+btrfs: btrfs.o $(objects) $(cmds_objects) $(libs_static)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -o btrfs btrfs.o $(cmds_objects) \
-		$(objects) $(libs_static) $(LDFLAGS) $(LIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS) $(LIBS_COMP)
 
-btrfs.static: $(static_objects) btrfs.static.o $(static_cmds_objects) $(static_libbtrfs_objects)
+btrfs.static: btrfs.static.o $(static_objects) $(static_cmds_objects) $(static_libbtrfs_objects)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -o btrfs.static btrfs.static.o $(static_cmds_objects) \
-		$(static_objects) $(static_libbtrfs_objects) $(STATIC_LDFLAGS) $(STATIC_LIBS)
+	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ $^ $(STATIC_LDFLAGS) $(STATIC_LIBS) $(STATIC_LIBS_COMP)
 
 # For backward compatibility, 'btrfs' changes behaviour to fsck if it's named 'btrfsck'
 btrfsck: btrfs
@@ -374,50 +385,45 @@ btrfsck.static: btrfs.static
 	@echo "    [LN]     $@"
 	$(Q)$(LN_S) -f $^ $@
 
-mkfs.btrfs: $(objects) $(libs_static) mkfs/main.o
+mkfs.btrfs: $(mkfs_objects) $(objects) $(libs_static)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -o mkfs.btrfs $(objects) $(libs_static) mkfs/main.o $(LDFLAGS) $(LIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-mkfs.btrfs.static: $(static_objects) mkfs/main.static.o $(static_libbtrfs_objects)
+mkfs.btrfs.static: $(static_mkfs_objects) $(static_objects) $(static_libbtrfs_objects)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -o mkfs.btrfs.static mkfs/main.static.o $(static_objects) \
-		$(static_libbtrfs_objects) $(STATIC_LDFLAGS) $(STATIC_LIBS)
+	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ $^ $(STATIC_LDFLAGS) $(STATIC_LIBS)
 
-btrfstune: $(objects) $(libs_static) btrfstune.o
+btrfstune: btrfstune.o $(objects) $(libs_static)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -o btrfstune $(objects) btrfstune.o $(libs_static) $(LDFLAGS) $(LIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-btrfstune.static: $(static_objects) btrfstune.static.o $(static_libbtrfs_objects)
+btrfstune.static: btrfstune.static.o $(static_objects) $(static_libbtrfs_objects)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ btrfstune.static.o $(static_objects) \
-		$(static_libbtrfs_objects) $(STATIC_LDFLAGS) $(STATIC_LIBS)
+	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ $^ $(STATIC_LDFLAGS) $(STATIC_LIBS)
 
-btrfs-image: $(objects) $(libs_static) image/main.o
+btrfs-image: image/main.o $(objects) $(libs_static)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -I$(TOPDIR)/image -o btrfs-image $(objects) image/main.o $(libs_static) $(LDFLAGS) $(LIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS) $(LIBS_COMP)
 
-btrfs-image.static: $(static_objects) image/main.static.o $(static_libbtrfs_objects)
+btrfs-image.static: image/main.static.o $(static_objects) $(static_libbtrfs_objects)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ image/main.static.o $(static_objects) \
-		$(static_libbtrfs_objects) $(STATIC_LDFLAGS) $(STATIC_LIBS)
+	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ $^ $(STATIC_LDFLAGS) $(STATIC_LIBS) $(STATIC_LIBS_COMP)
 
-btrfs-convert: $(objects) $(libs_static) convert/main.o
+btrfs-convert: $(convert_objects) $(objects) $(libs_static)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -I$(TOPDIR)/convert -o btrfs-convert $(objects) convert/main.o $(libs_static) \
-		$(LDFLAGS) $(btrfs_convert_libs) $(LIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(btrfs_convert_libs) $(LIBS)
 
-btrfs-convert.static: $(static_objects) convert/main.static.o $(static_libbtrfs_objects)
+btrfs-convert.static: $(static_convert_objects) $(static_objects) $(static_libbtrfs_objects)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ convert/main.static.o $(static_objects) \
-		$(static_libbtrfs_objects) $(STATIC_LDFLAGS) $(btrfs_convert_libs) $(STATIC_LIBS)
+	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ $^ $(STATIC_LDFLAGS) $(btrfs_convert_libs) $(STATIC_LIBS)
 
-dir-test: $(objects) $(libs) dir-test.o
+dir-test: dir-test.o $(objects) $(libs)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -o dir-test $(objects) $(libs) dir-test.o $(LDFLAGS) $(LIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-quick-test: $(objects) $(libs) quick-test.o
+quick-test: quick-test.o $(objects) $(libs)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -o quick-test $(objects) $(libs) quick-test.o $(LDFLAGS) $(LIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 ioctl-test.o: ioctl-test.c ioctl.h kerncompat.h ctree.h
 	@echo "    [CC]   $@"
@@ -455,47 +461,69 @@ test-ioctl: ioctl-test ioctl-test-32 ioctl-test-64
 	$(Q)./ioctl-test-32 > ioctl-test-32.log
 	$(Q)./ioctl-test-64 > ioctl-test-64.log
 
-library-test: $(libs_shared) library-test.o
-	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) -o library-test library-test.o $(LDFLAGS) -Wl,-rpath=$(TOPDIR) -lbtrfs
-	@echo "    [TEST]   $@"
-	$(Q)./$@
+library-test: library-test.c $(libs_shared)
+	@echo "    [TEST PREP]  $@"$(eval TMPD=$(shell mktemp -d))
+	$(Q)mkdir -p $(TMPD)/include/btrfs && \
+	cp $(libbtrfs_headers) $(TMPD)/include/btrfs && \
+	cd $(TMPD) && $(CC) -I$(TMPD)/include -o $@ $(addprefix $(TOPDIR)/,$^) -Wl,-rpath=$(TOPDIR) -lbtrfs
+	@echo "    [TEST RUN]   $@"
+	$(Q)cd $(TMPD) && ./$@
+	@echo "    [TEST CLEAN] $@"
+	$(Q)$(RM) -rf -- $(TMPD)
 
-library-test.static: $(libs_static) library-test.static.o
-	@echo "    [LD]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -o library-test.static library-test.static.o $(STATIC_LDFLAGS) $(libs_static) $(STATIC_LIBS)
-	@echo "    [TEST]   $@"
-	$(Q)./$@
+library-test.static: library-test.c $(libs_static)
+	@echo "    [TEST PREP]  $@"$(eval TMPD=$(shell mktemp -d))
+	$(Q)mkdir -p $(TMPD)/include/btrfs && \
+	cp $(libbtrfs_headers) $(TMPD)/include/btrfs && \
+	cd $(TMPD) && $(CC) -I$(TMPD)/include -o $@ $(addprefix $(TOPDIR)/,$^) $(STATIC_LDFLAGS) $(STATIC_LIBS)
+	@echo "    [TEST RUN]   $@"
+	$(Q)cd $(TMPD) && ./$@
+	@echo "    [TEST CLEAN] $@"
+	$(Q)$(RM) -rf -- $(TMPD)
+
+fssum: tests/fssum.c tests/sha224-256.c
+	@echo "    [LD]   $@"
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test-build: test-build-pre test-build-real
 
 test-build-pre:
-	$(MAKE) clean-all
+	$(MAKE) $(MAKEOPTS) clean-all
 	./autogen.sh
 	./configure
 
 test-build-real:
-	$(MAKE) library-test
-	-$(MAKE) library-test.static
-	$(MAKE) -j 8 all
-	-$(MAKE) -j 8 static
-	$(MAKE) -j 8 $(progs_extra)
+	$(MAKE) $(MAKEOPTS) library-test
+	-$(MAKE) $(MAKEOPTS) library-test.static
+	$(MAKE) $(MAKEOPTS) -j 8 all
+	-$(MAKE) $(MAKEOPTS) -j 8 static
+	$(MAKE) $(MAKEOPTS) -j 8 $(progs_extra)
 
 manpages:
 	$(Q)$(MAKE) $(MAKEOPTS) -C Documentation
 
+tags: FORCE
+	@echo "    [TAGS]   $(TAGS_CMD)"
+	$(Q)$(TAGS_CMD) *.[ch] image/*.[ch] convert/*.[ch] mkfs/*.[ch]
+
+cscope: FORCE
+	@echo "    [CSCOPE] $(CSCOPE_CMD)"
+	$(Q)ls -1 *.[ch] image/*.[ch] convert/*.[ch] mkfs/*.[ch] > cscope.files
+	$(Q)$(CSCOPE_CMD)
 
 clean-all: clean clean-doc clean-gen
 
 clean: $(CLEANDIRS)
 	@echo "Cleaning"
-	$(Q)$(RM) -f -- $(progs) cscope.out *.o *.o.d \
+	$(Q)$(RM) -f -- $(progs) *.o *.o.d \
 		kernel-lib/*.o kernel-lib/*.o.d \
+		kernel-shared/*.o kernel-shared/*.o.d \
+		kernel-lib/tables.c \
 		image/*.o image/*.o.d \
 		convert/*.o convert/*.o.d \
 		mkfs/*.o mkfs/*.o.d \
 	      dir-test ioctl-test quick-test library-test library-test-static \
-	      btrfs.static mkfs.btrfs.static \
+              mktables btrfs.static mkfs.btrfs.static fssum \
 	      $(check_defs) \
 	      $(libs) $(lib_links) \
 	      $(progs_static) $(progs_extra)
@@ -507,8 +535,9 @@ clean-doc:
 clean-gen:
 	@echo "Cleaning Generated Files"
 	$(Q)$(RM) -rf -- version.h config.status config.cache connfig.log \
-		configure.lineno config.status.lineno Makefile \
-		Documentation/Makefile \
+		configure.lineno config.status.lineno Makefile.inc \
+		Documentation/Makefile tags \
+		cscope.files cscope.out cscope.in.out cscope.po.out \
 		config.log config.h config.h.in~ aclocal.m4 \
 		configure autom4te.cache/ config/
 

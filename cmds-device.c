@@ -32,6 +32,8 @@
 #include "cmds-fi-usage.h"
 
 #include "commands.h"
+#include "help.h"
+#include "mkfs/common.h"
 
 static const char * const device_cmd_group_usage[] = {
 	"btrfs device <command> [<args>]",
@@ -398,6 +400,7 @@ static int cmd_device_stats(int argc, char **argv)
 	while (1) {
 		int c;
 		static const struct option long_options[] = {
+			{"check", no_argument, NULL, 'c'},
 			{"reset", no_argument, NULL, 'z'},
 			{NULL, 0, NULL, 0}
 		};
@@ -533,8 +536,8 @@ static int _cmd_device_usage(int fd, char *path, unsigned unit_mode)
 
 	for (i = 0; i < devcount; i++) {
 		printf("%s, ID: %llu\n", devinfo[i].path, devinfo[i].devid);
-		print_device_sizes(fd, &devinfo[i], unit_mode);
-		print_device_chunks(fd, &devinfo[i], chunkinfo, chunkcount,
+		print_device_sizes(&devinfo[i], unit_mode);
+		print_device_chunks(&devinfo[i], chunkinfo, chunkcount,
 				unit_mode);
 		printf("\n");
 	}

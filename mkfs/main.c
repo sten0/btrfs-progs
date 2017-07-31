@@ -43,6 +43,9 @@
 #include "transaction.h"
 #include "utils.h"
 #include "list_sort.h"
+#include "help.h"
+#include "mkfs/common.h"
+#include "fsfeatures.h"
 
 static u64 index_cnt = 2;
 static int verbose = 1;
@@ -64,6 +67,7 @@ struct mkfs_allocation {
 static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 				struct mkfs_allocation *allocation)
 {
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	struct btrfs_trans_handle *trans;
 	u64 bytes_used;
 	u64 chunk_start = 0;
@@ -71,10 +75,10 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 	int ret;
 
 	trans = btrfs_start_transaction(root, 1);
-	bytes_used = btrfs_super_bytes_used(root->fs_info->super_copy);
+	bytes_used = btrfs_super_bytes_used(fs_info->super_copy);
 
 	root->fs_info->system_allocs = 1;
-	ret = btrfs_make_block_group(trans, root, bytes_used,
+	ret = btrfs_make_block_group(trans, fs_info, bytes_used,
 				     BTRFS_BLOCK_GROUP_SYSTEM,
 				     BTRFS_FIRST_CHUNK_TREE_OBJECTID,
 				     0, BTRFS_MKFS_SYSTEM_GROUP_SIZE);
@@ -83,7 +87,7 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 		return ret;
 
 	if (mixed) {
-		ret = btrfs_alloc_chunk(trans, root->fs_info->extent_root,
+		ret = btrfs_alloc_chunk(trans, fs_info,
 					&chunk_start, &chunk_size,
 					BTRFS_BLOCK_GROUP_METADATA |
 					BTRFS_BLOCK_GROUP_DATA);
@@ -93,7 +97,7 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 		}
 		if (ret)
 			return ret;
-		ret = btrfs_make_block_group(trans, root, 0,
+		ret = btrfs_make_block_group(trans, fs_info, 0,
 					     BTRFS_BLOCK_GROUP_METADATA |
 					     BTRFS_BLOCK_GROUP_DATA,
 					     BTRFS_FIRST_CHUNK_TREE_OBJECTID,
@@ -102,7 +106,7 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 			return ret;
 		allocation->mixed += chunk_size;
 	} else {
-		ret = btrfs_alloc_chunk(trans, root->fs_info->extent_root,
+		ret = btrfs_alloc_chunk(trans, fs_info,
 					&chunk_start, &chunk_size,
 					BTRFS_BLOCK_GROUP_METADATA);
 		if (ret == -ENOSPC) {
@@ -111,7 +115,7 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 		}
 		if (ret)
 			return ret;
-		ret = btrfs_make_block_group(trans, root, 0,
+		ret = btrfs_make_block_group(trans, fs_info, 0,
 					     BTRFS_BLOCK_GROUP_METADATA,
 					     BTRFS_FIRST_CHUNK_TREE_OBJECTID,
 					     chunk_start, chunk_size);
@@ -131,12 +135,13 @@ static int create_data_block_groups(struct btrfs_trans_handle *trans,
 		struct btrfs_root *root, int mixed,
 		struct mkfs_allocation *allocation)
 {
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	u64 chunk_start = 0;
 	u64 chunk_size = 0;
 	int ret = 0;
 
 	if (!mixed) {
-		ret = btrfs_alloc_chunk(trans, root->fs_info->extent_root,
+		ret = btrfs_alloc_chunk(trans, fs_info,
 					&chunk_start, &chunk_size,
 					BTRFS_BLOCK_GROUP_DATA);
 		if (ret == -ENOSPC) {
@@ -145,7 +150,7 @@ static int create_data_block_groups(struct btrfs_trans_handle *trans,
 		}
 		if (ret)
 			return ret;
-		ret = btrfs_make_block_group(trans, root, 0,
+		ret = btrfs_make_block_group(trans, fs_info, 0,
 					     BTRFS_BLOCK_GROUP_DATA,
 					     BTRFS_FIRST_CHUNK_TREE_OBJECTID,
 					     chunk_start, chunk_size);
@@ -158,8 +163,8 @@ err:
 	return ret;
 }
 
-static int make_root_dir(struct btrfs_trans_handle *trans, struct btrfs_root *root,
-		struct mkfs_allocation *allocation)
+static int make_root_dir(struct btrfs_trans_handle *trans,
+		struct btrfs_root *root)
 {
 	struct btrfs_key location;
 	int ret;
@@ -241,11 +246,12 @@ static int create_one_raid_group(struct btrfs_trans_handle *trans,
 			      struct mkfs_allocation *allocation)
 
 {
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	u64 chunk_start;
 	u64 chunk_size;
 	int ret;
 
-	ret = btrfs_alloc_chunk(trans, root->fs_info->extent_root,
+	ret = btrfs_alloc_chunk(trans, fs_info,
 				&chunk_start, &chunk_size, type);
 	if (ret == -ENOSPC) {
 		error("not enough free space to allocate chunk");
@@ -254,7 +260,7 @@ static int create_one_raid_group(struct btrfs_trans_handle *trans,
 	if (ret)
 		return ret;
 
-	ret = btrfs_make_block_group(trans, root->fs_info->extent_root, 0,
+	ret = btrfs_make_block_group(trans, fs_info, 0,
 				     type, BTRFS_FIRST_CHUNK_TREE_OBJECTID,
 				     chunk_start, chunk_size);
 
@@ -448,7 +454,7 @@ static int fill_inode_item(struct btrfs_trans_handle *trans,
 			   struct btrfs_inode_item *dst, struct stat *src)
 {
 	u64 blocks = 0;
-	u64 sectorsize = root->sectorsize;
+	u64 sectorsize = root->fs_info->sectorsize;
 
 	/*
 	 * btrfs_inode_item has some reserved fields
@@ -541,8 +547,8 @@ static u64 calculate_dir_inode_size(const char *dirname)
 static int add_inode_items(struct btrfs_trans_handle *trans,
 			   struct btrfs_root *root,
 			   struct stat *st, const char *name,
-			   u64 self_objectid, ino_t parent_inum,
-			   int dir_index_cnt, struct btrfs_inode_item *inode_ret)
+			   u64 self_objectid,
+			   struct btrfs_inode_item *inode_ret)
 {
 	int ret;
 	struct btrfs_inode_item btrfs_inode;
@@ -642,15 +648,14 @@ fail:
 static int add_file_items(struct btrfs_trans_handle *trans,
 			  struct btrfs_root *root,
 			  struct btrfs_inode_item *btrfs_inode, u64 objectid,
-			  ino_t parent_inum, struct stat *st,
-			  const char *path_name, int out_fd)
+			  struct stat *st, const char *path_name)
 {
 	int ret = -1;
 	ssize_t ret_read;
 	u64 bytes_read = 0;
 	struct btrfs_key key;
 	int blocks;
-	u32 sectorsize = root->sectorsize;
+	u32 sectorsize = root->fs_info->sectorsize;
 	u64 first_block = 0;
 	u64 file_pos = 0;
 	u64 cur_bytes;
@@ -751,7 +756,7 @@ again:
 		if (ret)
 			goto end;
 
-		ret = write_and_map_eb(trans, root, eb);
+		ret = write_and_map_eb(root->fs_info, eb);
 		if (ret) {
 			error("failed to write %s", path_name);
 			goto end;
@@ -901,7 +906,6 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 
 			ret = add_inode_items(trans, root, &st,
 					      cur_file->d_name, cur_inum,
-					      parent_inum, dir_index_cnt,
 					      &cur_inode);
 			if (ret == -EEXIST) {
 				if (st.st_nlink <= 1) {
@@ -941,8 +945,8 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 				list_add_tail(&dir_entry->list,	&dir_head->list);
 			} else if (S_ISREG(st.st_mode)) {
 				ret = add_file_items(trans, root, &cur_inode,
-						     cur_inum, parent_inum, &st,
-						     cur_file->d_name, out_fd);
+						     cur_inum, &st,
+						     cur_file->d_name);
 				if (ret) {
 					error("unable to add file items for %s: %d",
 						cur_file->d_name, ret);
@@ -983,6 +987,7 @@ static int create_chunks(struct btrfs_trans_handle *trans,
 			 u64 size_of_data,
 			 struct mkfs_allocation *allocation)
 {
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	u64 chunk_start;
 	u64 chunk_size;
 	u64 meta_type = BTRFS_BLOCK_GROUP_METADATA;
@@ -992,35 +997,35 @@ static int create_chunks(struct btrfs_trans_handle *trans,
 	int ret;
 
 	for (i = 0; i < num_of_meta_chunks; i++) {
-		ret = btrfs_alloc_chunk(trans, root->fs_info->extent_root,
+		ret = btrfs_alloc_chunk(trans, fs_info,
 					&chunk_start, &chunk_size, meta_type);
 		if (ret)
 			return ret;
-		ret = btrfs_make_block_group(trans, root->fs_info->extent_root, 0,
+		ret = btrfs_make_block_group(trans, fs_info, 0,
 					     meta_type, BTRFS_FIRST_CHUNK_TREE_OBJECTID,
 					     chunk_start, chunk_size);
 		allocation->metadata += chunk_size;
 		if (ret)
 			return ret;
 		set_extent_dirty(&root->fs_info->free_space_cache,
-				 chunk_start, chunk_start + chunk_size - 1, 0);
+				 chunk_start, chunk_start + chunk_size - 1);
 	}
 
 	if (size_of_data < minimum_data_chunk_size)
 		size_of_data = minimum_data_chunk_size;
 
-	ret = btrfs_alloc_data_chunk(trans, root->fs_info->extent_root,
+	ret = btrfs_alloc_data_chunk(trans, fs_info,
 				     &chunk_start, size_of_data, data_type, 0);
 	if (ret)
 		return ret;
-	ret = btrfs_make_block_group(trans, root->fs_info->extent_root, 0,
+	ret = btrfs_make_block_group(trans, fs_info, 0,
 				     data_type, BTRFS_FIRST_CHUNK_TREE_OBJECTID,
 				     chunk_start, size_of_data);
 	allocation->data += size_of_data;
 	if (ret)
 		return ret;
 	set_extent_dirty(&root->fs_info->free_space_cache,
-			 chunk_start, chunk_start + size_of_data - 1, 0);
+			 chunk_start, chunk_start + size_of_data - 1);
 	return ret;
 }
 
@@ -1397,7 +1402,6 @@ int main(int argc, char **argv)
 	char *label = NULL;
 	u64 block_count = 0;
 	u64 dev_block_count = 0;
-	u64 blocks[7];
 	u64 alloc_start = 0;
 	u64 metadata_profile = 0;
 	u64 data_profile = 0;
@@ -1720,12 +1724,6 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	blocks[0] = BTRFS_SUPER_INFO_OFFSET;
-	for (i = 1; i < 7; i++) {
-		blocks[i] = BTRFS_SUPER_INFO_OFFSET + 1024 * 1024 +
-			nodesize * i;
-	}
-
 	if (group_profile_max_safe_loss(metadata_profile) <
 		group_profile_max_safe_loss(data_profile)){
 		warning("metadata has lower redundancy than data!\n");
@@ -1733,7 +1731,6 @@ int main(int argc, char **argv)
 
 	mkfs_cfg.label = label;
 	memcpy(mkfs_cfg.fs_uuid, fs_uuid, sizeof(mkfs_cfg.fs_uuid));
-	memcpy(mkfs_cfg.blocks, blocks, sizeof(blocks));
 	mkfs_cfg.num_bytes = dev_block_count;
 	mkfs_cfg.nodesize = nodesize;
 	mkfs_cfg.sectorsize = sectorsize;
@@ -1774,7 +1771,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	ret = make_root_dir(trans, root, &allocation);
+	ret = make_root_dir(trans, root);
 	if (ret) {
 		error("failed to setup the root directory: %d", ret);
 		exit(1);

@@ -36,16 +36,6 @@ Enable/disable support for Posix Access Control Lists (ACLs).  See the
 The support for ACL is build-time configurable (BTRFS_FS_POSIX_ACL) and
 mount fails if 'acl' is requested but the feature is not compiled in.
 
-*alloc_start='bytes'*::
-(default: 1M, minimum: 1M)
-+
-Debugging option to force all block allocations above a certain
-byte threshold on each block device.  The value is specified in
-bytes, optionally with a K, M, or G suffix (case insensitive).
-+
-This option was used for testing and has no practical use, it's slated to be
-removed in the future.
-
 *autodefrag*::
 *noautodefrag*::
 (since: 3.0, default: off)
@@ -130,10 +120,15 @@ but a warning is printed if it's more than 300 seconds (5 minutes).
 Control BTRFS file data compression.  Type may be specified as 'zlib',
 'lzo' or 'no' (for no compression, used for remounting).  If no type
 is specified, 'zlib' is used.  If 'compress-force' is specified,
-all files will be compressed, whether or not they compress well. Otherwise
-some simple heuristics are applied to detect an incompressible file. If the
-first blocks written to a file are not compressible, the whole file is
-permanently marked to skip compression.
+the compression will allways be attempted, but the data may end up uncompressed
+if the compression would make them larger.
++
+Otherwise some simple heuristics are applied to detect an incompressible file.
+If the first blocks written to a file are not compressible, the whole file is
+permanently marked to skip compression. As this is too simple, the
+'compress-force' is a workaround that will compress most of the files at the
+cost of some wasted CPU cycles on failed attempts. The heuristics of 'compress'
+will improve in the future so this will not be necessary.
 +
 NOTE: If compression is enabled, 'nodatacow' and 'nodatasum' are disabled.
 
@@ -288,12 +283,6 @@ override the internal logic in favor of the metadata allocation if the expected
 workload is supposed to be metadata intense (snapshots, reflinks, xattrs,
 inlined files).
 
-*recovery*::
-(since: 3.2, default: off, deprecated since: 4.5)
-+
-NOTE: this option has been replaced by 'usebackuproot' and should not be used
-but will work on 4.5+ kernels.
-
 *norecovery*::
 (since: 4.5, default: off)
 +
@@ -314,9 +303,10 @@ normally be needed.
 *skip_balance*::
 (since: 3.3, default: off)
 +
-Skip automatic resume of interrupted balance operation after mount.
-May be resumed with *btrfs balance resume* or the paused state can be removed
-by *btrfs balance cancel*. The default behaviour is to start interrutpd balance.
+Skip automatic resume of an interrupted balance operation. The operation can
+later be resumed with *btrfs balance resume*, or the paused state can be
+removed with *btrfs balance cancel*. The default behaviour is to resume an
+interrupted balance immediately after a volume is mounted.
 
 *space_cache*::
 *space_cache='version'*::
@@ -347,19 +337,20 @@ If a version is not explicitly specified, the default implementation will be
 chosen, which is 'v1' as of 4.9.
 
 *ssd*::
-*nossd*::
 *ssd_spread*::
+*nossd*::
 (default: SSD autodetected)
 +
 Options to control SSD allocation schemes.  By default, BTRFS will
 enable or disable SSD allocation heuristics depending on whether a
-rotational or non-rotational disk is in use (contents of
-'/sys/block/DEV/queue/rotational').  The 'ssd' and 'nossd' options
-can override this autodetection.
+rotational or non-rotational device is in use (contents of
+'/sys/block/DEV/queue/rotational'). If it is, the 'ssd' option is turned on.
+The option 'nossd' will disable the autodetection.
 +
 The 'ssd_spread' mount option attempts to allocate into bigger and aligned
 chunks of unused space, and may perform better on low-end SSDs.  'ssd_spread'
-implies 'ssd', enabling all other SSD heuristics as well.
+implies 'ssd', enabling all other SSD heuristics as well. The option 'nossd'
+will disable all SSD options.
 
 *subvol='path'*::
 Mount subvolume from 'path' rather than the toplevel subvolume. The
@@ -373,12 +364,6 @@ This mount option overrides the default subvolume set for the given filesystem.
 +
 NOTE: if both 'subvolid' and 'subvol' are specified, they must point at the
 same subvolume, otherwise mount will fail.
-
-*subvolrootid='objectid'*::
-(irrelevant since: 3.2, formally deprecated since: 3.10)
-+
-A workaround option from times (pre 3.2) when it was not possible to mount a
-subvolume that did not reside directly under the toplevel subvolume.
 
 *thread_pool='number'*::
 (default: min(NRCPUS + 2, 8) )
@@ -419,6 +404,31 @@ NOTE: This option has replaced 'recovery'.
 Allow subvolumes to be deleted by their respective owner. Otherwise, only the
 root user can do that.
 
+DEPRECATED MOUNT OPTIONS
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+List of mount options that have been removed, kept for backward compatibility.
+
+*alloc_start='bytes'*::
+(default: 1M, minimum: 1M, deprecated since: 4.13)
++
+Debugging option to force all block allocations above a certain
+byte threshold on each block device.  The value is specified in
+bytes, optionally with a K, M, or G suffix (case insensitive).
+
+*recovery*::
+(since: 3.2, default: off, deprecated since: 4.5)
++
+NOTE: this option has been replaced by 'usebackuproot' and should not be used
+but will work on 4.5+ kernels.
+
+*subvolrootid='objectid'*::
+(irrelevant since: 3.2, formally deprecated since: 3.10)
++
+A workaround option from times (pre 3.2) when it was not possible to mount a
+subvolume that did not reside directly under the toplevel subvolume.
+
+
 FILESYSTEM FEATURES
 -------------------
 
@@ -440,9 +450,9 @@ dump-super device* will dump a superblock, you can map the value of
 
 after mkfs, on a mounted filesystem::
 The features of a filesystem (with a given UUID) are listed in
-`/sys/fs/btrfs/UUID/features/`, one file per feature. The status of is stored
-insid the file. The value '1' is for enabled, '0' means the feature had
-been enabled at the mount time and turned off afterwards.
+`/sys/fs/btrfs/UUID/features/`, one file per feature. The status is stored
+inside the file. The value '1' is for enabled and active, while '0' means the
+feature was enabled at mount time but turned off afterwards.
 +
 Whether a particular feature can be turned on a mounted filesystem can be found
 in the directory `/sys/fs/btrfs/features/`, one file per feature. The value '1'
@@ -450,34 +460,36 @@ means the feature can be enabled.
 
 List of features (see also `mkfs.btrfs`(8) section 'FILESYSTEM FEATURES'):
 
-big_metadata::
+*big_metadata*::
 (since: 3.4)
 +
-the filesystem uses 'nodesize' bigger than the page size
-compress_lzo::
+the filesystem uses 'nodesize' for metadata blocks, this can be bigger than the
+page size
+
+*compress_lzo*::
 (since: 2.6.38)
 +
 the 'lzo' compression has been used on the filesystem, either as a mount option
 or via *btrfs filesystem defrag*.
 
-default_subvol::
+*default_subvol*::
 (since: 2.6.34)
 +
 the default subvolume has been set on the filesystem
 
-extended_iref::
+*extended_iref*::
 (since: 3.7)
 +
 increased hardlink limit per file in a directory to 65536, older kernels
 supported a varying number of hardlinks depending on the sum of all file name
 sizes that can be stored into one metadata block
 
-mixed_backref::
+*mixed_backref*::
 (since: 2.6.31)
 +
-the last major disk format change, improved backreferences
+the last major disk format change, improved backreferences, now default
 
-mixed_groups::
+*mixed_groups*::
 (since: 2.6.37)
 +
 mixed data and metadata block groups, ie. the data and metadata are not
@@ -489,17 +501,18 @@ and vice versa)
 on the other hand, the final layout is quite unpredictable and possibly highly
 fragmented, which means worse performance
 
-no_holes::
+*no_holes*::
 (since: 3.14)
++
 improved representation of file extents where holes are not explicitly
 stored as an extent, saves a few percent of metadata if sparse files are used
 
-raid56::
+*raid56*::
 (since: 3.9)
 +
 the filesystem contains or contained a raid56 profile of block groups
-+
-skinny_metadata::
+
+*skinny_metadata*::
 (since: 3.10)
 +
 reduced-size metadata for extent references, saves a few percent of metadata
@@ -532,7 +545,7 @@ empty files.
 
 *d*::
 'no dump', makes sense with 3rd party tools like `dump`(8), on BTRFS the
-attribute can be set/unset on no other special handling is done
+attribute can be set/unset but no other special handling is done
 
 *D*::
 'synchronous directory updates', for more details search `open`(2) for 'O_SYNC'
@@ -567,7 +580,7 @@ crw------- 1 root root 10, 234 Jan  1 12:00 /dev/btrfs-control
 --------------------
 
 The device accepts some ioctl calls that can perform following actions on the
-filesyste module:
+filesystem module:
 
 * scan devices for btrfs filesystem (ie. to let multi-device filesystems mount
   automatically) and register them with the kernel module
@@ -575,16 +588,16 @@ filesyste module:
   for a given filesystem
 * get the supported features (can be also found under '/sys/fs/btrfs/features')
 
-
-The device is usually created by ..., but can be created manually:
+The device is usually created by a system device node manager (eg. udev), but
+can be created manually:
 
 --------------------
 # mknod --mode=600 c 10 234 /dev/btrfs-control
 --------------------
 
-The device is not strictly required but the device scanning will not work and a
-workaround would need to be used to mount a multi-device filesystem. The mount
-option 'device' can trigger the device scanning during mount.
+The control device is not strictly required but the device scanning will not
+work and a workaround would need to be used to mount a multi-device filesystem.
+The mount option 'device' can trigger the device scanning during mount.
 
 SEE ALSO
 --------
