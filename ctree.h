@@ -138,6 +138,8 @@ struct btrfs_free_space_ctl;
  */
 #define BTRFS_DEV_ITEMS_OBJECTID 1ULL
 
+#define BTRFS_EMPTY_SUBVOL_DIR_OBJECTID 2ULL
+
 /*
  * the max metadata block size.  This limit is somewhat artificial,
  * but the memmove costs go through the roof for larger blocks.
@@ -1126,8 +1128,8 @@ struct btrfs_fs_info {
 
 	struct btrfs_fs_devices *fs_devices;
 	struct list_head space_info;
-	int system_allocs;
 
+	unsigned int system_allocs:1;
 	unsigned int readonly:1;
 	unsigned int on_restoring:1;
 	unsigned int is_chunk_recover:1;
@@ -1138,6 +1140,8 @@ struct btrfs_fs_info {
 	unsigned int avoid_meta_chunk_alloc:1;
 	unsigned int avoid_sys_chunk_alloc:1;
 	unsigned int finalize_on_close:1;
+
+	int transaction_aborted;
 
 	int (*free_extent_hook)(struct btrfs_trans_handle *trans,
 				struct btrfs_root *root,
@@ -2707,7 +2711,7 @@ int btrfs_insert_file_extent(struct btrfs_trans_handle *trans,
 			     u64 num_bytes);
 int btrfs_insert_inline_extent(struct btrfs_trans_handle *trans,
 				struct btrfs_root *root, u64 objectid,
-				u64 offset, char *buffer, size_t size);
+				u64 offset, const char *buffer, size_t size);
 int btrfs_csum_file_block(struct btrfs_trans_handle *trans,
 			  struct btrfs_root *root, u64 alloc_end,
 			  u64 bytenr, char *data, size_t len);

@@ -28,18 +28,41 @@ const struct simple_range btrfs_reserved_ranges[3] = {
 	{ BTRFS_SB_MIRROR_OFFSET(2), SZ_64K }
 };
 
-static int intersect_with_sb(u64 bytenr, u64 num_bytes)
+dev_t decode_dev(u32 dev)
+{
+	unsigned major = (dev & 0xfff00) >> 8;
+	unsigned minor = (dev & 0xff) | ((dev >> 12) & 0xfff00);
+
+	return MKDEV(major, minor);
+}
+
+int ext2_acl_count(size_t size)
+{
+	ssize_t s;
+
+	size -= sizeof(ext2_acl_header);
+	s = size - 4 * sizeof(ext2_acl_entry_short);
+	if (s < 0) {
+		if (size % sizeof(ext2_acl_entry_short))
+			return -1;
+		return size / sizeof(ext2_acl_entry_short);
+	} else {
+		if (s % sizeof(ext2_acl_entry))
+			return -1;
+		return s / sizeof(ext2_acl_entry) + 4;
+	}
+}
+
+static u64 intersect_with_reserved(u64 bytenr, u64 num_bytes)
 {
 	int i;
-	u64 offset;
 
-	for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++) {
-		offset = btrfs_sb_offset(i);
-		offset &= ~((u64)BTRFS_STRIPE_LEN - 1);
+	for (i = 0; i < ARRAY_SIZE(btrfs_reserved_ranges); i++) {
+		const struct simple_range *range = &btrfs_reserved_ranges[i];
 
-		if (bytenr < offset + BTRFS_STRIPE_LEN &&
-		    bytenr + num_bytes > offset)
-			return 1;
+		if (bytenr < range_end(range) &&
+		    bytenr + num_bytes >= range->start)
+			return range_end(range);
 	}
 	return 0;
 }
@@ -64,15 +87,15 @@ int block_iterate_proc(u64 disk_block, u64 file_block,
 		              struct blk_iterate_data *idata)
 {
 	int ret = 0;
-	int sb_region;
+	u64 reserved_boundary;
 	int do_barrier;
 	struct btrfs_root *root = idata->root;
 	struct btrfs_block_group_cache *cache;
 	u32 sectorsize = root->fs_info->sectorsize;
 	u64 bytenr = disk_block * sectorsize;
 
-	sb_region = intersect_with_sb(bytenr, sectorsize);
-	do_barrier = sb_region || disk_block >= idata->boundary;
+	reserved_boundary = intersect_with_reserved(bytenr, sectorsize);
+	do_barrier = reserved_boundary || disk_block >= idata->boundary;
 	if ((idata->num_blocks > 0 && do_barrier) ||
 	    (file_block > idata->first_block + idata->num_blocks) ||
 	    (disk_block != idata->disk_block + idata->num_blocks)) {
@@ -92,9 +115,8 @@ int block_iterate_proc(u64 disk_block, u64 file_block,
 				goto fail;
 		}
 
-		if (sb_region) {
-			bytenr += BTRFS_STRIPE_LEN - 1;
-			bytenr &= ~((u64)BTRFS_STRIPE_LEN - 1);
+		if (reserved_boundary) {
+			bytenr = reserved_boundary;
 		} else {
 			cache = btrfs_lookup_block_group(root->fs_info, bytenr);
 			BUG_ON(!cache);

@@ -21,6 +21,27 @@ _assert_path()
 	exit 1
 }
 
+# $1: this string gets matched to files, absolute or relative path, or a
+# systemwide command available via $PATH
+_is_file_or_command()
+{
+	local msg
+
+	msg="$1"
+	if [ -z "$msg" ]; then
+		return 1
+	fi
+
+	if [ -f "$msg" -o -d "$msg" -o -b "$msg" ]; then
+		return 0
+	fi
+	msg=$(type -p "$msg")
+	if [ -f "$msg" ]; then
+		return 0
+	fi
+	return 1
+}
+
 _fail()
 {
 	echo "$*" | tee -a "$RESULTS"
@@ -133,9 +154,12 @@ run_check_stdout()
 	echo "############### $@" >> "$RESULTS" 2>&1
 	if [[ $TEST_LOG =~ tty ]]; then echo "CMD(stdout): $@" > /dev/tty; fi
 	if [ "$1" = 'root_helper' ]; then
-		"$@" 2>&1 | tee -a "$RESULTS" || _fail "failed: $@"
+		"$@" 2>&1 | tee -a "$RESULTS"
 	else
-		$INSTRUMENT "$@" 2>&1 | tee -a "$RESULTS" || _fail "failed: $@"
+		$INSTRUMENT "$@" 2>&1 | tee -a "$RESULTS"
+	fi
+	if [ ${PIPESTATUS[0]} -ne 0 ]; then
+		_fail "failed: $@"
 	fi
 }
 
@@ -184,6 +208,11 @@ run_mustfail()
 
 	msg="$1"
 	shift
+
+	if _is_file_or_command "$msg"; then
+		echo "ASSERTION FAIL: 1st argument of run_mustfail must be a message"
+		exit 1
+	fi
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
@@ -480,7 +509,7 @@ generate_dataset() {
 			;;
 
 		slow_symlink)
-			long_filename=`date +%s | sha256sum | cut -f1 -d'-'`
+			long_filename=`date +%s | sha256sum | cut -f1 -d ' '`
 			run_check $SUDO_HELPER touch "$dirpath/$long_filename"
 			for num in $(seq 1 "$DATASET_SIZE"); do
 				run_check $SUDO_HELPER ln -s "$dirpath/$long_filename" "$dirpath/slow_slink.$num"
@@ -491,6 +520,47 @@ generate_dataset() {
 				of="$dirpath/$dataset_type" >/dev/null 2>&1
 			;;
 	esac
+}
+
+# prepare environment for loop devices, set up the following variables
+# - nloopdevs -- number of desired devices
+# - loopdevs  -- array containing paths to all devices (after prepare is called)
+# - loopdev_prefix -- file backed images starting with this string, 'img' by default
+#
+# $1: number of loop devices to be set up
+setup_loopdevs()
+{
+	if [ -z "$1" ]; then
+		_fail "setup_loopdevs needs a number"
+	fi
+	nloopdevs="$1"
+	loopdev_prefix=img
+	declare -a loopdevs
+
+}
+
+# create all loop devices from a given loopdev environment
+prepare_loopdevs()
+{
+	for i in `seq $nloopdevs`; do
+		touch $loopdev_prefix$i
+		chmod a+rw $loopdev_prefix$i
+		truncate -s0 $loopdev_prefix$i
+		truncate -s2g $loopdev_prefix$i
+		loopdevs[$i]=`run_check_stdout $SUDO_HELPER losetup --find --show $loopdev_prefix$i`
+	done
+}
+
+# detach loop devices and reset their size to 0, does not delete the files
+cleanup_loopdevs()
+{
+	for dev in ${loopdevs[@]}; do
+		run_check $SUDO_HELPER losetup -d $dev
+	done
+	for i in `seq $nloopdevs`; do
+		truncate -s0 $loopdev_prefix$i
+	done
+	run_check $SUDO_HELPER losetup --all
 }
 
 init_env()

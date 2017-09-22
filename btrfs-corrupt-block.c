@@ -168,7 +168,7 @@ static int corrupt_keys_in_block(struct btrfs_fs_info *fs_info, u64 bytenr)
 {
 	struct extent_buffer *eb;
 
-	eb = read_tree_block(fs_info, bytenr, fs_info->nodesize, 0);
+	eb = read_tree_block(fs_info, bytenr, 0);
 	if (!extent_buffer_uptodate(eb))
 		return -EIO;;
 
@@ -297,7 +297,6 @@ static void btrfs_corrupt_extent_tree(struct btrfs_trans_handle *trans,
 		struct extent_buffer *next;
 
 		next = read_tree_block(fs_info, btrfs_node_blockptr(eb, i),
-				       fs_info->nodesize,
 				       btrfs_node_ptr_generation(eb, i));
 		if (!extent_buffer_uptodate(next))
 			continue;
@@ -765,7 +764,7 @@ static int corrupt_metadata_block(struct btrfs_fs_info *fs_info, u64 block,
 		return -EINVAL;
 	}
 
-	eb = read_tree_block(fs_info, block, fs_info->nodesize, 0);
+	eb = read_tree_block(fs_info, block, 0);
 	if (!extent_buffer_uptodate(eb)) {
 		fprintf(stderr, "Couldn't read in tree block %s\n", field);
 		return -EINVAL;
@@ -1227,13 +1226,16 @@ int main(int argc, char **argv)
 		if (logical == (u64)-1)
 			print_usage(1);
 		trans = btrfs_start_transaction(root, 1);
+		BUG_ON(IS_ERR(trans));
 		ret = corrupt_extent(trans, root, logical);
 		btrfs_commit_transaction(trans, root);
 		goto out_close;
 	}
 	if (extent_tree) {
 		struct btrfs_trans_handle *trans;
+
 		trans = btrfs_start_transaction(root, 1);
+		BUG_ON(IS_ERR(trans));
 		btrfs_corrupt_extent_tree(trans, root->fs_info->extent_root,
 					  root->fs_info->extent_root->node);
 		btrfs_commit_transaction(trans, root);
@@ -1259,6 +1261,7 @@ int main(int argc, char **argv)
 			goto out_close;
 		}
 		trans = btrfs_start_transaction(root, 1);
+		BUG_ON(IS_ERR(trans));
 		ret = corrupt_item_nocow(trans, root->fs_info->chunk_root,
 					 path, del);
 		if (ret < 0)
@@ -1268,7 +1271,9 @@ int main(int argc, char **argv)
 	}
 	if (chunk_tree) {
 		struct btrfs_trans_handle *trans;
+
 		trans = btrfs_start_transaction(root, 1);
+		BUG_ON(IS_ERR(trans));
 		ret = corrupt_chunk_tree(trans, root->fs_info->chunk_root);
 		if (ret < 0)
 			fprintf(stderr, "Failed to corrupt chunk tree\n");
@@ -1282,6 +1287,7 @@ int main(int argc, char **argv)
 			print_usage(1);
 
 		trans = btrfs_start_transaction(root, 1);
+		BUG_ON(IS_ERR(trans));
 		if (file_extent == (u64)-1) {
 			printf("corrupting inode\n");
 			ret = corrupt_inode(trans, root, inode, field);
@@ -1365,7 +1371,7 @@ int main(int argc, char **argv)
 			struct extent_buffer *eb;
 
 			eb = btrfs_find_create_tree_block(root->fs_info,
-					logical, root->fs_info->sectorsize);
+					logical);
 			if (!eb) {
 				error(
 		"not enough memory to allocate extent buffer for bytenr %llu",
