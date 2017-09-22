@@ -33,7 +33,6 @@
 #include "utils.h"
 #include "commands.h"
 #include "crc32c.h"
-#include "cmds-inspect-dump-super.h"
 #include "help.h"
 
 static int check_csum_sblock(void *sb, int csum_size)
@@ -119,7 +118,7 @@ static void print_sys_chunk_array(struct btrfs_super_block *sb)
 			len = btrfs_chunk_item_size(num_stripes);
 			if (cur_offset + len > array_size)
 				goto out_short_read;
-			print_chunk(buf, chunk);
+			print_chunk_item(buf, chunk);
 		} else {
 			error("unexpected item type %u in sys_array at offset %u",
 				(u32)key.type, cur_offset);
@@ -519,8 +518,10 @@ int cmd_inspect_dump_super(int argc, char **argv)
 
 	while (1) {
 		int c;
+		enum { GETOPT_VAL_BYTENR = 257 };
 		static const struct option long_options[] = {
 			{"all", no_argument, NULL, 'a'},
+			{"bytenr", required_argument, NULL, GETOPT_VAL_BYTENR },
 			{"full", no_argument, NULL, 'f'},
 			{"force", no_argument, NULL, 'F'},
 			{"super", required_argument, NULL, 's' },
@@ -563,6 +564,11 @@ int cmd_inspect_dump_super(int argc, char **argv)
 			} else {
 				sb_bytenr = btrfs_sb_offset(arg);
 			}
+			all = 0;
+			break;
+		case GETOPT_VAL_BYTENR:
+			arg = arg_strtou64(optarg);
+			sb_bytenr = arg;
 			all = 0;
 			break;
 		default:

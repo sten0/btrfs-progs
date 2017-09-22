@@ -103,11 +103,15 @@
 #include "convert/source-fs.h"
 #include "fsfeatures.h"
 
-const struct btrfs_convert_operations ext2_convert_ops;
+extern const struct btrfs_convert_operations ext2_convert_ops;
+extern const struct btrfs_convert_operations reiserfs_convert_ops;
 
 static const struct btrfs_convert_operations *convert_operations[] = {
 #if BTRFSCONVERT_EXT2
 	&ext2_convert_ops,
+#endif
+#if BTRFSCONVERT_REISERFS
+	&reiserfs_convert_ops,
 #endif
 };
 
@@ -343,10 +347,12 @@ static int migrate_one_reserved_range(struct btrfs_trans_handle *trans,
 	 * migrate ranges that covered by old fs data.
 	 */
 	while (cur_off < range_end(range)) {
-		cache = lookup_cache_extent(used, cur_off, cur_len);
+		cache = search_cache_extent(used, cur_off);
 		if (!cache)
 			break;
 		cur_off = max(cache->start, cur_off);
+		if (cur_off >= range_end(range))
+			break;
 		cur_len = min(cache->start + cache->size, range_end(range)) -
 			  cur_off;
 		BUG_ON(cur_len < root->fs_info->sectorsize);
@@ -414,7 +420,7 @@ static int migrate_one_reserved_range(struct btrfs_trans_handle *trans,
 }
 
 /*
- * Relocate the used ext2 data in reserved ranges
+ * Relocate the used source fs data in reserved ranges
  */
 static int migrate_reserved_ranges(struct btrfs_trans_handle *trans,
 				   struct btrfs_root *root,
@@ -633,7 +639,7 @@ static int calculate_available_space(struct btrfs_convert_context *cctx)
 	 * Twice the minimal chunk size, to allow later wipe_reserved_ranges()
 	 * works without need to consider overlap
 	 */
-	u64 min_stripe_size = 2 * 16 * 1024 * 1024;
+	u64 min_stripe_size = SZ_32M;
 	int ret;
 
 	/* Calculate data_chunks */
@@ -745,8 +751,8 @@ static int create_image(struct btrfs_root *root,
 		flags |= BTRFS_INODE_NODATASUM;
 
 	trans = btrfs_start_transaction(root, 1);
-	if (!trans)
-		return -ENOMEM;
+	if (IS_ERR(trans))
+		return PTR_ERR(trans);
 
 	cache_tree_init(&used_tmp);
 	btrfs_init_path(&path);
@@ -798,7 +804,7 @@ static int create_image(struct btrfs_root *root,
 	 * Start from 1M, as 0~1M is reserved, and create_image_file_range()
 	 * can't handle bytenr 0(will consider it as a hole)
 	 */
-	cur = 1024 * 1024;
+	cur = SZ_1M;
 	while (cur < size) {
 		u64 len = size - cur;
 
@@ -875,7 +881,7 @@ static struct btrfs_root* link_subvol(struct btrfs_root *root,
 	btrfs_release_path(&path);
 
 	trans = btrfs_start_transaction(root, 1);
-	if (!trans) {
+	if (IS_ERR(trans)) {
 		error("unable to start transaction");
 		goto fail;
 	}
@@ -1013,7 +1019,7 @@ static int make_convert_data_block_groups(struct btrfs_trans_handle *trans,
 	 * And for single chunk, don't create chunk larger than 1G.
 	 */
 	max_chunk_size = cfg->num_bytes / 10;
-	max_chunk_size = min((u64)(1024 * 1024 * 1024), max_chunk_size);
+	max_chunk_size = min((u64)(SZ_1G), max_chunk_size);
 	max_chunk_size = round_down(max_chunk_size,
 				    extent_root->fs_info->sectorsize);
 
@@ -1071,9 +1077,9 @@ static int init_btrfs(struct btrfs_mkfs_config *cfg, struct btrfs_root *root,
 	fs_info->avoid_sys_chunk_alloc = 1;
 	fs_info->avoid_meta_chunk_alloc = 1;
 	trans = btrfs_start_transaction(root, 1);
-	if (!trans) {
+	if (IS_ERR(trans)) {
 		error("unable to start transaction");
-		ret = -EINVAL;
+		ret = PTR_ERR(trans);
 		goto err;
 	}
 	ret = btrfs_fix_block_accounting(trans, root);
@@ -1289,7 +1295,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		goto fail;
 	}
 
-	printf("creating btrfs metadata");
+	printf("creating btrfs metadata\n");
 	ret = pthread_mutex_init(&ctx.mutex, NULL);
 	if (ret) {
 		error("failed to initialize mutex: %d", ret);
@@ -1357,7 +1363,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	close_ctree(root);
 	close(fd);
 
-	printf("conversion complete");
+	printf("conversion complete\n");
 	return 0;
 fail:
 	clean_convert_context(&cctx);
@@ -1595,7 +1601,7 @@ next:
  * |   RSV 1   |  | Old  |   |    RSV 2  | | Old  | |   RSV 3   |
  * |   0~1M    |  | Fs   |   | SB2 + 64K | | Fs   | | SB3 + 64K |
  *
- * On the other hande, the converted fs image in btrfs is a completely 
+ * On the other hand, the converted fs image in btrfs is a completely
  * valid old fs.
  *
  * |<-----------------Converted fs image in btrfs-------------------->|
@@ -1664,11 +1670,11 @@ static int do_rollback(const char *devname)
 	ret = btrfs_search_slot(NULL, fs_info->tree_root, &key, &path, 0, 0);
 	btrfs_release_path(&path);
 	if (ret > 0) {
-		error("unable to find ext2 image subvolume, is it deleted?");
+		error("unable to find source fs image subvolume, is it deleted?");
 		ret = -ENOENT;
 		goto close_fs;
 	} else if (ret < 0) {
-		error("failed to find ext2 image subvolume: %s",
+		error("failed to find source fs image subvolume: %s",
 			strerror(-ret));
 		goto close_fs;
 	}
@@ -1786,6 +1792,7 @@ static void print_usage(void)
 	printf("\n");
 	printf("Supported filesystems:\n");
 	printf("\text2/3/4: %s\n", BTRFSCONVERT_EXT2 ? "yes" : "no");
+	printf("\treiserfs: %s\n", BTRFSCONVERT_REISERFS ? "yes" : "no");
 }
 
 int main(int argc, char *argv[])
