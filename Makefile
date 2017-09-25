@@ -62,8 +62,9 @@ DEBUG_LDFLAGS :=
 TOPDIR := $(shell pwd)
 
 # Common build flags
+CSTD = -std=gnu90
 CFLAGS = $(SUBST_CFLAGS) \
-	 -std=gnu90 \
+	 $(CSTD) \
 	 -include config.h \
 	 -DBTRFS_FLAT_INCLUDES \
 	 -D_XOPEN_SOURCE=700  \
@@ -91,11 +92,12 @@ STATIC_LIBS = $(STATIC_LIBS_BASE)
 # don't use FORTIFY with sparse because glibc with FORTIFY can
 # generate so many sparse errors that sparse stops parsing,
 # which masks real errors that we want to see.
+# Note: additional flags might get added per-target later
 CHECKER := sparse
 check_defs := .cc-defines.h
 CHECKER_FLAGS := -include $(check_defs) -D__CHECKER__ \
 	-D__CHECK_ENDIAN__ -Wbitwise -Wuninitialized -Wshadow -Wundef \
-	-U_FORTIFY_SOURCE
+	-U_FORTIFY_SOURCE -Wdeclaration-after-statement -Wdefault-bitfield-sign
 
 objects = ctree.o disk-io.o kernel-lib/radix-tree.o extent-tree.o print-tree.o \
 	  root-tree.o dir-item.o file-item.o inode-item.o inode-map.o \
@@ -121,6 +123,9 @@ libbtrfs_headers = send-stream.h send-utils.h send.h kernel-lib/rbtree.h btrfs-l
 convert_objects = convert/main.o convert/common.o convert/source-fs.o \
 		  convert/source-ext2.o convert/source-reiserfs.o
 mkfs_objects = mkfs/main.o mkfs/common.o
+image_objects = image/main.o
+all_objects = $(objects) $(cmds_objects) $(libbtrfs_objects) $(convert_objects) \
+	      $(mkfs_objects) $(image_objects)
 
 TESTS = fsck-tests.sh convert-tests.sh
 
@@ -209,6 +214,9 @@ btrfs_fragments_libs = -lgd -lpng -ljpeg -lfreetype
 btrfs_debug_tree_objects = cmds-inspect-dump-tree.o
 btrfs_show_super_objects = cmds-inspect-dump-super.o
 btrfs_calc_size_objects = cmds-inspect-tree-stats.o
+cmds_restore_cflags = -DBTRFSRESTORE_ZSTD=$(BTRFSRESTORE_ZSTD)
+
+CHECKER_FLAGS += $(btrfs_convert_cflags)
 
 # collect values of the variables above
 standalone_deps = $(foreach dep,$(patsubst %,%_objects,$(subst -,_,$(filter btrfs-%, $(progs)))),$($(dep)))
@@ -255,13 +263,14 @@ ifdef C
 			grep -v __SIZE_TYPE__ > $(check_defs))
 	check = $(CHECKER)
 	check_echo = echo
+	CSTD = -std=gnu89
 else
 	check = true
 	check_echo = true
 endif
 
 %.o.d: %.c
-	$(Q)$(CC) -MD -MM -MG -MF $@ -MT $(@:.o.d=.o) -MT $(@:.o.d=.static.o) -MT $@ $(CFLAGS) $<
+	$(Q)$(CC) -MM -MG -MF $@ -MT $(@:.o.d=.o) -MT $(@:.o.d=.static.o) -MT $@ $(CFLAGS) $<
 
 #
 # Pick from per-file variables, btrfs_*_cflags
@@ -495,7 +504,7 @@ library-test.static: library-test.c $(libs_static)
 	$(Q)$(RM) -rf -- $(TMPD)
 
 fssum: tests/fssum.c tests/sha224-256.c
-	@echo "    [LD]   $@"
+	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 test-build: test-build-pre test-build-real
@@ -591,5 +600,5 @@ uninstall:
 	cd $(DESTDIR)$(bindir); $(RM) -f -- btrfsck fsck.btrfs $(progs_install)
 
 ifneq ($(MAKECMDGOALS),clean)
--include $(objects:.o=.o.d) $(cmds_objects:.o=.o.d) $(subst .btrfs,, $(filter-out btrfsck.o.d, $(progs:=.o.d)))
+-include $(all_objects:.o=.o.d) $(subst .btrfs,, $(filter-out btrfsck.o.d, $(progs:=.o.d)))
 endif

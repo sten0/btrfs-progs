@@ -323,6 +323,9 @@ static void compress_type_to_str(u8 compress_type, char *ret)
 	case BTRFS_COMPRESS_LZO:
 		strcpy(ret, "lzo");
 		break;
+	case BTRFS_COMPRESS_ZSTD:
+		strcpy(ret, "zstd");
+		break;
 	default:
 		sprintf(ret, "UNKNOWN.%d", compress_type);
 	}
@@ -1255,7 +1258,7 @@ void btrfs_print_leaf(struct btrfs_root *root, struct extent_buffer *eb)
 			break;
 		case BTRFS_EXTENT_CSUM_KEY:
 			print_extent_csum(eb, root->fs_info, item_size,
-					disk_key.offset);
+					offset);
 			break;
 		case BTRFS_EXTENT_DATA_KEY:
 			print_file_extent_item(eb, item, i, ptr);
