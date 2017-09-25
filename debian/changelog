@@ -1,11 +1,11 @@
-btrfs-progs (4.13-0.1) UNRELEASED; urgency=medium
+btrfs-progs (4.13.1-0.1) unstable; urgency=medium
 
-  * New upstream version 4.13
-  * Fix two lintian W debian-changelog-line-too-long
-  * Drop dh-autoreconf from build-depends, because it's automatic now
+  * Non-maintainer upload.
+  * New upstream version.
+  * Drop dh-autoreconf from build-depends, because it's automatic now.
   * Add copyright for tests/sha.h tests/sha224-256.c tests/sha-private.h
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 21 Sep 2017 21:42:10 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Mon, 25 Sep 2017 13:20:11 -0400
 
 btrfs-progs (4.12-1) unstable; urgency=medium
 
