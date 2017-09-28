@@ -33,7 +33,7 @@
  * filesystem
  */
 #define BITS_PER_BITMAP(sectorsize)		((sectorsize) * 8)
-#define MAX_CACHE_BYTES_PER_GIG	(32 * 1024)
+#define MAX_CACHE_BYTES_PER_GIG	SZ_32K
 
 static int link_free_space(struct btrfs_free_space_ctl *ctl,
 			   struct btrfs_free_space *info);
@@ -54,7 +54,8 @@ static int io_ctl_init(struct io_ctl *io_ctl, u64 size, u64 ino,
 		       struct btrfs_root *root)
 {
 	memset(io_ctl, 0, sizeof(struct io_ctl));
-	io_ctl->num_pages = (size + root->sectorsize - 1) / root->sectorsize;
+	io_ctl->num_pages = (size + root->fs_info->sectorsize - 1) /
+				root->fs_info->sectorsize;
 	io_ctl->buffer = kzalloc(size, GFP_NOFS);
 	if (!io_ctl->buffer)
 		return -ENOMEM;
@@ -81,11 +82,12 @@ static void io_ctl_unmap_page(struct io_ctl *io_ctl)
 static void io_ctl_map_page(struct io_ctl *io_ctl, int clear)
 {
 	BUG_ON(io_ctl->index >= io_ctl->num_pages);
-	io_ctl->cur = io_ctl->buffer + (io_ctl->index++ * io_ctl->root->sectorsize);
+	io_ctl->cur = io_ctl->buffer + (io_ctl->index++ *
+					io_ctl->root->fs_info->sectorsize);
 	io_ctl->orig = io_ctl->cur;
-	io_ctl->size = io_ctl->root->sectorsize;
+	io_ctl->size = io_ctl->root->fs_info->sectorsize;
 	if (clear)
-		memset(io_ctl->cur, 0, io_ctl->root->sectorsize);
+		memset(io_ctl->cur, 0, io_ctl->root->fs_info->sectorsize);
 }
 
 static void io_ctl_drop_pages(struct io_ctl *io_ctl)
@@ -210,7 +212,8 @@ static int io_ctl_check_crc(struct io_ctl *io_ctl, int index)
 	val = *tmp;
 
 	io_ctl_map_page(io_ctl, 0);
-	crc = crc32c(crc, io_ctl->orig + offset, io_ctl->root->sectorsize - offset);
+	crc = crc32c(crc, io_ctl->orig + offset,
+			io_ctl->root->fs_info->sectorsize - offset);
 	btrfs_csum_final(crc, (u8 *)&crc);
 	if (val != crc) {
 		printk("btrfs: csum mismatch on free space cache\n");
@@ -257,7 +260,7 @@ static int io_ctl_read_bitmap(struct io_ctl *io_ctl,
 	if (ret)
 		return ret;
 
-	memcpy(entry->bitmap, io_ctl->cur, io_ctl->root->sectorsize);
+	memcpy(entry->bitmap, io_ctl->cur, io_ctl->root->fs_info->sectorsize);
 	io_ctl_unmap_page(io_ctl);
 
 	return 0;
@@ -915,7 +918,7 @@ int btrfs_clear_free_space_cache(struct btrfs_fs_info *fs_info,
 	slot = path.slots[0];
 	sc_header = btrfs_item_ptr(node, slot, struct btrfs_free_space_header);
 	btrfs_free_space_key(node, sc_header, &location);
-	ino = location.objectid;
+	ino = btrfs_disk_key_objectid(&location);
 
 	/* Delete the free space header, as we have the ino to continue */
 	ret = btrfs_del_item(trans, tree_root, &path);

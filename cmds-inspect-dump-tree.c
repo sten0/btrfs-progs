@@ -31,14 +31,13 @@
 #include "volumes.h"
 #include "commands.h"
 #include "utils.h"
-#include "cmds-inspect-dump-tree.h"
+#include "help.h"
 
 static void print_extents(struct btrfs_root *root, struct extent_buffer *eb)
 {
 	struct extent_buffer *next;
 	int i;
 	u32 nr;
-	u32 size;
 
 	if (!eb)
 		return;
@@ -48,11 +47,11 @@ static void print_extents(struct btrfs_root *root, struct extent_buffer *eb)
 		return;
 	}
 
-	size = root->nodesize;
 	nr = btrfs_header_nritems(eb);
 	for (i = 0; i < nr; i++) {
-		next = read_tree_block(root, btrfs_node_blockptr(eb, i),
-				size, btrfs_node_ptr_generation(eb, i));
+		next = read_tree_block(root->fs_info,
+				btrfs_node_blockptr(eb, i),
+				btrfs_node_ptr_generation(eb, i));
 		if (!extent_buffer_uptodate(next))
 			continue;
 		if (btrfs_is_leaf(next) && btrfs_header_level(eb) != 1) {
@@ -220,6 +219,7 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 	int uuid_tree_only = 0;
 	int roots_only = 0;
 	int root_backups = 0;
+	unsigned open_ctree_flags = OPEN_CTREE_FS_PARTIAL;
 	u64 block_only = 0;
 	struct btrfs_root *tree_root_scan;
 	u64 tree_id = 0;
@@ -258,6 +258,11 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 			root_backups = 1;
 			break;
 		case 'b':
+			/*
+			 * If only showing one block, no need to fill roots
+			 * other than chunk root
+			 */
+			open_ctree_flags |= __OPEN_CTREE_RETURN_CHUNK_ROOT;
 			block_only = arg_strtou64(optarg);
 			break;
 		case 't': {
@@ -297,34 +302,23 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 
 	printf("%s\n", PACKAGE_STRING);
 
-	info = open_ctree_fs_info(argv[optind], 0, 0, 0, OPEN_CTREE_PARTIAL);
+	info = open_ctree_fs_info(argv[optind], 0, 0, 0, open_ctree_flags);
 	if (!info) {
 		error("unable to open %s", argv[optind]);
 		goto out;
 	}
 
-	root = info->fs_root;
-	if (!root) {
-		error("unable to open %s", argv[optind]);
-		goto out;
-	}
-
 	if (block_only) {
-		leaf = read_tree_block(root,
-				      block_only,
-				      root->nodesize, 0);
-
+		root = info->chunk_root;
+		leaf = read_tree_block(info, block_only, 0);
 		if (extent_buffer_uptodate(leaf) &&
 		    btrfs_header_level(leaf) != 0) {
 			free_extent_buffer(leaf);
 			leaf = NULL;
 		}
 
-		if (!leaf) {
-			leaf = read_tree_block(root,
-					      block_only,
-					      root->nodesize, 0);
-		}
+		if (!leaf)
+			leaf = read_tree_block(info, block_only, 0);
 		if (!extent_buffer_uptodate(leaf)) {
 			error("failed to read %llu",
 				(unsigned long long)block_only);
@@ -335,6 +329,12 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 		goto close_root;
 	}
 
+	root = info->fs_root;
+	if (!root) {
+		error("unable to open %s", argv[optind]);
+		goto out;
+	}
+
 	if (!(extent_only || uuid_tree_only || tree_id)) {
 		if (roots_only) {
 			printf("root tree: %llu level %d\n",
@@ -343,6 +343,11 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 			printf("chunk tree: %llu level %d\n",
 			     (unsigned long long)info->chunk_root->node->start,
 			     btrfs_header_level(info->chunk_root->node));
+			if (info->log_root_tree)
+				printf("log root tree: %llu level %d\n",
+				       info->log_root_tree->node->start,
+					btrfs_header_level(
+						info->log_root_tree->node));
 		} else {
 			if (info->tree_root->node) {
 				printf("root tree\n");
@@ -354,6 +359,12 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 				printf("chunk tree\n");
 				btrfs_print_tree(info->chunk_root,
 						 info->chunk_root->node, 1);
+			}
+
+			if (info->log_root_tree) {
+				printf("log root tree\n");
+				btrfs_print_tree(info->log_root_tree,
+						info->log_root_tree->node, 1);
 			}
 		}
 	}
@@ -370,21 +381,32 @@ again:
 	if (tree_id && tree_id == BTRFS_ROOT_TREE_OBJECTID) {
 		if (!info->tree_root->node) {
 			error("cannot print root tree, invalid pointer");
-			goto no_node;
+			goto close_root;
 		}
 		printf("root tree\n");
 		btrfs_print_tree(info->tree_root, info->tree_root->node, 1);
-		goto no_node;
+		goto close_root;
 	}
 
 	if (tree_id && tree_id == BTRFS_CHUNK_TREE_OBJECTID) {
 		if (!info->chunk_root->node) {
 			error("cannot print chunk tree, invalid pointer");
-			goto no_node;
+			goto close_root;
 		}
 		printf("chunk tree\n");
 		btrfs_print_tree(info->chunk_root, info->chunk_root->node, 1);
-		goto no_node;
+		goto close_root;
+	}
+
+	if (tree_id && tree_id == BTRFS_TREE_LOG_OBJECTID) {
+		if (!info->log_root_tree) {
+			error("cannot print log root tree, invalid pointer");
+			goto close_root;
+		}
+		printf("log root tree\n");
+		btrfs_print_tree(info->log_root_tree, info->log_root_tree->node,
+				 1);
+		goto close_root;
 	}
 
 	key.offset = 0;
@@ -416,10 +438,7 @@ again:
 
 			offset = btrfs_item_ptr_offset(leaf, slot);
 			read_extent_buffer(leaf, &ri, offset, sizeof(ri));
-			buf = read_tree_block(tree_root_scan,
-					      btrfs_root_bytenr(&ri),
-					      tree_root_scan->nodesize,
-					      0);
+			buf = read_tree_block(info, btrfs_root_bytenr(&ri), 0);
 			if (!extent_buffer_uptodate(buf))
 				goto next;
 			if (tree_id && found_key.objectid != tree_id) {

@@ -29,6 +29,9 @@
 #include <lzo/lzoconf.h>
 #include <lzo/lzo1x.h>
 #include <zlib.h>
+#if BTRFSRESTORE_ZSTD
+#include <zstd.h>
+#endif
 #include <regex.h>
 #include <getopt.h>
 #include <sys/types.h>
@@ -42,6 +45,7 @@
 #include "volumes.h"
 #include "utils.h"
 #include "commands.h"
+#include "help.h"
 
 static char fs_name[PATH_MAX];
 static char path_name[PATH_MAX];
@@ -125,7 +129,7 @@ static int decompress_lzo(struct btrfs_root *root, unsigned char *inbuf,
 
 		inbuf += LZO_LEN;
 		tot_in += LZO_LEN;
-		new_len = lzo1x_worst_compress(root->sectorsize);
+		new_len = lzo1x_worst_compress(root->fs_info->sectorsize);
 		ret = lzo1x_decompress_safe((const unsigned char *)inbuf, in_len,
 					    (unsigned char *)outbuf,
 					    (void *)&new_len, NULL);
@@ -142,8 +146,8 @@ static int decompress_lzo(struct btrfs_root *root, unsigned char *inbuf,
 		 * If the 4 byte header does not fit to the rest of the page we
 		 * have to move to the next one, unless we read some garbage
 		 */
-		mod_page = tot_in % root->sectorsize;
-		rem_page = root->sectorsize - mod_page;
+		mod_page = tot_in % root->fs_info->sectorsize;
+		rem_page = root->fs_info->sectorsize - mod_page;
 		if (rem_page < LZO_LEN) {
 			inbuf += rem_page;
 			tot_in += rem_page;
@@ -153,6 +157,50 @@ static int decompress_lzo(struct btrfs_root *root, unsigned char *inbuf,
 	*decompress_len = out_len;
 
 	return 0;
+}
+
+static int decompress_zstd(const char *inbuf, char *outbuf, u64 compress_len,
+			   u64 decompress_len)
+{
+#if !BTRFSRESTORE_ZSTD
+	error("btrfs not compiled with zstd support");
+	return -1;
+#else
+	ZSTD_DStream *strm;
+	size_t zret;
+	int ret = 0;
+	ZSTD_inBuffer in = {inbuf, compress_len, 0};
+	ZSTD_outBuffer out = {outbuf, decompress_len, 0};
+
+	strm = ZSTD_createDStream();
+	if (!strm) {
+		error("zstd create failed");
+		return -1;
+	}
+
+	zret = ZSTD_initDStream(strm);
+	if (ZSTD_isError(zret)) {
+		error("zstd init failed: %s", ZSTD_getErrorName(zret));
+		ret = -1;
+		goto out;
+	}
+
+	zret = ZSTD_decompressStream(strm, &out, &in);
+	if (ZSTD_isError(zret)) {
+		error("zstd decompress failed %s\n", ZSTD_getErrorName(zret));
+		ret = -1;
+		goto out;
+	}
+	if (zret != 0) {
+		error("zstd frame incomplete");
+		ret = -1;
+		goto out;
+	}
+
+out:
+	ZSTD_freeDStream(strm);
+	return ret;
+#endif
 }
 
 static int decompress(struct btrfs_root *root, char *inbuf, char *outbuf,
@@ -165,6 +213,9 @@ static int decompress(struct btrfs_root *root, char *inbuf, char *outbuf,
 	case BTRFS_COMPRESS_LZO:
 		return decompress_lzo(root, (unsigned char *)inbuf, outbuf,
 					compress_len, decompress_len);
+	case BTRFS_COMPRESS_ZSTD:
+		return decompress_zstd(inbuf, outbuf, compress_len,
+				       *decompress_len);
 	default:
 		break;
 	}
@@ -180,6 +231,7 @@ static int next_leaf(struct btrfs_root *root, struct btrfs_path *path)
 	int offset = 1;
 	struct extent_buffer *c;
 	struct extent_buffer *next = NULL;
+	struct btrfs_fs_info *fs_info = root->fs_info;
 
 again:
 	for (; level < BTRFS_MAX_LEVEL; level++) {
@@ -209,7 +261,7 @@ again:
 		if (path->reada)
 			reada_for_search(root, path, level, slot, 0);
 
-		next = read_node_slot(root, c, slot);
+		next = read_node_slot(fs_info, c, slot);
 		if (extent_buffer_uptodate(next))
 			break;
 		offset++;
@@ -225,7 +277,7 @@ again:
 			break;
 		if (path->reada)
 			reada_for_search(root, path, level, 0, 0);
-		next = read_node_slot(root, next, 0);
+		next = read_node_slot(fs_info, next, 0);
 		if (!extent_buffer_uptodate(next))
 			goto again;
 	}
@@ -344,8 +396,8 @@ static int copy_one_extent(struct btrfs_root *root, int fd,
 	}
 again:
 	length = size_left;
-	ret = btrfs_map_block(&root->fs_info->mapping_tree, READ,
-			      bytenr, &length, &multi, mirror_num, NULL);
+	ret = btrfs_map_block(root->fs_info, READ, bytenr, &length, &multi,
+			      mirror_num, NULL);
 	if (ret) {
 		error("cannot map block logical %llu length %llu: %d",
 				(unsigned long long)bytenr,
@@ -364,8 +416,7 @@ again:
 	done = pread(dev_fd, inbuf+count, length, dev_bytenr);
 	/* Need both checks, or we miss negative values due to u64 conversion */
 	if (done < 0 || done < length) {
-		num_copies = btrfs_num_copies(&root->fs_info->mapping_tree,
-					      bytenr, length);
+		num_copies = btrfs_num_copies(root->fs_info, bytenr, length);
 		mirror_num++;
 		/* mirror_num is 1-indexed, so num_copies is a valid mirror. */
 		if (mirror_num > num_copies) {
@@ -402,8 +453,7 @@ again:
 
 	ret = decompress(root, inbuf, outbuf, disk_size, &ram_size, compress);
 	if (ret) {
-		num_copies = btrfs_num_copies(&root->fs_info->mapping_tree,
-					      bytenr, length);
+		num_copies = btrfs_num_copies(root->fs_info, bytenr, length);
 		mirror_num++;
 		if (mirror_num >= num_copies) {
 			ret = -1;
@@ -1254,8 +1304,8 @@ static struct btrfs_root *open_fs(const char *dev, u64 root_location,
 		if (!root_location)
 			root_location = btrfs_super_root(fs_info->super_copy);
 		generation = btrfs_super_generation(fs_info->super_copy);
-		root->node = read_tree_block(root, root_location,
-					     root->nodesize, generation);
+		root->node = read_tree_block(fs_info, root_location,
+					     generation);
 		if (!extent_buffer_uptodate(root->node)) {
 			fprintf(stderr, "Error opening tree root\n");
 			close_ctree(root);
@@ -1501,7 +1551,7 @@ int cmd_restore(int argc, char **argv)
 
 	if (fs_location != 0) {
 		free_extent_buffer(root->node);
-		root->node = read_tree_block(root, fs_location, root->nodesize, 0);
+		root->node = read_tree_block(root->fs_info, fs_location, 0);
 		if (!extent_buffer_uptodate(root->node)) {
 			fprintf(stderr, "Failed to read fs location\n");
 			ret = 1;

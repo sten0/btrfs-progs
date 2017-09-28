@@ -44,6 +44,7 @@
 #include "disk-io.h"
 
 #include "commands.h"
+#include "help.h"
 
 static const char * const scrub_cmd_group_usage[] = {
 	"btrfs scrub <command> [options] <path>|<device>",
@@ -467,7 +468,7 @@ static struct scrub_file_record **scrub_read_file(int fd, int report_errors)
 {
 	int avail = 0;
 	int old_avail = 0;
-	char l[16 * 1024];
+	char l[SZ_16K];
 	int state = 0;
 	int curr = -1;
 	int i = 0;

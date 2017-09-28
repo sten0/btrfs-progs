@@ -37,7 +37,7 @@
 #include "cmds-fi-usage.h"
 #include "list_sort.h"
 #include "disk-io.h"
-#include "cmds-fi-du.h"
+#include "help.h"
 
 /*
  * for btrfs fi show, we maintain a hash of fsids we've already printed.
@@ -952,6 +952,8 @@ static int parse_compress_type(char *s)
 		return BTRFS_COMPRESS_ZLIB;
 	else if (strcmp(optarg, "lzo") == 0)
 		return BTRFS_COMPRESS_LZO;
+	else if (strcmp(optarg, "zstd") == 0)
+		return BTRFS_COMPRESS_ZSTD;
 	else {
 		error("unknown compression type %s", s);
 		exit(1);
@@ -962,13 +964,13 @@ static const char * const cmd_filesystem_defrag_usage[] = {
 	"btrfs filesystem defragment [options] <file>|<dir> [<file>|<dir>...]",
 	"Defragment a file or a directory",
 	"",
-	"-v             be verbose",
-	"-r             defragment files recursively",
-	"-c[zlib,lzo]   compress the file while defragmenting",
-	"-f             flush data to disk immediately after defragmenting",
-	"-s start       defragment only from byte onward",
-	"-l len         defragment only up to len bytes",
-	"-t size        target extent size hint (default: 32M)",
+	"-v                  be verbose",
+	"-r                  defragment files recursively",
+	"-c[zlib,lzo,zstd]   compress the file while defragmenting",
+	"-f                  flush data to disk immediately after defragmenting",
+	"-s start            defragment only from byte onward",
+	"-l len              defragment only up to len bytes",
+	"-t size             target extent size hint (default: 32M)",
 	NULL
 };
 
@@ -1030,7 +1032,7 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 	 * better results and is independent of the kernel default. We have to
 	 * use the v2 defrag ioctl.
 	 */
-	thresh = 32 * 1024 * 1024;
+	thresh = SZ_32M;
 
 	defrag_global_errors = 0;
 	defrag_global_verbose = 0;

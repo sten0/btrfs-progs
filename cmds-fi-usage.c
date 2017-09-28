@@ -31,6 +31,7 @@
 #include "commands.h"
 
 #include "version.h"
+#include "help.h"
 
 /*
  * Add the chunk info to the chunk_info list
@@ -285,7 +286,7 @@ static struct btrfs_ioctl_space_args *load_space_info(int fd, char *path)
  * which compose the chunk, which could be different from the number of devices
  * if a disk is added later.
  */
-static void get_raid56_used(int fd, struct chunk_info *chunks, int chunkcount,
+static void get_raid56_used(struct chunk_info *chunks, int chunkcount,
 		u64 *raid5_used, u64 *raid6_used)
 {
 	struct chunk_info *info_ptr = chunks;
@@ -301,7 +302,7 @@ static void get_raid56_used(int fd, struct chunk_info *chunks, int chunkcount,
 	}
 }
 
-#define	MIN_UNALOCATED_THRESH	(16 * 1024 * 1024)
+#define	MIN_UNALOCATED_THRESH	SZ_16M
 static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		int chunkcount, struct device_info *devinfo, int devcount,
 		char *path, unsigned unit_mode)
@@ -359,7 +360,7 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		ret = 1;
 		goto exit;
 	}
-	get_raid56_used(fd, chunkinfo, chunkcount, &raid5_used, &raid6_used);
+	get_raid56_used(chunkinfo, chunkcount, &raid5_used, &raid6_used);
 
 	for (i = 0; i < sargs->total_spaces; i++) {
 		int ratio;
@@ -996,7 +997,7 @@ out:
 	return !!ret;
 }
 
-void print_device_chunks(int fd, struct device_info *devinfo,
+void print_device_chunks(struct device_info *devinfo,
 		struct chunk_info *chunks_info_ptr,
 		int chunks_info_count, unsigned unit_mode)
 {
@@ -1032,13 +1033,14 @@ void print_device_chunks(int fd, struct device_info *devinfo,
 			unit_mode | UNITS_NEGATIVE));
 }
 
-void print_device_sizes(int fd, struct device_info *devinfo, unsigned unit_mode)
+void print_device_sizes(struct device_info *devinfo, unsigned unit_mode)
 {
 	printf("   Device size: %*s%10s\n",
 		(int)(20 - strlen("Device size")), "",
 		pretty_size_mode(devinfo->device_size, unit_mode));
 	printf("   Device slack: %*s%10s\n",
 		(int)(20 - strlen("Device slack")), "",
-		pretty_size_mode(devinfo->device_size - devinfo->size,
+		pretty_size_mode(devinfo->device_size > 0 ?
+			devinfo->device_size - devinfo->size : 0,
 			unit_mode));
 }

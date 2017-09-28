@@ -55,8 +55,8 @@ dnl
 dnl Calls pkg-config --static
 dnl
 AC_DEFUN([PKG_STATIC], [
-  if AC_RUN_LOG([$PKG_CONFIG --exists --print-errors "$2"]); then
-    $1=`$PKG_CONFIG --libs --static "$2"`
+  if AC_RUN_LOG([pkg-config --exists --print-errors "$2"]); then
+    $1=`pkg-config --libs --static "$2"`
     AC_SUBST([$1])
   else
     AC_MSG_ERROR([pkg-config description of $2, needed for static build, is not available])
@@ -106,7 +106,7 @@ AC_SUBST([DISABLE_BTRFSCONVERT])
 
 AC_ARG_WITH([convert],
 	    AS_HELP_STRING([[[]--with-convert[[=auto]]]], [built-in filesystems for convert (default: auto)
-supported (comma separated list): ext2]),
+supported (comma separated list): ext2,reiserfs]),
   [], [with_convert=auto]
 )
 
@@ -120,6 +120,7 @@ fi
 
 convertfs=
 BTRFSCONVERT_EXT2=0
+BTRFSCONVERT_REISERFS=0
 if test "x$enable_convert" = xyes; then
 	if test "x$with_convert" = "xauto" || echo "$with_convert" | grep -q "ext2"; then
 		PKG_CHECK_MODULES(EXT2FS, [ext2fs >= 1.42],,
@@ -131,11 +132,23 @@ if test "x$enable_convert" = xyes; then
 		convertfs="${convertfs:+$convertfs,}ext2"
 		BTRFSCONVERT_EXT2=1
 	fi
+	if test "x$with_convert" = "xauto"; then
+		PKG_CHECK_MODULES(REISERFS, [reiserfscore >= 3.6.27],
+				  [BTRFSCONVERT_REISERFS=1],
+				  [BTRFSCONVERT_REISERFS=0])
+	elif echo "$with_convert" | grep -q "reiserfs"; then
+		PKG_CHECK_MODULES(REISERFS, [reiserfscore >= 3.6.27],
+				  [BTRFSCONVERT_REISERFS=1],[])
+	fi
+	if test "$BTRFSCONVERT_REISERFS" = 1; then
+		convertfs="${convertfs:+$convertfs,}reiserfs"
+	fi
 fi
 AC_SUBST([BTRFSCONVERT_EXT2])
+AC_SUBST([BTRFSCONVERT_REISERFS])
 
 # catch typos
-tmp=$(echo "$with_convert" | sed -e 's/auto//' | sed -e 's/ext2//' | sed -e 's/,\+/,/')
+tmp=$(echo "$with_convert" | sed -e 's/auto//' | sed -e 's/ext2//' | sed -e 's/reiserfs//' | sed -e 's/,\+/,/')
 if ! test "x$tmp" = "x"; then
 	AC_MSG_ERROR([unknown tokens for --with-convert: $tmp])
 fi
@@ -169,12 +182,29 @@ PKG_STATIC(UUID_LIBS_STATIC, [uuid])
 PKG_CHECK_MODULES(ZLIB, [zlib])
 PKG_STATIC(ZLIB_LIBS_STATIC, [zlib])
 
+AC_ARG_ENABLE([zstd],
+	AS_HELP_STRING([--enable-zstd@<:@=auto@:>@], [build with zstd support (default: auto)]),
+	[], [enable_zstd=auto]
+)
+
+if test "x$enable_zstd" = xauto; then
+	PKG_CHECK_EXISTS([libzstd >= 1.0.0], [enable_zstd=yes], [enable_zstd=no])
+fi
+
+if test "x$enable_zstd" = xyes; then
+	PKG_CHECK_MODULES(ZSTD, [libzstd >= 1.0.0])
+	PKG_STATIC(ZSTD_LIBS_STATIC, [libzstd])
+fi
+
+AS_IF([test "x$enable_zstd" = xyes], [BTRFSRESTORE_ZSTD=1], [BTRFSRESTORE_ZSTD=0])
+AC_SUBST(BTRFSRESTORE_ZSTD)
+
 # udev v190 introduced the btrfs builtin and a udev rule to use it.
 # Our udev rule gives us the friendly dm names but isn't required (or valid)
 # on earlier releases.
 UDEVDIR=
-if $PKG_CONFIG udev --atleast-version 190; then
-	UDEVDIR="$($PKG_CONFIG udev --variable=udevdir)"
+if pkg-config udev --atleast-version 190; then
+	UDEVDIR="$(pkg-config udev --variable=udevdir)"
 fi
 AC_SUBST(UDEVDIR)
 
@@ -198,7 +228,7 @@ AC_SUBST([LIBBTRFS_PATCHLEVEL])
 AC_CONFIG_HEADERS([config.h])
 
 AC_CONFIG_FILES([
-Makefile
+Makefile.inc
 Documentation/Makefile
 version.h
 ])
@@ -208,21 +238,21 @@ AC_OUTPUT
 AC_MSG_RESULT([
 	${PACKAGE_NAME} ${PACKAGE_VERSION}
 
-	prefix:            ${prefix}
-	exec prefix:       ${exec_prefix}
+	prefix:             ${prefix}
+	exec prefix:        ${exec_prefix}
 
-	bindir:            ${bindir}
-	libdir:            ${libdir}
-	includedir:        ${includedir}
+	bindir:             ${bindir}
+	libdir:             ${libdir}
+	includedir:         ${includedir}
 
-	compiler:          ${CC}
-	cflags:            ${CFLAGS}
-	ldflags:           ${LDFLAGS}
+	compiler:           ${CC}
+	cflags:             ${CFLAGS}
+	ldflags:            ${LDFLAGS}
 
-	documentation:     ${enable_documentation}
-	backtrace support: ${enable_backtrace}
-	btrfs-convert:     ${enable_convert} ${convertfs:+($convertfs)}
+	documentation:      ${enable_documentation}
+	backtrace support:  ${enable_backtrace}
+	btrfs-convert:      ${enable_convert} ${convertfs:+($convertfs)}
+	btrfs-restore zstd: ${enable_zstd}
 
 	Type 'make' to compile.
 ])
-
