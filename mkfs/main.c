@@ -47,6 +47,8 @@
 #include "mkfs/common.h"
 #include "fsfeatures.h"
 
+int path_cat_out(char *out, const char *p1, const char *p2);
+
 static u64 index_cnt = 2;
 static int verbose = 1;
 
@@ -793,20 +795,6 @@ end:
 	return ret;
 }
 
-static char *make_path(const char *dir, const char *name)
-{
-	char *path;
-
-	path = malloc(strlen(dir) + strlen(name) + 2);
-	if (!path)
-		return NULL;
-	strcpy(path, dir);
-	if (dir[strlen(dir) - 1] != '/')
-		strcat(path, "/");
-	strcat(path, name);
-	return path;
-}
-
 static int traverse_directory(struct btrfs_trans_handle *trans,
 			      struct btrfs_root *root, const char *dir_name,
 			      struct directory_name_entry *dir_head)
@@ -941,14 +929,28 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 			}
 
 			if (S_ISDIR(st.st_mode)) {
+				char tmp[PATH_MAX];
+
 				dir_entry = malloc(sizeof(struct directory_name_entry));
 				if (!dir_entry) {
 					ret = -ENOMEM;
 					goto fail;
 				}
 				dir_entry->dir_name = cur_file->d_name;
-				dir_entry->path = make_path(parent_dir_entry->path,
-							    cur_file->d_name);
+				if (path_cat_out(tmp, parent_dir_entry->path,
+							cur_file->d_name)) {
+					error("invalid path: %s/%s",
+							parent_dir_entry->path,
+							cur_file->d_name);
+					ret = -EINVAL;
+					goto fail;
+				}
+				dir_entry->path = strdup(tmp);
+				if (!dir_entry->path) {
+					error("not enough memory to store path");
+					ret = -ENOMEM;
+					goto fail;
+				}
 				dir_entry->inum = cur_inum;
 				list_add_tail(&dir_entry->list,	&dir_head->list);
 			} else if (S_ISREG(st.st_mode)) {

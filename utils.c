@@ -24,6 +24,7 @@
 #include <sys/mount.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
 #include <uuid/uuid.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -1758,6 +1759,109 @@ out:
 	return ret;
 }
 
+int get_fsid(const char *path, u8 *fsid, int silent)
+{
+	int ret;
+	int fd;
+	struct btrfs_ioctl_fs_info_args args;
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		ret = -errno;
+		if (!silent)
+			error("failed to open %s: %s", path,
+				strerror(-ret));
+		goto out;
+	}
+
+	ret = ioctl(fd, BTRFS_IOC_FS_INFO, &args);
+	if (ret < 0) {
+		ret = -errno;
+		goto out;
+	}
+
+	memcpy(fsid, args.fsid, BTRFS_FSID_SIZE);
+	ret = 0;
+
+out:
+	if (fd != -1)
+		close(fd);
+	return ret;
+}
+
+int is_seen_fsid(u8 *fsid, struct seen_fsid *seen_fsid_hash[])
+{
+	u8 hash = fsid[0];
+	int slot = hash % SEEN_FSID_HASH_SIZE;
+	struct seen_fsid *seen = seen_fsid_hash[slot];
+
+	while (seen) {
+		if (memcmp(seen->fsid, fsid, BTRFS_FSID_SIZE) == 0)
+			return 1;
+
+		seen = seen->next;
+	}
+
+	return 0;
+}
+
+int add_seen_fsid(u8 *fsid, struct seen_fsid *seen_fsid_hash[],
+		int fd, DIR *dirstream)
+{
+	u8 hash = fsid[0];
+	int slot = hash % SEEN_FSID_HASH_SIZE;
+	struct seen_fsid *seen = seen_fsid_hash[slot];
+	struct seen_fsid *alloc;
+
+	if (!seen)
+		goto insert;
+
+	while (1) {
+		if (memcmp(seen->fsid, fsid, BTRFS_FSID_SIZE) == 0)
+			return -EEXIST;
+
+		if (!seen->next)
+			break;
+
+		seen = seen->next;
+	}
+
+insert:
+	alloc = malloc(sizeof(*alloc));
+	if (!alloc)
+		return -ENOMEM;
+
+	alloc->next = NULL;
+	memcpy(alloc->fsid, fsid, BTRFS_FSID_SIZE);
+	alloc->fd = fd;
+	alloc->dirstream = dirstream;
+
+	if (seen)
+		seen->next = alloc;
+	else
+		seen_fsid_hash[slot] = alloc;
+
+	return 0;
+}
+
+void free_seen_fsid(struct seen_fsid *seen_fsid_hash[])
+{
+	int slot;
+	struct seen_fsid *seen;
+	struct seen_fsid *next;
+
+	for (slot = 0; slot < SEEN_FSID_HASH_SIZE; slot++) {
+		seen = seen_fsid_hash[slot];
+		while (seen) {
+			next = seen->next;
+			close_file_or_dir(seen->fd, seen->dirstream);
+			free(seen);
+			seen = next;
+		}
+		seen_fsid_hash[slot] = NULL;
+	}
+}
+
 static int group_profile_devs_min(u64 flag)
 {
 	switch (flag & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
@@ -2584,4 +2688,16 @@ u8 rand_u8(void)
 
 void btrfs_config_init(void)
 {
+}
+
+/* Returns total size of main memory in bytes, -1UL if error. */
+unsigned long total_memory(void)
+{
+        struct sysinfo si;
+
+        if (sysinfo(&si) < 0) {
+                error("can't determine memory size");
+                return -1UL;
+        }
+        return si.totalram * si.mem_unit;       /* bytes */
 }
