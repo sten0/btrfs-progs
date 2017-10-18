@@ -115,16 +115,15 @@ static inline u64 btrfs_sb_offset(int mirror)
 struct btrfs_device;
 
 int read_whole_eb(struct btrfs_fs_info *info, struct extent_buffer *eb, int mirror);
-struct extent_buffer* read_tree_block(
-		struct btrfs_fs_info *fs_info, u64 bytenr, u32 blocksize,
+struct extent_buffer* read_tree_block(struct btrfs_fs_info *fs_info, u64 bytenr,
 		u64 parent_transid);
 
 int read_extent_data(struct btrfs_fs_info *fs_info, char *data, u64 logical,
 		     u64 *len, int mirror);
 void readahead_tree_block(struct btrfs_fs_info *fs_info, u64 bytenr,
-			  u32 blocksize, u64 parent_transid);
+			  u64 parent_transid);
 struct extent_buffer* btrfs_find_create_tree_block(
-		struct btrfs_fs_info *fs_info, u64 bytenr, u32 blocksize);
+		struct btrfs_fs_info *fs_info, u64 bytenr);
 
 void btrfs_setup_root(struct btrfs_root *root, struct btrfs_fs_info *fs_info,
 		      u64 objectid);
@@ -181,8 +180,6 @@ int btrfs_set_buffer_uptodate(struct extent_buffer *buf);
 u32 btrfs_csum_data(char *data, u32 seed, size_t len);
 void btrfs_csum_final(u32 crc, u8 *result);
 
-int btrfs_commit_transaction(struct btrfs_trans_handle *trans,
-			     struct btrfs_root *root);
 int btrfs_open_device(struct btrfs_device *dev);
 int csum_tree_block_size(struct extent_buffer *buf, u16 csum_sectorsize,
 			 int verify);

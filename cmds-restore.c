@@ -29,6 +29,9 @@
 #include <lzo/lzoconf.h>
 #include <lzo/lzo1x.h>
 #include <zlib.h>
+#if BTRFSRESTORE_ZSTD
+#include <zstd.h>
+#endif
 #include <regex.h>
 #include <getopt.h>
 #include <sys/types.h>
@@ -156,6 +159,50 @@ static int decompress_lzo(struct btrfs_root *root, unsigned char *inbuf,
 	return 0;
 }
 
+static int decompress_zstd(const char *inbuf, char *outbuf, u64 compress_len,
+			   u64 decompress_len)
+{
+#if !BTRFSRESTORE_ZSTD
+	error("btrfs not compiled with zstd support");
+	return -1;
+#else
+	ZSTD_DStream *strm;
+	size_t zret;
+	int ret = 0;
+	ZSTD_inBuffer in = {inbuf, compress_len, 0};
+	ZSTD_outBuffer out = {outbuf, decompress_len, 0};
+
+	strm = ZSTD_createDStream();
+	if (!strm) {
+		error("zstd create failed");
+		return -1;
+	}
+
+	zret = ZSTD_initDStream(strm);
+	if (ZSTD_isError(zret)) {
+		error("zstd init failed: %s", ZSTD_getErrorName(zret));
+		ret = -1;
+		goto out;
+	}
+
+	zret = ZSTD_decompressStream(strm, &out, &in);
+	if (ZSTD_isError(zret)) {
+		error("zstd decompress failed %s\n", ZSTD_getErrorName(zret));
+		ret = -1;
+		goto out;
+	}
+	if (zret != 0) {
+		error("zstd frame incomplete");
+		ret = -1;
+		goto out;
+	}
+
+out:
+	ZSTD_freeDStream(strm);
+	return ret;
+#endif
+}
+
 static int decompress(struct btrfs_root *root, char *inbuf, char *outbuf,
 			u64 compress_len, u64 *decompress_len, int compress)
 {
@@ -166,6 +213,9 @@ static int decompress(struct btrfs_root *root, char *inbuf, char *outbuf,
 	case BTRFS_COMPRESS_LZO:
 		return decompress_lzo(root, (unsigned char *)inbuf, outbuf,
 					compress_len, decompress_len);
+	case BTRFS_COMPRESS_ZSTD:
+		return decompress_zstd(inbuf, outbuf, compress_len,
+				       *decompress_len);
 	default:
 		break;
 	}
@@ -1255,7 +1305,7 @@ static struct btrfs_root *open_fs(const char *dev, u64 root_location,
 			root_location = btrfs_super_root(fs_info->super_copy);
 		generation = btrfs_super_generation(fs_info->super_copy);
 		root->node = read_tree_block(fs_info, root_location,
-					     fs_info->nodesize, generation);
+					     generation);
 		if (!extent_buffer_uptodate(root->node)) {
 			fprintf(stderr, "Error opening tree root\n");
 			close_ctree(root);
@@ -1501,8 +1551,7 @@ int cmd_restore(int argc, char **argv)
 
 	if (fs_location != 0) {
 		free_extent_buffer(root->node);
-		root->node = read_tree_block(root->fs_info, fs_location,
-				root->fs_info->nodesize, 0);
+		root->node = read_tree_block(root->fs_info, fs_location, 0);
 		if (!extent_buffer_uptodate(root->node)) {
 			fprintf(stderr, "Failed to read fs location\n");
 			ret = 1;

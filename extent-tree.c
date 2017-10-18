@@ -284,7 +284,7 @@ out:
 	if (!cache) {
 		printk("Unable to find block group for %llu\n",
 			(unsigned long long)search_start);
-		WARN_ON(1);
+		return -ENOENT;
 	}
 	return -ENOSPC;
 
@@ -2663,8 +2663,7 @@ int btrfs_reserve_extent(struct btrfs_trans_handle *trans,
 		alloc_profile = info->avail_data_alloc_bits &
 			        info->data_alloc_profile;
 		data = BTRFS_BLOCK_GROUP_DATA | alloc_profile;
-	} else if ((info->system_allocs > 0 || root == info->chunk_root) &&
-		   info->system_allocs >= 0) {
+	} else if (info->system_allocs == 1 || root == info->chunk_root) {
 		alloc_profile = info->avail_system_alloc_bits &
 			        info->system_alloc_profile;
 		data = BTRFS_BLOCK_GROUP_SYSTEM | alloc_profile;
@@ -2818,8 +2817,7 @@ struct extent_buffer *btrfs_alloc_free_block(struct btrfs_trans_handle *trans,
 		return ERR_PTR(ret);
 	}
 
-	buf = btrfs_find_create_tree_block(root->fs_info, ins.objectid,
-					   blocksize);
+	buf = btrfs_find_create_tree_block(root->fs_info, ins.objectid);
 	if (!buf) {
 		btrfs_free_extent(trans, root, ins.objectid, ins.offset,
 				  0, root->root_key.objectid, level, 0);
@@ -3726,7 +3724,7 @@ static int free_block_group_cache(struct btrfs_trans_handle *trans,
 		btrfs_remove_free_space_cache(cache);
 		kfree(cache->free_space_ctl);
 	}
-	clear_extent_bits(&fs_info->block_group_cache, bytenr, bytenr + len,
+	clear_extent_bits(&fs_info->block_group_cache, bytenr, bytenr + len - 1,
 			  (unsigned int)-1);
 	ret = free_space_info(fs_info, flags, len, 0, NULL);
 	if (ret < 0)
@@ -3842,7 +3840,7 @@ out:
 int btrfs_fix_block_accounting(struct btrfs_trans_handle *trans,
 			       struct btrfs_root *root)
 {
-	int ret;
+	int ret = 0;
 	int slot;
 	u64 start = 0;
 	u64 bytes_used = 0;
@@ -3906,13 +3904,16 @@ int btrfs_fix_block_accounting(struct btrfs_trans_handle *trans,
 			bytes_used += fs_info->nodesize;
 			ret = btrfs_update_block_group(trans, root,
 				  key.objectid, fs_info->nodesize, 1, 0);
-			BUG_ON(ret);
+			if (ret)
+				goto out;
 		}
 		path.slots[0]++;
 	}
 	btrfs_set_super_bytes_used(root->fs_info->super_copy, bytes_used);
+	ret = 0;
+out:
 	btrfs_release_path(&path);
-	return 0;
+	return ret;
 }
 
 static void __get_extent_size(struct btrfs_root *root, struct btrfs_path *path,

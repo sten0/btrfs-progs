@@ -47,6 +47,8 @@
 #include "mkfs/common.h"
 #include "fsfeatures.h"
 
+int path_cat_out(char *out, const char *p1, const char *p2);
+
 static u64 index_cnt = 2;
 static int verbose = 1;
 
@@ -75,6 +77,7 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 	int ret;
 
 	trans = btrfs_start_transaction(root, 1);
+	BUG_ON(IS_ERR(trans));
 	bytes_used = btrfs_super_bytes_used(fs_info->super_copy);
 
 	root->fs_info->system_allocs = 1;
@@ -320,13 +323,12 @@ static int create_raid_groups(struct btrfs_trans_handle *trans,
 	return ret;
 }
 
-static int create_data_reloc_tree(struct btrfs_trans_handle *trans,
-				  struct btrfs_root *root)
+static int create_tree(struct btrfs_trans_handle *trans,
+			struct btrfs_root *root, u64 objectid)
 {
 	struct btrfs_key location;
 	struct btrfs_root_item root_item;
 	struct extent_buffer *tmp;
-	u64 objectid = BTRFS_DATA_RELOC_TREE_OBJECTID;
 	int ret;
 
 	ret = btrfs_copy_root(trans, root, root->node, &tmp, objectid);
@@ -435,6 +437,14 @@ static int add_directory_items(struct btrfs_trans_handle *trans,
 		filetype = BTRFS_FT_REG_FILE;
 	if (S_ISLNK(st->st_mode))
 		filetype = BTRFS_FT_SYMLINK;
+	if (S_ISSOCK(st->st_mode))
+		filetype = BTRFS_FT_SOCK;
+	if (S_ISCHR(st->st_mode))
+		filetype = BTRFS_FT_CHRDEV;
+	if (S_ISBLK(st->st_mode))
+		filetype = BTRFS_FT_BLKDEV;
+	if (S_ISFIFO(st->st_mode))
+		filetype = BTRFS_FT_FIFO;
 
 	ret = btrfs_insert_dir_item(trans, root, name, name_len,
 				    parent_inum, &location,
@@ -719,7 +729,7 @@ again:
 	 * keep our extent size at 1MB max, this makes it easier to work inside
 	 * the tiny block groups created during mkfs
 	 */
-	cur_bytes = min(total_bytes, 1024ULL * 1024);
+	cur_bytes = min(total_bytes, (u64)SZ_1M);
 	ret = btrfs_reserve_extent(trans, root, cur_bytes, 0, 0, (u64)-1,
 				   &key, 1);
 	if (ret)
@@ -785,23 +795,9 @@ end:
 	return ret;
 }
 
-static char *make_path(const char *dir, const char *name)
-{
-	char *path;
-
-	path = malloc(strlen(dir) + strlen(name) + 2);
-	if (!path)
-		return NULL;
-	strcpy(path, dir);
-	if (dir[strlen(dir) - 1] != '/')
-		strcat(path, "/");
-	strcat(path, name);
-	return path;
-}
-
 static int traverse_directory(struct btrfs_trans_handle *trans,
 			      struct btrfs_root *root, const char *dir_name,
-			      struct directory_name_entry *dir_head, int out_fd)
+			      struct directory_name_entry *dir_head)
 {
 	int ret = 0;
 
@@ -933,14 +929,28 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 			}
 
 			if (S_ISDIR(st.st_mode)) {
+				char tmp[PATH_MAX];
+
 				dir_entry = malloc(sizeof(struct directory_name_entry));
 				if (!dir_entry) {
 					ret = -ENOMEM;
 					goto fail;
 				}
 				dir_entry->dir_name = cur_file->d_name;
-				dir_entry->path = make_path(parent_dir_entry->path,
-							    cur_file->d_name);
+				if (path_cat_out(tmp, parent_dir_entry->path,
+							cur_file->d_name)) {
+					error("invalid path: %s/%s",
+							parent_dir_entry->path,
+							cur_file->d_name);
+					ret = -EINVAL;
+					goto fail;
+				}
+				dir_entry->path = strdup(tmp);
+				if (!dir_entry->path) {
+					error("not enough memory to store path");
+					ret = -ENOMEM;
+					goto fail;
+				}
 				dir_entry->inum = cur_inum;
 				list_add_tail(&dir_entry->list,	&dir_head->list);
 			} else if (S_ISREG(st.st_mode)) {
@@ -992,7 +1002,7 @@ static int create_chunks(struct btrfs_trans_handle *trans,
 	u64 chunk_size;
 	u64 meta_type = BTRFS_BLOCK_GROUP_METADATA;
 	u64 data_type = BTRFS_BLOCK_GROUP_DATA;
-	u64 minimum_data_chunk_size = 8 * 1024 * 1024;
+	u64 minimum_data_chunk_size = SZ_8M;
 	u64 i;
 	int ret;
 
@@ -1029,8 +1039,7 @@ static int create_chunks(struct btrfs_trans_handle *trans,
 	return ret;
 }
 
-static int make_image(const char *source_dir, struct btrfs_root *root,
-		int out_fd)
+static int make_image(const char *source_dir, struct btrfs_root *root)
 {
 	int ret;
 	struct btrfs_trans_handle *trans;
@@ -1048,7 +1057,8 @@ static int make_image(const char *source_dir, struct btrfs_root *root,
 	INIT_LIST_HEAD(&dir_head.list);
 
 	trans = btrfs_start_transaction(root, 1);
-	ret = traverse_directory(trans, root, source_dir, &dir_head, out_fd);
+	BUG_ON(IS_ERR(trans));
+	ret = traverse_directory(trans, root, source_dir, &dir_head);
 	if (ret) {
 		error("unable to traverse directory %s: %d", source_dir, ret);
 		goto fail;
@@ -1096,9 +1106,9 @@ static u64 size_sourcedir(const char *dir_name, u64 sectorsize,
 	u64 dir_size = 0;
 	u64 total_size = 0;
 	int ret;
-	u64 default_chunk_size = 8 * 1024 * 1024;	/* 8MB */
-	u64 allocated_meta_size = 8 * 1024 * 1024;	/* 8MB */
-	u64 allocated_total_size = 20 * 1024 * 1024;	/* 20MB */
+	u64 default_chunk_size = SZ_8M;
+	u64 allocated_meta_size = SZ_8M;
+	u64 allocated_total_size = 20 * SZ_1M;	/* 20MB */
 	u64 num_of_meta_chunks = 0;
 	u64 num_of_data_chunks = 0;
 	u64 num_of_allocated_meta_chunks =
@@ -1326,6 +1336,7 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 
 	btrfs_init_path(&path);
 	trans = btrfs_start_transaction(root, 1);
+	BUG_ON(IS_ERR(trans));
 
 	key.objectid = 0;
 	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
@@ -1410,7 +1421,7 @@ int main(int argc, char **argv)
 	u32 sectorsize = 4096;
 	u32 stripesize = 4096;
 	int zero_end = 1;
-	int fd;
+	int fd = -1;
 	int ret;
 	int i;
 	int mixed = 0;
@@ -1496,12 +1507,12 @@ int main(int argc, char **argv)
 					error("unrecognized filesystem feature '%s'",
 							tmp);
 					free(orig);
-					exit(1);
+					goto error;
 				}
 				free(orig);
 				if (features & BTRFS_FEATURE_LIST_ALL) {
 					btrfs_list_all_fs_features(0);
-					exit(0);
+					goto success;
 				}
 				break;
 				}
@@ -1515,8 +1526,7 @@ int main(int argc, char **argv)
 			case 'V':
 				printf("mkfs.btrfs, part of %s\n",
 						PACKAGE_STRING);
-				exit(0);
-				break;
+				goto success;
 			case 'r':
 				source_dir = optarg;
 				source_dir_set = 1;
@@ -1551,7 +1561,7 @@ int main(int argc, char **argv)
 
 	if (source_dir_set && dev_cnt > 1) {
 		error("the option -r is limited to a single device");
-		exit(1);
+		goto error;
 	}
 
 	if (*fs_uuid) {
@@ -1559,11 +1569,11 @@ int main(int argc, char **argv)
 
 		if (uuid_parse(fs_uuid, dummy_uuid) != 0) {
 			error("could not parse UUID: %s", fs_uuid);
-			exit(1);
+			goto error;
 		}
 		if (!test_uuid_unique(fs_uuid)) {
 			error("non-unique UUID: %s", fs_uuid);
-			exit(1);
+			goto error;
 		}
 	}
 
@@ -1571,7 +1581,7 @@ int main(int argc, char **argv)
 		file = argv[optind++];
 		if (is_block_device(file) == 1)
 			if (test_dev_for_mkfs(file, force_overwrite))
-				exit(1);
+				goto error;
 	}
 
 	optind = saved_optind;
@@ -1606,7 +1616,7 @@ int main(int argc, char **argv)
 			if (metadata_profile != data_profile) {
 				error(
 	"with mixed block groups data and metadata profiles must be the same");
-				exit(1);
+				goto error;
 			}
 		}
 
@@ -1628,12 +1638,12 @@ int main(int argc, char **argv)
 
 	if (btrfs_check_nodesize(nodesize, sectorsize,
 				 features))
-		exit(1);
+		goto error;
 
 	if (sectorsize < sizeof(struct btrfs_super_block)) {
 		error("sectorsize smaller than superblock: %u < %zu",
 				sectorsize, sizeof(struct btrfs_super_block));
-		exit(1);
+		goto error;
 	}
 
 	/* Check device/block_count after the nodesize is determined */
@@ -1642,7 +1652,7 @@ int main(int argc, char **argv)
 			block_count);
 		error("minimum size for btrfs filesystem is %llu",
 			btrfs_min_dev_size(nodesize));
-		exit(1);
+		goto error;
 	}
 	for (i = saved_optind; i < saved_optind + dev_cnt; i++) {
 		char *path;
@@ -1652,20 +1662,20 @@ int main(int argc, char **argv)
 		if (ret < 0) {
 			error("failed to check size for %s: %s",
 				path, strerror(-ret));
-			exit (1);
+			goto error;
 		}
 		if (ret > 0) {
 			error("'%s' is too small to make a usable filesystem",
 				path);
 			error("minimum size for each btrfs device is %llu",
 				btrfs_min_dev_size(nodesize));
-			exit(1);
+			goto error;
 		}
 	}
 	ret = test_num_disk_vs_raid(metadata_profile, data_profile,
 			dev_cnt, mixed, ssd);
 	if (ret)
-		exit(1);
+		goto error;
 
 	dev_cnt--;
 
@@ -1678,7 +1688,7 @@ int main(int argc, char **argv)
 		fd = open(file, O_RDWR);
 		if (fd < 0) {
 			error("unable to open %s: %s", file, strerror(errno));
-			exit(1);
+			goto error;
 		}
 		ret = btrfs_prepare_device(fd, file, &dev_block_count,
 				block_count,
@@ -1686,22 +1696,21 @@ int main(int argc, char **argv)
 				(discard ? PREP_DEVICE_DISCARD : 0) |
 				(verbose ? PREP_DEVICE_VERBOSE : 0));
 		if (ret) {
-			close(fd);
-			exit(1);
+			goto error;
 		}
 		if (block_count && block_count > dev_block_count) {
 			error("%s is smaller than requested size, expected %llu, found %llu",
 					file,
 					(unsigned long long)block_count,
 					(unsigned long long)dev_block_count);
-			exit(1);
+			goto error;
 		}
 	} else {
 		fd = open(file, O_CREAT | O_RDWR,
 				S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
 		if (fd < 0) {
 			error("unable to open %s: %s", file, strerror(errno));
-			exit(1);
+			goto error;
 		}
 
 		source_dir_size = size_sourcedir(source_dir, sectorsize,
@@ -1711,7 +1720,7 @@ int main(int argc, char **argv)
 		ret = zero_output_file(fd, block_count);
 		if (ret) {
 			error("unable to zero the output file");
-			exit(1);
+			goto error;
 		}
 		/* our "device" is the new image file */
 		dev_block_count = block_count;
@@ -1721,7 +1730,7 @@ int main(int argc, char **argv)
 	if (dev_block_count < BTRFS_MKFS_SYSTEM_GROUP_SIZE) {
 		error("device is too small to make filesystem, must be at least %llu",
 				(unsigned long long)BTRFS_MKFS_SYSTEM_GROUP_SIZE);
-		exit(1);
+		goto error;
 	}
 
 	if (group_profile_max_safe_loss(metadata_profile) <
@@ -1740,41 +1749,42 @@ int main(int argc, char **argv)
 	ret = make_btrfs(fd, &mkfs_cfg);
 	if (ret) {
 		error("error during mkfs: %s", strerror(-ret));
-		exit(1);
+		goto error;
 	}
 
 	fs_info = open_ctree_fs_info(file, 0, 0, 0,
 			OPEN_CTREE_WRITES | OPEN_CTREE_FS_PARTIAL);
 	if (!fs_info) {
 		error("open ctree failed");
-		close(fd);
-		exit(1);
+		goto error;
 	}
+	close(fd);
+	fd = -1;
 	root = fs_info->fs_root;
 	fs_info->alloc_start = alloc_start;
 
 	ret = create_metadata_block_groups(root, mixed, &allocation);
 	if (ret) {
 		error("failed to create default block groups: %d", ret);
-		exit(1);
+		goto error;
 	}
 
 	trans = btrfs_start_transaction(root, 1);
-	if (!trans) {
+	if (IS_ERR(trans)) {
 		error("failed to start transaction");
-		exit(1);
+		goto error;
 	}
 
 	ret = create_data_block_groups(trans, root, mixed, &allocation);
 	if (ret) {
 		error("failed to create default data block groups: %d", ret);
-		exit(1);
+		goto error;
 	}
 
 	ret = make_root_dir(trans, root);
 	if (ret) {
 		error("failed to setup the root directory: %d", ret);
-		exit(1);
+		goto error;
 	}
 
 	ret = btrfs_commit_transaction(trans, root);
@@ -1784,9 +1794,9 @@ int main(int argc, char **argv)
 	}
 
 	trans = btrfs_start_transaction(root, 1);
-	if (!trans) {
+	if (IS_ERR(trans)) {
 		error("failed to start transaction");
-		exit(1);
+		goto error;
 	}
 
 	if (dev_cnt == 0)
@@ -1803,7 +1813,7 @@ int main(int argc, char **argv)
 		fd = open(file, O_RDWR);
 		if (fd < 0) {
 			error("unable to open %s: %s", file, strerror(errno));
-			exit(1);
+			goto error;
 		}
 		ret = btrfs_device_already_in_root(root, fd,
 						   BTRFS_SUPER_INFO_OFFSET);
@@ -1819,8 +1829,7 @@ int main(int argc, char **argv)
 				(zero_end ? PREP_DEVICE_ZERO_END : 0) |
 				(discard ? PREP_DEVICE_DISCARD : 0));
 		if (ret) {
-			close(fd);
-			exit(1);
+			goto error;
 		}
 
 		ret = btrfs_add_to_fsid(trans, root, fd, file, dev_block_count,
@@ -1849,7 +1858,7 @@ raid_groups:
 		}
 	}
 
-	ret = create_data_reloc_tree(trans, root);
+	ret = create_tree(trans, root, BTRFS_DATA_RELOC_TREE_OBJECTID);
 	if (ret) {
 		error("unable to create data reloc tree: %d", ret);
 		goto out;
@@ -1863,6 +1872,7 @@ raid_groups:
 
 	if (source_dir_set) {
 		trans = btrfs_start_transaction(root, 1);
+		BUG_ON(IS_ERR(trans));
 		ret = create_chunks(trans, root,
 				    num_of_meta_chunks, size_of_data,
 				    &allocation);
@@ -1876,7 +1886,7 @@ raid_groups:
 			goto out;
 		}
 
-		ret = make_image(source_dir, root, fd);
+		ret = make_image(source_dir, root);
 		if (ret) {
 			error("error wihle filling filesystem: %d", ret);
 			goto out;
@@ -1944,4 +1954,12 @@ out:
 	free(label);
 
 	return !!ret;
+error:
+	if (fd > 0)
+		close(fd);
+
+	free(label);
+	exit(1);
+success:
+	exit(0);
 }
