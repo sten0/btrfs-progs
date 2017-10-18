@@ -1,6 +1,7 @@
 btrfs-progs (4.13.3-1) unstable; urgency=medium
 
   * New upstream release.
+  * Add breaks against incompatible btrbk. Closes: #872836
 
  -- Dimitri John Ledkov <xnox@ubuntu.com>  Wed, 18 Oct 2017 13:15:37 +0100
 
