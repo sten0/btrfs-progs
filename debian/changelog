@@ -3,6 +3,8 @@ btrfs-progs (4.13.3-1) unstable; urgency=medium
   [ Dimitri John Ledkov ]
   * New upstream release.
   * Add breaks against incompatible btrbk. Closes: #872836
+  * Use noawait trigger variant, updating initramfs is optional, and
+    doesn't relly matter when it happens, as long as it does, eventually.
 
   [ Nicholas D Steeves ]
   * Add copyright for tests/sha.h tests/sha224-256.c tests/sha-private.h
