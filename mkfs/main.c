@@ -1073,6 +1073,19 @@ static int make_image(const char *source_dir, struct btrfs_root *root)
 		printf("Making image is completed.\n");
 	return 0;
 fail:
+	/*
+	 * Since we don't have btrfs_abort_transaction() yet, uncommitted trans
+	 * will trigger a BUG_ON().
+	 *
+	 * However before mkfs is fully finished, the magic number is invalid,
+	 * so even we commit transaction here, the fs still can't be mounted.
+	 *
+	 * To do a graceful error out, here we commit transaction as a
+	 * workaround.
+	 * Since we have already hit some problem, the return value doesn't
+	 * matter now.
+	 */
+	btrfs_commit_transaction(trans, root);
 	while (!list_empty(&dir_head.list)) {
 		dir_entry = list_entry(dir_head.list.next,
 				       struct directory_name_entry, list);
@@ -1148,18 +1161,25 @@ static int zero_output_file(int out_fd, u64 size)
 {
 	int loop_num;
 	u64 location = 0;
-	char buf[4096];
+	char buf[SZ_4K];
 	int ret = 0, i;
 	ssize_t written;
 
-	memset(buf, 0, 4096);
-	loop_num = size / 4096;
+	memset(buf, 0, SZ_4K);
+
+	/* Only zero out the first 1M */
+	loop_num = SZ_1M / SZ_4K;
 	for (i = 0; i < loop_num; i++) {
-		written = pwrite64(out_fd, buf, 4096, location);
-		if (written != 4096)
+		written = pwrite64(out_fd, buf, SZ_4K, location);
+		if (written != SZ_4K)
 			ret = -EIO;
-		location += 4096;
+		location += SZ_4K;
 	}
+
+	/* Then enlarge the file to size */
+	written = pwrite64(out_fd, buf, 1, size - 1);
+	if (written < 1)
+		ret = -EIO;
 	return ret;
 }
 
@@ -1350,6 +1370,9 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 		ret = btrfs_search_slot(trans, root, &key, &path, 0, 0);
 		if (ret < 0)
 			goto out;
+		/* Don't pollute ret for >0 case */
+		if (ret > 0)
+			ret = 0;
 
 		btrfs_item_key_to_cpu(path.nodes[0], &found_key,
 				      path.slots[0]);
@@ -1423,6 +1446,7 @@ int main(int argc, char **argv)
 	int zero_end = 1;
 	int fd = -1;
 	int ret;
+	int close_ret;
 	int i;
 	int mixed = 0;
 	int nodesize_forced = 0;
@@ -1436,6 +1460,7 @@ int main(int argc, char **argv)
 	u64 num_of_meta_chunks = 0;
 	u64 size_of_data = 0;
 	u64 source_dir_size = 0;
+	u64 min_dev_size;
 	int dev_cnt = 0;
 	int saved_optind;
 	char fs_uuid[BTRFS_UUID_UNPARSED_SIZE] = { 0 };
@@ -1580,8 +1605,12 @@ int main(int argc, char **argv)
 	while (dev_cnt-- > 0) {
 		file = argv[optind++];
 		if (is_block_device(file) == 1)
-			if (test_dev_for_mkfs(file, force_overwrite))
-				goto error;
+			ret = test_dev_for_mkfs(file, force_overwrite);
+		else
+			ret = test_status_for_mkfs(file, force_overwrite);
+
+		if (ret)
+			goto error;
 	}
 
 	optind = saved_optind;
@@ -1646,19 +1675,21 @@ int main(int argc, char **argv)
 		goto error;
 	}
 
+	min_dev_size = btrfs_min_dev_size(nodesize, mixed, metadata_profile,
+					  data_profile);
 	/* Check device/block_count after the nodesize is determined */
-	if (block_count && block_count < btrfs_min_dev_size(nodesize)) {
+	if (block_count && block_count < min_dev_size) {
 		error("size %llu is too small to make a usable filesystem",
 			block_count);
 		error("minimum size for btrfs filesystem is %llu",
-			btrfs_min_dev_size(nodesize));
+			min_dev_size);
 		goto error;
 	}
 	for (i = saved_optind; i < saved_optind + dev_cnt; i++) {
 		char *path;
 
 		path = argv[i];
-		ret = test_minimum_size(path, nodesize);
+		ret = test_minimum_size(path, min_dev_size);
 		if (ret < 0) {
 			error("failed to check size for %s: %s",
 				path, strerror(-ret));
@@ -1668,7 +1699,7 @@ int main(int argc, char **argv)
 			error("'%s' is too small to make a usable filesystem",
 				path);
 			error("minimum size for each btrfs device is %llu",
-				btrfs_min_dev_size(nodesize));
+				min_dev_size);
 			goto error;
 		}
 	}
@@ -1938,9 +1969,9 @@ raid_groups:
 	 */
 	fs_info->finalize_on_close = 1;
 out:
-	ret = close_ctree(root);
+	close_ret = close_ctree(root);
 
-	if (!ret) {
+	if (!close_ret) {
 		optind = saved_optind;
 		dev_cnt = argc - optind;
 		while (dev_cnt-- > 0) {
