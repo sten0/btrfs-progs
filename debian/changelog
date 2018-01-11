@@ -1,6 +1,7 @@
 btrfs-progs (4.14.1-1) unstable; urgency=medium
 
   * New upstream release.
+  * Add libzstd-dev build dependency.
 
  -- Dimitri John Ledkov <xnox@ubuntu.com>  Thu, 11 Jan 2018 15:43:20 +0000
 
