@@ -122,6 +122,8 @@ int set_label(const char *btrfs_dev, const char *label);
 char *__strncpy_null(char *dest, const char *src, size_t n);
 int is_block_device(const char *file);
 int is_mount_point(const char *file);
+int is_path_exist(const char *file);
+int is_reg_file(const char *path);
 int check_arg_type(const char *input);
 int open_path_or_dev_mnt(const char *path, DIR **dirstream, int verbose);
 int btrfs_open(const char *path, DIR **dirstream, int verbose, int dir_only);
@@ -170,6 +172,9 @@ int string_is_numerical(const char *str);
 int prefixcmp(const char *str, const char *prefix);
 
 unsigned long total_memory(void);
+
+void print_device_info(struct btrfs_device *device, char *prefix);
+void print_all_devices(struct list_head *devices);
 
 /*
  * Global program state, configurable by command line and available to

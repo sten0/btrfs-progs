@@ -109,11 +109,11 @@ objects = ctree.o disk-io.o kernel-lib/radix-tree.o extent-tree.o print-tree.o \
 	  fsfeatures.o kernel-lib/tables.o kernel-lib/raid56.o transaction.o
 cmds_objects = cmds-subvolume.o cmds-filesystem.o cmds-device.o cmds-scrub.o \
 	       cmds-inspect.o cmds-balance.o cmds-send.o cmds-receive.o \
-	       cmds-quota.o cmds-qgroup.o cmds-replace.o cmds-check.o \
+	       cmds-quota.o cmds-qgroup.o cmds-replace.o check/main.o \
 	       cmds-restore.o cmds-rescue.o chunk-recover.o super-recover.o \
 	       cmds-property.o cmds-fi-usage.o cmds-inspect-dump-tree.o \
 	       cmds-inspect-dump-super.o cmds-inspect-tree-stats.o cmds-fi-du.o \
-	       mkfs/common.o
+	       mkfs/common.o check/mode-common.o check/mode-lowmem.o
 libbtrfs_objects = send-stream.o send-utils.o kernel-lib/rbtree.o btrfs-list.o \
 		   kernel-lib/crc32c.o messages.o \
 		   uuid-tree.o utils-lib.o rbtree-utils.o
@@ -123,12 +123,10 @@ libbtrfs_headers = send-stream.h send-utils.h send.h kernel-lib/rbtree.h btrfs-l
 	       extent-cache.h extent_io.h ioctl.h ctree.h btrfsck.h version.h
 convert_objects = convert/main.o convert/common.o convert/source-fs.o \
 		  convert/source-ext2.o convert/source-reiserfs.o
-mkfs_objects = mkfs/main.o mkfs/common.o
+mkfs_objects = mkfs/main.o mkfs/common.o mkfs/rootdir.o
 image_objects = image/main.o image/sanitize.o
 all_objects = $(objects) $(cmds_objects) $(libbtrfs_objects) $(convert_objects) \
 	      $(mkfs_objects) $(image_objects)
-
-TESTS = fsck-tests.sh convert-tests.sh
 
 udev_rules = 64-btrfs-dm.rules
 
@@ -220,7 +218,7 @@ cmds_restore_cflags = -DBTRFSRESTORE_ZSTD=$(BTRFSRESTORE_ZSTD)
 CHECKER_FLAGS += $(btrfs_convert_cflags)
 
 # collect values of the variables above
-standalone_deps = $(foreach dep,$(patsubst %,%_objects,$(subst -,_,$(filter btrfs-%, $(progs)))),$($(dep)))
+standalone_deps = $(foreach dep,$(patsubst %,%_objects,$(subst -,_,$(filter btrfs-%, $(progs) $(progs_extra)))),$($(dep)))
 
 SUBDIRS =
 BUILDDIRS = $(patsubst %,build-%,$(SUBDIRS))
@@ -305,7 +303,7 @@ test-fsck: btrfs btrfs-image btrfs-corrupt-block mkfs.btrfs btrfstune
 	$(Q)bash tests/fsck-tests.sh
 
 test-misc: btrfs btrfs-image btrfs-corrupt-block mkfs.btrfs btrfstune fssum \
-		btrfs-zero-log btrfs-find-root btrfs-select-super
+		btrfs-zero-log btrfs-find-root btrfs-select-super btrfs-convert
 	@echo "    [TEST]   misc-tests.sh"
 	$(Q)bash tests/misc-tests.sh
 
@@ -313,11 +311,11 @@ test-mkfs: btrfs mkfs.btrfs
 	@echo "    [TEST]   mkfs-tests.sh"
 	$(Q)bash tests/mkfs-tests.sh
 
-test-fuzz: btrfs
+test-fuzz: btrfs btrfs-image
 	@echo "    [TEST]   fuzz-tests.sh"
 	$(Q)bash tests/fuzz-tests.sh
 
-test-cli: btrfs
+test-cli: btrfs mkfs.btrfs
 	@echo "    [TEST]   cli-tests.sh"
 	$(Q)bash tests/cli-tests.sh
 
@@ -331,7 +329,11 @@ test-inst: all
 		$(MAKE) $(MAKEOPTS) DESTDIR=$$tmpdest install && \
 		$(RM) -rf -- $$tmpdest
 
-test: test-fsck test-mkfs test-convert test-misc test-fuzz test-cli
+test: test-fsck test-mkfs test-misc test-cli test-convert test-fuzz
+
+testsuite: btrfs-corrupt-block fssum
+	@echo "Export tests as a package"
+	$(Q)cd tests && ./export-testsuite.sh
 
 #
 # NOTE: For static compiles, you need to have all the required libs
@@ -339,7 +341,7 @@ test: test-fsck test-mkfs test-convert test-misc test-fuzz test-cli
 #
 static: $(progs_static)
 
-version.h: version.sh version.h.in configure.ac
+version.h: version.h.in configure.ac
 	@echo "    [SH]     $@"
 	$(Q)bash ./config.status --silent $@
 
@@ -544,7 +546,7 @@ clean: $(CLEANDIRS)
 		kernel-shared/*.o kernel-shared/*.o.d \
 		image/*.o image/*.o.d \
 		convert/*.o convert/*.o.d \
-		mkfs/*.o mkfs/*.o.d \
+		mkfs/*.o mkfs/*.o.d check/*.o check/*.o.d \
 	      dir-test ioctl-test quick-test library-test library-test-static \
               mktables btrfs.static mkfs.btrfs.static fssum \
 	      $(check_defs) \

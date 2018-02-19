@@ -95,6 +95,7 @@ static int ext2_open_fs(struct btrfs_convert_context *cctx, const char *name)
 	return 0;
 fail:
 	ext2fs_close(ext2_fs);
+	ext2fs_free(ext2_fs);
 	return -1;
 }
 
@@ -179,6 +180,7 @@ static void ext2_close_fs(struct btrfs_convert_context *cctx)
 		cctx->volume_name = NULL;
 	}
 	ext2fs_close(cctx->fs_data);
+	ext2fs_free(cctx->fs_data);
 }
 
 static u8 ext2_filetype_conversion_table[EXT2_FT_MAX] = {
@@ -309,7 +311,7 @@ static int ext2_create_file_extents(struct btrfs_trans_handle *trans,
 		goto fail;
 	if ((convert_flags & CONVERT_FLAG_INLINE_DATA) && data.first_block == 0
 	    && data.num_blocks > 0
-	    && inode_size <= BTRFS_MAX_INLINE_DATA_SIZE(root)) {
+	    && inode_size <= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info)) {
 		u64 num_bytes = data.num_blocks * sectorsize;
 		u64 disk_bytenr = data.disk_block * sectorsize;
 		u64 nbytes;
@@ -520,7 +522,7 @@ static int ext2_copy_single_xattr(struct btrfs_trans_handle *trans,
 	}
 	strncpy(namebuf, xattr_prefix_table[name_index], XATTR_NAME_MAX);
 	strncat(namebuf, EXT2_EXT_ATTR_NAME(entry), entry->e_name_len);
-	if (name_len + datalen > BTRFS_LEAF_DATA_SIZE(root) -
+	if (name_len + datalen > BTRFS_LEAF_DATA_SIZE(root->fs_info) -
 	    sizeof(struct btrfs_item) - sizeof(struct btrfs_dir_item)) {
 		fprintf(stderr, "skip large xattr on inode %Lu name %.*s\n",
 			objectid - INO_OFFSET, name_len, namebuf);
