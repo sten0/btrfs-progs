@@ -8,6 +8,7 @@ Build-Depends: debhelper (>= 10),
                libacl1-dev,
                libblkid-dev,
                liblzo2-dev,
+               libzstd-dev,
                uuid-dev,
                udev,
                zlib1g-dev,
@@ -23,7 +24,7 @@ Package: btrfs-progs
 Architecture: linux-any
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Replaces: btrfs-tools (<< 4.4.1-1)
-Breaks: btrfs-tools (<< 4.4.1-1)
+Breaks: btrfs-tools (<< 4.4.1-1), btrbk (<= 0.25.0)
 Suggests: duperemove
 Description: Checksumming Copy on Write Filesystem utilities
  Btrfs is a new copy on write filesystem for Linux aimed at implementing

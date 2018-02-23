@@ -236,10 +236,66 @@ run_mustfail()
 	fi
 }
 
+# The first parameter is error message to print if it fails, just like
+# run_must_fail().
+# NOTE: we don't use pipefail to avoid disturbing other script, so here we
+# use a temporary output file.
+# So it doesn't support pipeline in the @cmd
+run_mustfail_stdout()
+{
+	local spec
+	local ins
+	local cmd
+	local msg
+	local ret
+	local tmp_output
+
+	tmp_output=$(mktemp --tmpdir btrfs-progs-test--mustfail-stdtout.XXXXXX)
+
+	msg="$1"
+	shift
+
+	if _is_file_or_command "$msg"; then
+		echo "ASSERTION FAIL: 1st argument of run_mustfail_stdout must be a message"
+		exit 1
+	fi
+
+	ins=$(_get_spec_ins "$@")
+	spec=$(($ins-1))
+	cmd=$(eval echo "\${$spec}")
+	spec=$(_cmd_spec "${@:$spec}")
+	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
+	echo "############### $@" >> "$RESULTS" 2>&1
+	if [[ $TEST_LOG =~ tty ]]; then echo "CMD(mustfail): $@" > /dev/tty; fi
+	if [ "$1" = 'root_helper' ]; then
+		"$@" 2>&1 > "$tmp_output"
+	else
+		$INSTRUMENT "$@" 2>&1 > "$tmp_output"
+	fi
+	ret=$?
+
+	cat "$tmp_output" >> "$RESULTS"
+	cat "$tmp_output"
+	rm "$tmp_output"
+
+	if [ "$ret" != 0 ]; then
+		echo "failed (expected): $@" >> "$RESULTS"
+		return 0
+	else
+		echo "succeeded (unexpected!): $@" >> "$RESULTS"
+		_fail "unexpected success: $msg"
+		return 1
+	fi
+}
+
 check_prereq()
 {
-	if ! [ -f "$TOP/$1" ]; then
-		_fail "Failed prerequisites: $1";
+	if [ "$1" = "btrfs-corrupt-block" -o "$1" = "fssum" ]; then
+		if ! [ -f "$INTERNAL_BIN/$1" ]; then
+			_fail "Failed prerequisites: $INTERNAL_BIN/$1";
+		fi
+	elif ! [ -f "$TOP/$1" ]; then
+		_fail "Failed prerequisites: $TOP/$1";
 	fi
 }
 
@@ -279,7 +335,7 @@ extract_image()
 	case "$image" in
 	*.img)
 		rm -f "$image.restored"
-		: ;;
+		;;
 	*.img.xz)
 		xz --decompress --keep "$image" || \
 			_fail "failed to decompress image $image" >&2
@@ -389,13 +445,19 @@ prepare_test_dev()
 	# num[K/M/G/T...]
 	local size="$1"
 
-	[[ "$TEST_DEV" ]] && return
 	[[ "$size" ]] || size='2G'
+	# Still truncate it to new size
+	if [ -n "$TEST_DEV" ]; then
+		truncate -s 0 "$TEST_DEV"
+		truncate -s "$size" "$TEST_DEV"
+		return;
+	fi
 
-	echo "\$TEST_DEV not given, use $TOP/test/test.img as fallback" >> \
+	echo "\$TEST_DEV not given, using $TEST_TOP/test.img as fallback" >> \
 		"$RESULTS"
-	TEST_DEV="$TOP/tests/test.img"
+	TEST_DEV="$TEST_TOP/test.img"
 
+	truncate -s 0 "$TEST_DEV"
 	truncate -s "$size" "$TEST_DEV" || _not_run "create file for loop device failed"
 }
 
@@ -419,17 +481,25 @@ run_check_mount_test_dev()
 	run_check $SUDO_HELPER mount -t btrfs $loop_opt "$@" "$TEST_DEV" "$TEST_MNT"
 }
 
+# $1-$n: optional paths to unmount, otherwise fallback to TEST_DEV
 run_check_umount_test_dev()
 {
 	setup_root_helper
-	run_check $SUDO_HELPER umount "$@" "$TEST_DEV"
+	if [ "$#" = 0 ]; then
+		set -- "$TEST_DEV"
+	fi
+	run_check $SUDO_HELPER umount "$@"
 }
 
 check_kernel_support()
 {
 	if ! grep -iq 'btrfs' /proc/filesystems; then
-		echo "WARNING: btrfs filesystem not listed in /proc/filesystems, some tests might fail"
-		return 1
+		run_check $SUDO_HELPER modprobe btrfs
+			if ! grep -iq 'btrfs' /proc/filesystems; then
+				echo \
+"WARNING: btrfs filesystem not found in /proc/filesystems, some tests might fail"
+				return 1
+			fi
 	fi
 	return 0
 }
@@ -566,11 +636,11 @@ cleanup_loopdevs()
 
 init_env()
 {
-	TEST_MNT="${TEST_MNT:-$TOP/tests/mnt}"
+	TEST_MNT="${TEST_MNT:-$TEST_TOP/mnt}"
 	export TEST_MNT
 	mkdir -p "$TEST_MNT" || { echo "Failed mkdir -p $TEST_MNT"; exit 1; }
 
-	source $TOP/tests/common.local
+	source $TEST_TOP/common.local
 
 	if [ "$TEST_ENABLE_OVERRIDE" = 'true' -a -n "$RESULTS" ]; then
 		echo "INCLUDE common.local" >> "$RESULTS"

@@ -58,10 +58,8 @@ static struct btrfs_device *__find_device(struct list_head *head, u64 devid,
 					  u8 *uuid)
 {
 	struct btrfs_device *dev;
-	struct list_head *cur;
 
-	list_for_each(cur, head) {
-		dev = list_entry(cur, struct btrfs_device, dev_list);
+	list_for_each_entry(dev, head, dev_list) {
 		if (dev->devid == devid &&
 		    !memcmp(dev->uuid, uuid, BTRFS_UUID_SIZE)) {
 			return dev;
@@ -72,11 +70,9 @@ static struct btrfs_device *__find_device(struct list_head *head, u64 devid,
 
 static struct btrfs_fs_devices *find_fsid(u8 *fsid)
 {
-	struct list_head *cur;
 	struct btrfs_fs_devices *fs_devices;
 
-	list_for_each(cur, &fs_uuids) {
-		fs_devices = list_entry(cur, struct btrfs_fs_devices, list);
+	list_for_each_entry(fs_devices, &fs_uuids, list) {
 		if (memcmp(fsid, fs_devices->fsid, BTRFS_FSID_SIZE) == 0)
 			return fs_devices;
 	}
@@ -138,7 +134,21 @@ static int device_list_add(const char *path,
 		list_add(&device->dev_list, &fs_devices->devices);
 		device->fs_devices = fs_devices;
 	} else if (!device->name || strcmp(device->name, path)) {
-		char *name = strdup(path);
+		char *name;
+
+		/*
+		 * The existing device has newer generation, so this one could
+		 * be a stale one, don't add it.
+		 */
+		if (found_transid < device->generation) {
+			warning(
+	"adding device %s gen %llu but found an existing device %s gen %llu",
+				path, found_transid, device->name,
+				device->generation);
+			return -EEXIST;
+		}
+
+		name = strdup(path);
                 if (!name)
                         return -ENOMEM;
                 kfree(device->name);
@@ -171,8 +181,8 @@ again:
 				    struct btrfs_device, dev_list);
 		if (device->fd != -1) {
 			if (fsync(device->fd) == -1) {
-				warning("fsync on device %llu failed: %s",
-					device->devid, strerror(errno));
+				warning("fsync on device %llu failed: %m",
+					device->devid);
 				ret = -errno;
 			}
 			if (posix_fadvise(device->fd, 0, 0, POSIX_FADV_DONTNEED))
@@ -220,13 +230,10 @@ void btrfs_close_all_devices(void)
 int btrfs_open_devices(struct btrfs_fs_devices *fs_devices, int flags)
 {
 	int fd;
-	struct list_head *head = &fs_devices->devices;
-	struct list_head *cur;
 	struct btrfs_device *device;
 	int ret;
 
-	list_for_each(cur, head) {
-		device = list_entry(cur, struct btrfs_device, dev_list);
+	list_for_each_entry(device, &fs_devices->devices, dev_list) {
 		if (!device->name) {
 			printk("no name for device %llu, skip it now\n", device->devid);
 			continue;
@@ -235,8 +242,7 @@ int btrfs_open_devices(struct btrfs_fs_devices *fs_devices, int flags)
 		fd = open(device->name, flags);
 		if (fd < 0) {
 			ret = -errno;
-			error("cannot open device '%s': %s", device->name,
-					strerror(errno));
+			error("cannot open device '%s': %m", device->name);
 			goto fail;
 		}
 
@@ -302,9 +308,9 @@ int btrfs_scan_one_device(int fd, const char *path,
  * But if we don't find suitable free space, it is used to store the size of
  * the max free space.
  */
-static int find_free_dev_extent_start(struct btrfs_trans_handle *trans,
-			       struct btrfs_device *device, u64 num_bytes,
-			       u64 search_start, u64 *start, u64 *len)
+static int find_free_dev_extent_start(struct btrfs_device *device,
+				      u64 num_bytes, u64 search_start,
+				      u64 *start, u64 *len)
 {
 	struct btrfs_key key;
 	struct btrfs_root *root = device->dev_root;
@@ -443,20 +449,17 @@ out:
 	return ret;
 }
 
-int find_free_dev_extent(struct btrfs_trans_handle *trans,
-			 struct btrfs_device *device, u64 num_bytes,
-			 u64 *start)
+static int find_free_dev_extent(struct btrfs_device *device, u64 num_bytes,
+				u64 *start)
 {
 	/* FIXME use last free of some kind */
-	return find_free_dev_extent_start(trans, device,
-					  num_bytes, 0, start, NULL);
+	return find_free_dev_extent_start(device, num_bytes, 0, start, NULL);
 }
 
 static int btrfs_alloc_dev_extent(struct btrfs_trans_handle *trans,
 				  struct btrfs_device *device,
-				  u64 chunk_tree, u64 chunk_objectid,
-				  u64 chunk_offset,
-				  u64 num_bytes, u64 *start, int convert)
+				  u64 chunk_offset, u64 num_bytes, u64 *start,
+				  int convert)
 {
 	int ret;
 	struct btrfs_path *path;
@@ -474,8 +477,7 @@ static int btrfs_alloc_dev_extent(struct btrfs_trans_handle *trans,
 	 * is responsible to make sure it's free.
 	 */
 	if (!convert) {
-		ret = find_free_dev_extent(trans, device, num_bytes,
-					   start);
+		ret = find_free_dev_extent(device, num_bytes, start);
 		if (ret)
 			goto err;
 	}
@@ -490,8 +492,9 @@ static int btrfs_alloc_dev_extent(struct btrfs_trans_handle *trans,
 	leaf = path->nodes[0];
 	extent = btrfs_item_ptr(leaf, path->slots[0],
 				struct btrfs_dev_extent);
-	btrfs_set_dev_extent_chunk_tree(leaf, extent, chunk_tree);
-	btrfs_set_dev_extent_chunk_objectid(leaf, extent, chunk_objectid);
+	btrfs_set_dev_extent_chunk_tree(leaf, extent, BTRFS_CHUNK_TREE_OBJECTID);
+	btrfs_set_dev_extent_chunk_objectid(leaf, extent,
+					    BTRFS_FIRST_CHUNK_TREE_OBJECTID);
 	btrfs_set_dev_extent_chunk_offset(leaf, extent, chunk_offset);
 
 	write_extent_buffer(leaf, root->fs_info->chunk_tree_uuid,
@@ -823,7 +826,7 @@ error:
 	return ret;
 }
 
-#define BTRFS_MAX_DEVS(r) ((BTRFS_LEAF_DATA_SIZE(r)		\
+#define BTRFS_MAX_DEVS(r) ((BTRFS_LEAF_DATA_SIZE(r->fs_info)	\
 			- sizeof(struct btrfs_item)		\
 			- sizeof(struct btrfs_chunk))		\
 			/ sizeof(struct btrfs_stripe) + 1)
@@ -1028,15 +1031,15 @@ again:
 		    (index == num_stripes - 1))
 			list_move_tail(&device->dev_list, dev_list);
 
-		ret = btrfs_alloc_dev_extent(trans, device,
-			     info->chunk_root->root_key.objectid,
-			     BTRFS_FIRST_CHUNK_TREE_OBJECTID, key.offset,
+		ret = btrfs_alloc_dev_extent(trans, device, key.offset,
 			     calc_size, &dev_offset, 0);
-		BUG_ON(ret);
+		if (ret < 0)
+			goto out_chunk_map;
 
 		device->bytes_used += calc_size;
 		ret = btrfs_update_device(trans, device);
-		BUG_ON(ret);
+		if (ret < 0)
+			goto out_chunk_map;
 
 		map->stripes[index].dev = device;
 		map->stripes[index].physical = dev_offset;
@@ -1075,14 +1078,22 @@ again:
 	map->ce.size = *num_bytes;
 
 	ret = insert_cache_extent(&info->mapping_tree.cache_tree, &map->ce);
-	BUG_ON(ret);
+	if (ret < 0)
+		goto out_chunk_map;
 
 	if (type & BTRFS_BLOCK_GROUP_SYSTEM) {
 		ret = btrfs_add_system_chunk(info, &key,
 				    chunk, btrfs_chunk_item_size(num_stripes));
-		BUG_ON(ret);
+		if (ret < 0)
+			goto out_chunk;
 	}
 
+	kfree(chunk);
+	return ret;
+
+out_chunk_map:
+	kfree(map);
+out_chunk:
 	kfree(chunk);
 	return ret;
 }
@@ -1155,9 +1166,7 @@ int btrfs_alloc_data_chunk(struct btrfs_trans_handle *trans,
 	while (index < num_stripes) {
 		struct btrfs_stripe *stripe;
 
-		ret = btrfs_alloc_dev_extent(trans, device,
-			     info->chunk_root->root_key.objectid,
-			     BTRFS_FIRST_CHUNK_TREE_OBJECTID, key.offset,
+		ret = btrfs_alloc_dev_extent(trans, device, key.offset,
 			     calc_size, &dev_offset, convert);
 		BUG_ON(ret);
 
@@ -1702,7 +1711,7 @@ int btrfs_check_chunk_valid(struct btrfs_fs_info *fs_info,
 		return -EIO;
 	}
 	if (btrfs_chunk_sector_size(leaf, chunk) != sectorsize) {
-		error("invalid chunk sectorsize %llu", 
+		error("invalid chunk sectorsize %llu",
 		      (unsigned long long)btrfs_chunk_sector_size(leaf, chunk));
 		return -EIO;
 	}
@@ -2331,4 +2340,182 @@ u64 btrfs_stripe_length(struct btrfs_fs_info *fs_info,
 		BUG_ON(1);
 	}
 	return stripe_len;
+}
+
+/*
+ * Return 0 if size of @device is already good
+ * Return >0 if size of @device is not aligned but fixed without problems
+ * Return <0 if something wrong happened when aligning the size of @device
+ */
+int btrfs_fix_device_size(struct btrfs_fs_info *fs_info,
+			  struct btrfs_device *device)
+{
+	struct btrfs_trans_handle *trans;
+	struct btrfs_key key;
+	struct btrfs_path path;
+	struct btrfs_root *chunk_root = fs_info->chunk_root;
+	struct btrfs_dev_item *di;
+	u64 old_bytes = device->total_bytes;
+	int ret;
+
+	if (IS_ALIGNED(old_bytes, fs_info->sectorsize))
+		return 0;
+
+	/* Align the in-memory total_bytes first, and use it as correct size */
+	device->total_bytes = round_down(device->total_bytes,
+					 fs_info->sectorsize);
+
+	key.objectid = BTRFS_DEV_ITEMS_OBJECTID;
+	key.type = BTRFS_DEV_ITEM_KEY;
+	key.offset = device->devid;
+
+	trans = btrfs_start_transaction(chunk_root, 1);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		error("error starting transaction: %d (%s)",
+		      ret, strerror(-ret));
+		return ret;
+	}
+
+	btrfs_init_path(&path);
+	ret = btrfs_search_slot(trans, chunk_root, &key, &path, 0, 1);
+	if (ret > 0) {
+		error("failed to find DEV_ITEM for devid %llu", device->devid);
+		ret = -ENOENT;
+		goto err;
+	}
+	if (ret < 0) {
+		error("failed to search chunk root: %d (%s)",
+			ret, strerror(-ret));
+		goto err;
+	}
+	di = btrfs_item_ptr(path.nodes[0], path.slots[0], struct btrfs_dev_item);
+	btrfs_set_device_total_bytes(path.nodes[0], di, device->total_bytes);
+	btrfs_mark_buffer_dirty(path.nodes[0]);
+	ret = btrfs_commit_transaction(trans, chunk_root);
+	if (ret < 0) {
+		error("failed to commit current transaction: %d (%s)",
+			ret, strerror(-ret));
+		btrfs_release_path(&path);
+		return ret;
+	}
+	btrfs_release_path(&path);
+	printf("Fixed device size for devid %llu, old size: %llu new size: %llu\n",
+		device->devid, old_bytes, device->total_bytes);
+	return 1;
+
+err:
+	/* We haven't modified anything, it's OK to commit current trans */
+	btrfs_commit_transaction(trans, chunk_root);
+	btrfs_release_path(&path);
+	return ret;
+}
+
+/*
+ * Return 0 if super block total_bytes matches all devices' total_bytes
+ * Return >0 if super block total_bytes mismatch but fixed without problem
+ * Return <0 if we failed to fix super block total_bytes
+ */
+int btrfs_fix_super_size(struct btrfs_fs_info *fs_info)
+{
+	struct btrfs_trans_handle *trans;
+	struct btrfs_device *device;
+	struct list_head *dev_list = &fs_info->fs_devices->devices;
+	u64 total_bytes = 0;
+	u64 old_bytes = btrfs_super_total_bytes(fs_info->super_copy);
+	int ret;
+
+	list_for_each_entry(device, dev_list, dev_list) {
+		/*
+		 * Caller should ensure this function is called after aligning
+		 * all devices' total_bytes.
+		 */
+		if (!IS_ALIGNED(device->total_bytes, fs_info->sectorsize)) {
+			error("device %llu total_bytes %llu not aligned to %u",
+				device->devid, device->total_bytes,
+				fs_info->sectorsize);
+			return -EUCLEAN;
+		}
+		total_bytes += device->total_bytes;
+	}
+
+	if (total_bytes == old_bytes)
+		return 0;
+
+	btrfs_set_super_total_bytes(fs_info->super_copy, total_bytes);
+
+	/* Commit transaction to update all super blocks */
+	trans = btrfs_start_transaction(fs_info->tree_root, 1);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		error("error starting transaction:  %d (%s)",
+		      ret, strerror(-ret));
+		return ret;
+	}
+	ret = btrfs_commit_transaction(trans, fs_info->tree_root);
+	if (ret < 0) {
+		error("failed to commit current transaction: %d (%s)",
+			ret, strerror(-ret));
+		return ret;
+	}
+	printf("Fixed super total bytes, old size: %llu new size: %llu\n",
+		old_bytes, total_bytes);
+	return 1;
+}
+
+/*
+ * Return 0 if all devices and super block sizes are good
+ * Return >0 if any device/super size problem was found, but fixed
+ * Return <0 if something wrong happened during fixing
+ */
+int btrfs_fix_device_and_super_size(struct btrfs_fs_info *fs_info)
+{
+	struct btrfs_device *device;
+	struct list_head *dev_list = &fs_info->fs_devices->devices;
+	bool have_bad_value = false;
+	int ret;
+
+	/* Seed device is not supported yet */
+	if (fs_info->fs_devices->seed) {
+		error("fixing device size with seed device is not supported yet");
+		return -EOPNOTSUPP;
+	}
+
+	/* All devices must be set up before repairing */
+	if (list_empty(dev_list)) {
+		error("no device found");
+		return -ENODEV;
+	}
+	list_for_each_entry(device, dev_list, dev_list) {
+		if (device->fd == -1 || !device->writeable) {
+			error("devid %llu is missing or not writeable",
+			      device->devid);
+			error(
+	"fixing device size needs all device(s) to be present and writeable");
+			return -ENODEV;
+		}
+	}
+
+	/* Repair total_bytes of each device */
+	list_for_each_entry(device, dev_list, dev_list) {
+		ret = btrfs_fix_device_size(fs_info, device);
+		if (ret < 0)
+			return ret;
+		if (ret > 0)
+			have_bad_value = true;
+	}
+
+	/* Repair super total_byte */
+	ret = btrfs_fix_super_size(fs_info);
+	if (ret > 0)
+		have_bad_value = true;
+	if (have_bad_value) {
+		printf(
+	"Fixed unaligned/mismatched total_bytes for super block and device items\n");
+		ret = 1;
+	} else {
+		printf("No device size related problem found\n");
+		ret = 0;
+	}
+	return ret;
 }

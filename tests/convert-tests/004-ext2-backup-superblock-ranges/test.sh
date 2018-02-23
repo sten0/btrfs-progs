@@ -10,7 +10,7 @@
 # 4) Overlap file extents
 # 5) Unable to rollback
 
-source "$TOP/tests/common"
+source "$TEST_TOP/common"
 
 check_prereq btrfs-convert
 check_prereq btrfs
@@ -18,7 +18,7 @@ check_global_prereq e2fsck
 check_global_prereq xzcat
 
 setup_root_helper
-prepare_test_dev 512M
+prepare_test_dev
 
 # override common function
 function check_image() {

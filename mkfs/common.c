@@ -100,6 +100,21 @@ static int btrfs_create_tree_root(int fd, struct btrfs_mkfs_config *cfg,
  *
  * The superblock signature is not valid, denotes a partially created
  * filesystem, needs to be finalized.
+ *
+ * The temporary fs will have the following chunk layout:
+ * Device extent:
+ * 0		1M				5M	......
+ * | Reserved	| dev extent for SYS chunk      |
+ *
+ * And chunk mapping will be:
+ * Chunk mapping:
+ * 0		1M				5M
+ * |		| System chunk, 1:1 mapped	|
+ *
+ * That's to say, there will only be *ONE* system chunk, mapped to
+ * [1M, 5M) physical offset.
+ * And the only chunk is also in logical address [1M, 5M), containing
+ * all essential tree blocks.
  */
 int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 {
@@ -154,8 +169,8 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 
 	cfg->blocks[MKFS_SUPER_BLOCK] = BTRFS_SUPER_INFO_OFFSET;
 	for (i = 1; i < MKFS_BLOCK_COUNT; i++) {
-		cfg->blocks[i] = BTRFS_SUPER_INFO_OFFSET + SZ_1M +
-			cfg->nodesize * i;
+		cfg->blocks[i] = BTRFS_BLOCK_RESERVED_1M_FOR_SUPER +
+			cfg->nodesize * (i - 1);
 	}
 
 	btrfs_set_super_bytenr(&super, cfg->blocks[MKFS_SUPER_BLOCK]);
@@ -309,7 +324,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 
 	/* then we have chunk 0 */
 	btrfs_set_disk_key_objectid(&disk_key, BTRFS_FIRST_CHUNK_TREE_OBJECTID);
-	btrfs_set_disk_key_offset(&disk_key, 0);
+	btrfs_set_disk_key_offset(&disk_key, BTRFS_BLOCK_RESERVED_1M_FOR_SUPER);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_CHUNK_ITEM_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
 	btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
@@ -325,7 +340,8 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_chunk_sector_size(buf, chunk, cfg->sectorsize);
 	btrfs_set_chunk_num_stripes(buf, chunk, 1);
 	btrfs_set_stripe_devid_nr(buf, chunk, 0, 1);
-	btrfs_set_stripe_offset_nr(buf, chunk, 0, 0);
+	btrfs_set_stripe_offset_nr(buf, chunk, 0,
+				   BTRFS_BLOCK_RESERVED_1M_FOR_SUPER);
 	nritems++;
 
 	write_extent_buffer(buf, super.dev_item.uuid,
@@ -363,7 +379,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 		sizeof(struct btrfs_dev_extent);
 
 	btrfs_set_disk_key_objectid(&disk_key, 1);
-	btrfs_set_disk_key_offset(&disk_key, 0);
+	btrfs_set_disk_key_offset(&disk_key, BTRFS_BLOCK_RESERVED_1M_FOR_SUPER);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_DEV_EXTENT_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
 	btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
@@ -374,7 +390,8 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 					BTRFS_CHUNK_TREE_OBJECTID);
 	btrfs_set_dev_extent_chunk_objectid(buf, dev_extent,
 					BTRFS_FIRST_CHUNK_TREE_OBJECTID);
-	btrfs_set_dev_extent_chunk_offset(buf, dev_extent, 0);
+	btrfs_set_dev_extent_chunk_offset(buf, dev_extent,
+					  BTRFS_BLOCK_RESERVED_1M_FOR_SUPER);
 
 	write_extent_buffer(buf, chunk_tree_uuid,
 		    (unsigned long)btrfs_dev_extent_chunk_tree_uuid(dev_extent),
@@ -438,12 +455,6 @@ out:
 	return ret;
 }
 
-u64 btrfs_min_dev_size(u32 nodesize)
-{
-	return 2 * (BTRFS_MKFS_SYSTEM_GROUP_SIZE +
-		    btrfs_min_global_blk_rsv_size(nodesize));
-}
-
 /*
  * Btrfs minimum size calculation is complicated, it should include at least:
  * 1. system group size
@@ -454,9 +465,73 @@ u64 btrfs_min_dev_size(u32 nodesize)
  * To avoid the overkill calculation, (system group + global block rsv) * 2
  * for *EACH* device should be good enough.
  */
-u64 btrfs_min_global_blk_rsv_size(u32 nodesize)
+static u64 btrfs_min_global_blk_rsv_size(u32 nodesize)
 {
 	return (u64)nodesize << 10;
+}
+
+u64 btrfs_min_dev_size(u32 nodesize, int mixed, u64 meta_profile,
+		       u64 data_profile)
+{
+	u64 reserved = 0;
+	u64 meta_size;
+	u64 data_size;
+
+	if (mixed)
+		return 2 * (BTRFS_MKFS_SYSTEM_GROUP_SIZE +
+			    btrfs_min_global_blk_rsv_size(nodesize));
+
+	/*
+	 * Minimal size calculation is complex due to several factors:
+	 * 0) Reserved 1M range.
+	 *
+	 * 1) Temporary chunk reuse
+	 *    If specified chunk profile is SINGLE, we can reuse
+	 *    temporary chunks, no need to allocate new chunks.
+	 *
+	 * 2) Different minimal chunk size for different profiles:
+	 *    For initial sys chunk, chunk size is fixed to 4M.
+	 *    For single profile, minimal chunk size is 8M for all.
+	 *    For other profiles, minimal chunk and stripe size ranges from 8M
+	 *    to 64M.
+	 *
+	 * To calculate it a little easier, here we assume we don't reuse any
+	 * temporary chunk, and calculate the size completely by ourselves.
+	 *
+	 * Temporary chunks sizes are always fixed:
+	 * One initial sys chunk, one SINGLE meta, and one SINGLE data.
+	 * The latter two are all 8M, accroding to @calc_size of
+	 * btrfs_alloc_chunk().
+	 */
+	reserved += BTRFS_BLOCK_RESERVED_1M_FOR_SUPER +
+		    BTRFS_MKFS_SYSTEM_GROUP_SIZE + SZ_8M * 2;
+
+	/*
+	 * For real chunks, we need to select different sizes:
+	 * For SINGLE, it's still fixed to 8M (@calc_size).
+	 * For other profiles, refer to max(@min_stripe_size, @calc_size).
+	 *
+	 * And use the stripe size to calculate its physical used space.
+	 */
+	if (meta_profile & BTRFS_BLOCK_GROUP_PROFILE_MASK)
+		meta_size = SZ_8M + SZ_32M;
+	else
+		meta_size = SZ_8M + SZ_8M;
+	/* For DUP/metadata,  2 stripes on one disk */
+	if (meta_profile & BTRFS_BLOCK_GROUP_DUP)
+		meta_size *= 2;
+	reserved += meta_size;
+
+	if (data_profile & BTRFS_BLOCK_GROUP_PROFILE_MASK)
+		data_size = SZ_64M;
+	else
+		data_size = SZ_8M;
+	/* For DUP/data,  2 stripes on one disk */
+	if (data_profile & BTRFS_BLOCK_GROUP_DUP)
+		data_size *= 2;
+	reserved += data_size;
+
+	return reserved;
 }
 
 #define isoctal(c)	(((c) & ~7) == '0')
@@ -632,6 +707,36 @@ int test_dev_for_mkfs(const char *file, int force_overwrite)
 		error("%s is a swap device", file);
 		return 1;
 	}
+	ret = test_status_for_mkfs(file, force_overwrite);
+	if (ret)
+		return 1;
+	/* check if the device is busy */
+	fd = open(file, O_RDWR|O_EXCL);
+	if (fd < 0) {
+		error("unable to open %s: %m", file);
+		return 1;
+	}
+	if (fstat(fd, &st)) {
+		error("unable to stat %s: %m", file);
+		close(fd);
+		return 1;
+	}
+	if (!S_ISBLK(st.st_mode)) {
+		error("%s is not a block device", file);
+		close(fd);
+		return 1;
+	}
+	close(fd);
+	return 0;
+}
+
+/*
+ * check if the file (device) is formatted or mounted
+ */
+int test_status_for_mkfs(const char *file, bool force_overwrite)
+{
+	int ret;
+
 	if (!force_overwrite) {
 		if (check_overwrite(file)) {
 			error("use the -f option to force overwrite of %s",
@@ -649,23 +754,7 @@ int test_dev_for_mkfs(const char *file, int force_overwrite)
 		error("%s is mounted", file);
 		return 1;
 	}
-	/* check if the device is busy */
-	fd = open(file, O_RDWR|O_EXCL);
-	if (fd < 0) {
-		error("unable to open %s: %s", file, strerror(errno));
-		return 1;
-	}
-	if (fstat(fd, &st)) {
-		error("unable to stat %s: %s", file, strerror(errno));
-		close(fd);
-		return 1;
-	}
-	if (!S_ISBLK(st.st_mode)) {
-		error("%s is not a block device", file);
-		close(fd);
-		return 1;
-	}
-	close(fd);
+
 	return 0;
 }
 
@@ -698,7 +787,7 @@ int is_vol_small(const char *file)
 	}
 }
 
-int test_minimum_size(const char *file, u32 nodesize)
+int test_minimum_size(const char *file, u64 min_dev_size)
 {
 	int fd;
 	struct stat statbuf;
@@ -710,7 +799,7 @@ int test_minimum_size(const char *file, u32 nodesize)
 		close(fd);
 		return -errno;
 	}
-	if (btrfs_device_size(fd, &statbuf) < btrfs_min_dev_size(nodesize)) {
+	if (btrfs_device_size(fd, &statbuf) < min_dev_size) {
 		close(fd);
 		return 1;
 	}

@@ -6,15 +6,15 @@
 # We use separate inputs for tails and real blocks so we can determine
 # if there was a failure in copying either.
 
-source "$TOP/tests/common"
-source "$TOP/tests/common.convert"
+source "$TEST_TOP/common"
+source "$TEST_TOP/common.convert"
 
 if ! check_kernel_support_reiserfs >/dev/null; then
 	_not_run "no reiserfs support"
 fi
 
 setup_root_helper
-prepare_test_dev 512M
+prepare_test_dev
 check_prereq btrfs-convert
 check_global_prereq md5sum
 check_global_prereq mkreiserfs

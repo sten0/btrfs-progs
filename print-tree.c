@@ -551,6 +551,26 @@ static void root_flags_to_str(u64 flags, char *ret)
 		strcat(ret, "none");
 }
 
+static void print_timespec(struct extent_buffer *eb,
+		struct btrfs_timespec *timespec, const char *prefix,
+		const char *suffix)
+{
+	struct tm tm;
+	u64 tmp_u64;
+	u32 tmp_u32;
+	time_t tmp_time;
+	char timestamp[256];
+
+	tmp_u64 = btrfs_timespec_sec(eb, timespec);
+	tmp_u32 = btrfs_timespec_nsec(eb, timespec);
+	tmp_time = tmp_u64;
+	localtime_r(&tmp_time, &tm);
+	strftime(timestamp, sizeof(timestamp),
+			"%Y-%m-%d %H:%M:%S", &tm);
+	printf("%s%llu.%u (%s)%s", prefix, (unsigned long long)tmp_u64, tmp_u32,
+			timestamp, suffix);
+}
+
 static void print_root_item(struct extent_buffer *leaf, int slot)
 {
 	struct btrfs_root_item *ri;
@@ -598,6 +618,18 @@ static void print_root_item(struct extent_buffer *leaf, int slot)
 				btrfs_root_stransid(&root_item),
 				btrfs_root_rtransid(&root_item));
 		}
+		if (btrfs_timespec_sec(leaf, btrfs_root_ctime(ri)))
+			print_timespec(leaf, btrfs_root_ctime(ri),
+					"\t\tctime ", "\n");
+		if (btrfs_timespec_sec(leaf, btrfs_root_otime(ri)))
+			print_timespec(leaf, btrfs_root_otime(ri),
+					"\t\totime ", "\n");
+		if (btrfs_timespec_sec(leaf, btrfs_root_stime(ri)))
+			print_timespec(leaf, btrfs_root_stime(ri),
+					"\t\tstime ", "\n");
+		if (btrfs_timespec_sec(leaf, btrfs_root_rtime(ri)))
+			print_timespec(leaf, btrfs_root_rtime(ri),
+					"\t\trtime ", "\n");
 	}
 
 	btrfs_disk_key_to_cpu(&drop_key, &root_item.drop_progress);
@@ -794,6 +826,17 @@ void btrfs_print_key(struct btrfs_disk_key *disk_key)
 	case BTRFS_UUID_KEY_RECEIVED_SUBVOL:
 		printf(" 0x%016llx)", (unsigned long long)offset);
 		break;
+
+	/*
+	 * Key offsets of ROOT_ITEM point to tree root, print them in human
+	 * readable format.  Especially useful for trees like data/tree reloc
+	 * tree, whose tree id can be negative.
+	 */
+	case BTRFS_ROOT_ITEM_KEY:
+		printf(" ");
+		print_objectid(stdout, offset, type);
+		printf(")");
+		break;
 	default:
 		if (offset == (u64)-1)
 			printf(" -1)");
@@ -856,26 +899,6 @@ static void inode_flags_to_str(u64 flags, char *ret)
 		strcat(ret, "none");
 }
 
-static void print_timespec(struct extent_buffer *eb,
-		struct btrfs_timespec *timespec, const char *prefix,
-		const char *suffix)
-{
-	struct tm tm;
-	u64 tmp_u64;
-	u32 tmp_u32;
-	time_t tmp_time;
-	char timestamp[256];
-
-	tmp_u64 = btrfs_timespec_sec(eb, timespec);
-	tmp_u32 = btrfs_timespec_nsec(eb, timespec);
-	tmp_time = tmp_u64;
-	localtime_r(&tmp_time, &tm);
-	strftime(timestamp, sizeof(timestamp),
-			"%Y-%m-%d %H:%M:%S", &tm);
-	printf("%s%llu.%u (%s)%s", prefix, (unsigned long long)tmp_u64, tmp_u32,
-			timestamp, suffix);
-}
-
 static void print_inode_item(struct extent_buffer *eb,
 		struct btrfs_inode_item *ii)
 {
@@ -896,8 +919,8 @@ static void print_inode_item(struct extent_buffer *eb,
 	       btrfs_inode_uid(eb, ii),
 	       btrfs_inode_gid(eb, ii),
 	       (unsigned long long)btrfs_inode_rdev(eb,ii),
-	       (unsigned long long)btrfs_inode_flags(eb,ii),
 	       (unsigned long long)btrfs_inode_sequence(eb, ii),
+	       (unsigned long long)btrfs_inode_flags(eb,ii),
 	       flags_str);
 	print_timespec(eb, btrfs_inode_atime(ii), "\t\tatime ", "\n");
 	print_timespec(eb, btrfs_inode_ctime(ii), "\t\tctime ", "\n");
@@ -1336,7 +1359,7 @@ void btrfs_print_tree(struct btrfs_root *root, struct extent_buffer *eb, int fol
 	printf("node %llu level %d items %d free %u generation %llu owner %llu\n",
 	       (unsigned long long)eb->start,
 	        btrfs_header_level(eb), nr,
-		(u32)BTRFS_NODEPTRS_PER_BLOCK(root) - nr,
+		(u32)BTRFS_NODEPTRS_PER_BLOCK(root->fs_info) - nr,
 		(unsigned long long)btrfs_header_generation(eb),
 		(unsigned long long)btrfs_header_owner(eb));
 	print_uuids(eb);

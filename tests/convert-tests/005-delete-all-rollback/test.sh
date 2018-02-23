@@ -2,11 +2,11 @@
 # create a base image, convert to btrfs, remove all files, rollback the ext4 image
 # note: ext4 only
 
-source "$TOP/tests/common"
-source "$TOP/tests/common.convert"
+source "$TEST_TOP/common"
+source "$TEST_TOP/common.convert"
 
 setup_root_helper
-prepare_test_dev 512M
+prepare_test_dev
 check_prereq btrfs-convert
 check_global_prereq mke2fs
 

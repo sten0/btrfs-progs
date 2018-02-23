@@ -768,7 +768,7 @@ static int create_image(struct btrfs_root *root,
 	if (ret < 0)
 		goto out;
 	ret = btrfs_add_link(trans, root, ino, BTRFS_FIRST_FREE_OBJECTID, name,
-			     strlen(name), BTRFS_FT_REG_FILE, NULL, 1);
+			     strlen(name), BTRFS_FT_REG_FILE, NULL, 1, 0);
 	if (ret < 0)
 		goto out;
 
@@ -916,9 +916,7 @@ static int make_convert_data_block_groups(struct btrfs_trans_handle *trans,
 			if (ret < 0)
 				break;
 			ret = btrfs_make_block_group(trans, fs_info, 0,
-					BTRFS_BLOCK_GROUP_DATA,
-					BTRFS_FIRST_CHUNK_TREE_OBJECTID,
-					cur, len);
+					BTRFS_BLOCK_GROUP_DATA, cur, len);
 			if (ret < 0)
 				break;
 			cur += len;
@@ -1115,7 +1113,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		goto fail;
 	fd = open(devname, O_RDWR);
 	if (fd < 0) {
-		error("unable to open %s: %s", devname, strerror(errno));
+		error("unable to open %s: %m", devname);
 		goto fail;
 	}
 	btrfs_parse_features_to_string(features_buf, features);
@@ -1443,6 +1441,8 @@ next:
 		}
 	}
 	btrfs_release_path(&path);
+	if (ret)
+		return ret;
 	/*
 	 * For HOLES mode (without NO_HOLES), we must ensure file extents
 	 * cover the whole range of the image
@@ -1524,12 +1524,18 @@ static int do_rollback(const char *devname)
 	}
 	fd = open(devname, O_RDWR);
 	if (fd < 0) {
-		error("unable to open %s: %s", devname, strerror(errno));
+		error("unable to open %s: %m", devname);
 		ret = -EIO;
 		goto free_mem;
 	}
 	fsize = lseek(fd, 0, SEEK_END);
-	root = open_ctree_fd(fd, devname, 0, OPEN_CTREE_WRITES);
+
+	/*
+	 * For rollback, we don't really need to write anything so open it
+	 * read-only.  The write part will happen after we close the
+	 * filesystem.
+	 */
+	root = open_ctree_fd(fd, devname, 0, 0);
 	if (!root) {
 		error("unable to open ctree");
 		ret = -EIO;
