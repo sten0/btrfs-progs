@@ -451,24 +451,6 @@ static void print_device_extent_tree(struct device_extent_tree *tree)
 	printf("\n");
 }
 
-static void print_device_info(struct btrfs_device *device, char *prefix)
-{
-	if (prefix)
-		printf("%s", prefix);
-	printf("Device: id = %llu, name = %s\n",
-	       device->devid, device->name);
-}
-
-static void print_all_devices(struct list_head *devices)
-{
-	struct btrfs_device *dev;
-
-	printf("All Devices:\n");
-	list_for_each_entry(dev, devices, dev_list)
-		print_device_info(dev, "\t");
-	printf("\n");
-}
-
 static void print_scan_result(struct recover_control *rc)
 {
 	if (!rc->verbose)
@@ -2389,6 +2371,7 @@ int btrfs_recover_chunk_tree(char *path, int verbose, int yes)
 	}
 
 	trans = btrfs_start_transaction(root, 1);
+	BUG_ON(IS_ERR(trans));
 	ret = remove_chunk_extent_item(trans, &rc, root);
 	BUG_ON(ret);
 

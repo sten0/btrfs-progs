@@ -33,7 +33,6 @@
 #include "utils.h"
 #include "commands.h"
 #include "crc32c.h"
-#include "cmds-inspect-dump-super.h"
 #include "help.h"
 
 static int check_csum_sblock(void *sb, int csum_size)
@@ -119,7 +118,7 @@ static void print_sys_chunk_array(struct btrfs_super_block *sb)
 			len = btrfs_chunk_item_size(num_stripes);
 			if (cur_offset + len > array_size)
 				goto out_short_read;
-			print_chunk(buf, chunk);
+			print_chunk_item(buf, chunk);
 		} else {
 			error("unexpected item type %u in sys_array at offset %u",
 				(u32)key.type, cur_offset);
@@ -224,7 +223,7 @@ static struct readable_flag_entry incompat_flags_array[] = {
 	DEF_INCOMPAT_FLAG_ENTRY(DEFAULT_SUBVOL),
 	DEF_INCOMPAT_FLAG_ENTRY(MIXED_GROUPS),
 	DEF_INCOMPAT_FLAG_ENTRY(COMPRESS_LZO),
-	DEF_INCOMPAT_FLAG_ENTRY(COMPRESS_LZOv2),
+	DEF_INCOMPAT_FLAG_ENTRY(COMPRESS_ZSTD),
 	DEF_INCOMPAT_FLAG_ENTRY(BIG_METADATA),
 	DEF_INCOMPAT_FLAG_ENTRY(EXTENDED_IREF),
 	DEF_INCOMPAT_FLAG_ENTRY(RAID56),
@@ -473,7 +472,7 @@ static int load_and_dump_sb(char *filename, int fd, u64 sb_bytenr, int full,
 
 		error("failed to read the superblock on %s at %llu",
 				filename, (unsigned long long)sb_bytenr);
-		error("error = '%s', errno = %d", strerror(errno), errno);
+		error("error = '%m', errno = %d", errno);
 		return 1;
 	}
 	printf("superblock: bytenr=%llu, device=%s\n", sb_bytenr, filename);
@@ -519,8 +518,10 @@ int cmd_inspect_dump_super(int argc, char **argv)
 
 	while (1) {
 		int c;
+		enum { GETOPT_VAL_BYTENR = 257 };
 		static const struct option long_options[] = {
 			{"all", no_argument, NULL, 'a'},
+			{"bytenr", required_argument, NULL, GETOPT_VAL_BYTENR },
 			{"full", no_argument, NULL, 'f'},
 			{"force", no_argument, NULL, 'F'},
 			{"super", required_argument, NULL, 's' },
@@ -565,6 +566,11 @@ int cmd_inspect_dump_super(int argc, char **argv)
 			}
 			all = 0;
 			break;
+		case GETOPT_VAL_BYTENR:
+			arg = arg_strtou64(optarg);
+			sb_bytenr = arg;
+			all = 0;
+			break;
 		default:
 			usage(cmd_inspect_dump_super_usage);
 		}
@@ -577,7 +583,7 @@ int cmd_inspect_dump_super(int argc, char **argv)
 		filename = argv[i];
 		fd = open(filename, O_RDONLY);
 		if (fd < 0) {
-			error("cannot open %s: %s", filename, strerror(errno));
+			error("cannot open %s: %m", filename);
 			ret = 1;
 			goto out;
 		}

@@ -120,8 +120,8 @@ static int cmd_device_add(int argc, char **argv)
 
 		path = canonicalize_path(argv[i]);
 		if (!path) {
-			error("could not canonicalize pathname '%s': %s",
-				argv[i], strerror(errno));
+			error("could not canonicalize pathname '%s': %m",
+				argv[i]);
 			ret++;
 			goto error_out;
 		}
@@ -130,8 +130,7 @@ static int cmd_device_add(int argc, char **argv)
 		strncpy_null(ioctl_args.name, path);
 		res = ioctl(fdmnt, BTRFS_IOC_ADD_DEV, &ioctl_args);
 		if (res < 0) {
-			error("error adding device '%s': %s",
-				path, strerror(errno));
+			error("error adding device '%s': %m", path);
 			ret++;
 		}
 		free(path);
@@ -192,8 +191,7 @@ static int _cmd_device_remove(int argc, char **argv,
 		 */
 		if (res < 0 && (errno == ENOTTY || errno == EOPNOTSUPP)) {
 			if (is_devid) {
-				error("device delete by id failed: %s",
-							strerror(errno));
+				error("device delete by id failed: %m");
 				ret++;
 				continue;
 			}
@@ -224,9 +222,16 @@ static int _cmd_device_remove(int argc, char **argv,
 	return !!ret;
 }
 
+#define COMMON_USAGE_REMOVE_DELETE					\
+	"If 'missing' is specified for <device>, the first device that is",	\
+	"described by the filesystem metadata, but not present at the mount",	\
+	"time will be removed. (only in degraded mode)"
+
 static const char * const cmd_device_remove_usage[] = {
 	"btrfs device remove <device>|<devid> [<device>|<devid>...] <path>",
 	"Remove a device from a filesystem",
+	"",
+	COMMON_USAGE_REMOVE_DELETE,
 	NULL
 };
 
@@ -237,7 +242,9 @@ static int cmd_device_remove(int argc, char **argv)
 
 static const char * const cmd_device_delete_usage[] = {
 	"btrfs device delete <device>|<devid> [<device>|<devid>...] <path>",
-	"Remove a device from a filesystem",
+	"Remove a device from a filesystem (alias of \"btrfs device remove\")",
+	"",
+	COMMON_USAGE_REMOVE_DELETE,
 	NULL
 };
 
@@ -302,8 +309,7 @@ static int cmd_device_scan(int argc, char **argv)
 		}
 		path = canonicalize_path(argv[i]);
 		if (!path) {
-			error("could not canonicalize path '%s': %s",
-				argv[i], strerror(errno));
+			error("could not canonicalize path '%s': %m", argv[i]);
 			ret = 1;
 			goto out;
 		}
@@ -346,8 +352,8 @@ static int cmd_device_ready(int argc, char **argv)
 
 	path = canonicalize_path(argv[optind]);
 	if (!path) {
-		error("could not canonicalize pathname '%s': %s",
-			argv[optind], strerror(errno));
+		error("could not canonicalize pathname '%s': %m",
+			argv[optind]);
 		ret = 1;
 		goto out;
 	}
@@ -362,8 +368,8 @@ static int cmd_device_ready(int argc, char **argv)
 	strncpy_null(args.name, path);
 	ret = ioctl(fd, BTRFS_IOC_DEVICES_READY, &args);
 	if (ret < 0) {
-		error("unable to determine if device '%s' is ready for mount: %s",
-			path, strerror(errno));
+		error("unable to determine if device '%s' is ready for mount: %m",
+			path);
 		ret = 1;
 	}
 
@@ -457,8 +463,8 @@ static int cmd_device_stats(int argc, char **argv)
 		args.flags = flags;
 
 		if (ioctl(fdmnt, BTRFS_IOC_GET_DEV_STATS, &args) < 0) {
-			error("device stats ioctl failed on %s: %s",
-			      path, strerror(errno));
+			error("device stats ioctl failed on %s: %m",
+			      path);
 			err |= 1;
 		} else {
 			char *canonical_path;

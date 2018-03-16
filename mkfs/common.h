@@ -28,6 +28,20 @@
 #define BTRFS_MKFS_SYSTEM_GROUP_SIZE SZ_4M
 #define BTRFS_MKFS_SMALL_VOLUME_SIZE SZ_1G
 
+/*
+ * Tree root blocks created during mkfs
+ */
+enum btrfs_mkfs_block {
+	MKFS_SUPER_BLOCK = 0,
+	MKFS_ROOT_TREE,
+	MKFS_EXTENT_TREE,
+	MKFS_CHUNK_TREE,
+	MKFS_DEV_TREE,
+	MKFS_FS_TREE,
+	MKFS_CSUM_TREE,
+	MKFS_BLOCK_COUNT
+};
+
 struct btrfs_mkfs_config {
 	/* Label of the new filesystem */
 	const char *label;
@@ -43,7 +57,7 @@ struct btrfs_mkfs_config {
 	/* Output fields, set during creation */
 
 	/* Logical addresses of superblock [0] and other tree roots */
-	u64 blocks[8];
+	u64 blocks[MKFS_BLOCK_COUNT + 1];
 	char fs_uuid[BTRFS_UUID_UNPARSED_SIZE];
 	char chunk_uuid[BTRFS_UUID_UNPARSED_SIZE];
 
@@ -52,12 +66,13 @@ struct btrfs_mkfs_config {
 };
 
 int make_btrfs(int fd, struct btrfs_mkfs_config *cfg);
-u64 btrfs_min_dev_size(u32 nodesize);
-u64 btrfs_min_global_blk_rsv_size(u32 nodesize);
-int test_minimum_size(const char *file, u32 nodesize);
+u64 btrfs_min_dev_size(u32 nodesize, int mixed, u64 meta_profile,
+		       u64 data_profile);
+int test_minimum_size(const char *file, u64 min_dev_size);
 int is_vol_small(const char *file);
 int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 	u64 dev_cnt, int mixed, int ssd);
+int test_status_for_mkfs(const char *file, bool force_overwrite);
 int test_dev_for_mkfs(const char *file, int force_overwrite);
 
 #endif

@@ -128,12 +128,32 @@ static int do_usage_one_command(const char * const *usagestr,
 				unsigned int flags, FILE *outf)
 {
 	int pad = 4;
+	const char *prefix = "usage: ";
+	const char *pad_listing = "    ";
 
 	if (!usagestr || !*usagestr)
 		return -1;
 
-	fprintf(outf, "%s%s", (flags & USAGE_LISTING) ? "    " : "usage: ",
-		*usagestr++);
+	if (flags & USAGE_LISTING)
+		prefix = pad_listing;
+
+	fputs(prefix, outf);
+	if (strchr(*usagestr, '\n') == NULL) {
+		fputs(*usagestr, outf);
+	} else {
+		const char *c = *usagestr;
+		const char *nprefix = "       ";
+
+		if (flags & USAGE_LISTING)
+			nprefix = pad_listing;
+
+		for (c = *usagestr; *c; c++) {
+			fputc(*c, outf);
+			if (*c == '\n')
+				fputs(nprefix, outf);
+		}
+	}
+	usagestr++;
 
 	/* a short one-line description (mandatory) */
 	if ((flags & USAGE_SHORT) == 0)
@@ -218,6 +238,7 @@ void usage_command(const struct cmd_struct *cmd, int full, int err)
 	usage_command_usagestr(cmd->usagestr, cmd->token, full, err);
 }
 
+__attribute__((noreturn))
 void usage(const char * const *usagestr)
 {
 	usage_command_usagestr(usagestr, NULL, 1, 1);
@@ -325,6 +346,7 @@ void usage_command_group(const struct cmd_group *grp, int full, int err)
 		fprintf(outf, "%s\n", grp->infostr);
 }
 
+__attribute__((noreturn))
 void help_unknown_token(const char *arg, const struct cmd_group *grp)
 {
 	fprintf(stderr, "%s: unknown token '%s'\n", get_argv0_buf(), arg);
@@ -332,6 +354,7 @@ void help_unknown_token(const char *arg, const struct cmd_group *grp)
 	exit(1);
 }
 
+__attribute__((noreturn))
 void help_ambiguous_token(const char *arg, const struct cmd_group *grp)
 {
 	const struct cmd_struct *cmd = grp->commands;

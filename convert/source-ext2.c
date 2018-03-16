@@ -39,7 +39,8 @@ static int ext2_open_fs(struct btrfs_convert_context *cctx, const char *name)
 
 	ret = ext2fs_open(name, open_flag, 0, 0, unix_io_manager, &ext2_fs);
 	if (ret) {
-		fprintf(stderr, "ext2fs_open: %s\n", error_message(ret));
+		if (ret != EXT2_ET_BAD_MAGIC)
+			fprintf(stderr, "ext2fs_open: %s\n", error_message(ret));
 		return -1;
 	}
 	/*
@@ -94,6 +95,7 @@ static int ext2_open_fs(struct btrfs_convert_context *cctx, const char *name)
 	return 0;
 fail:
 	ext2fs_close(ext2_fs);
+	ext2fs_free(ext2_fs);
 	return -1;
 }
 
@@ -154,7 +156,8 @@ static int ext2_read_used_space(struct btrfs_convert_context *cctx)
 						block_nbytes * 8, block_bitmap);
 		if (ret) {
 			error("fail to get bitmap from ext2, %s",
-			      strerror(-ret));
+				error_message(ret));
+			ret = -EINVAL;
 			break;
 		}
 		ret = __ext2_add_one_block(fs, block_bitmap, i, used_tree);
@@ -177,6 +180,7 @@ static void ext2_close_fs(struct btrfs_convert_context *cctx)
 		cctx->volume_name = NULL;
 	}
 	ext2fs_close(cctx->fs_data);
+	ext2fs_free(cctx->fs_data);
 }
 
 static u8 ext2_filetype_conversion_table[EXT2_FT_MAX] = {
@@ -307,7 +311,7 @@ static int ext2_create_file_extents(struct btrfs_trans_handle *trans,
 		goto fail;
 	if ((convert_flags & CONVERT_FLAG_INLINE_DATA) && data.first_block == 0
 	    && data.num_blocks > 0
-	    && inode_size <= BTRFS_MAX_INLINE_DATA_SIZE(root)) {
+	    && inode_size <= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info)) {
 		u64 num_bytes = data.num_blocks * sectorsize;
 		u64 disk_bytenr = data.disk_block * sectorsize;
 		u64 nbytes;
@@ -424,27 +428,6 @@ static int ext2_xattr_check_entry(struct ext2_ext_attr_entry *entry,
 	return 0;
 }
 
-static inline int ext2_acl_count(size_t size)
-{
-	ssize_t s;
-	size -= sizeof(ext2_acl_header);
-	s = size - 4 * sizeof(ext2_acl_entry_short);
-	if (s < 0) {
-		if (size % sizeof(ext2_acl_entry_short))
-			return -1;
-		return size / sizeof(ext2_acl_entry_short);
-	} else {
-		if (s % sizeof(ext2_acl_entry))
-			return -1;
-		return s / sizeof(ext2_acl_entry) + 4;
-	}
-}
-
-static inline size_t acl_ea_size(int count)
-{
-	return sizeof(acl_ea_header) + count * sizeof(acl_ea_entry);
-}
-
 static int ext2_acl_to_xattr(void *dst, const void *src,
 			     size_t dst_size, size_t src_size)
 {
@@ -539,7 +522,7 @@ static int ext2_copy_single_xattr(struct btrfs_trans_handle *trans,
 	}
 	strncpy(namebuf, xattr_prefix_table[name_index], XATTR_NAME_MAX);
 	strncat(namebuf, EXT2_EXT_ATTR_NAME(entry), entry->e_name_len);
-	if (name_len + datalen > BTRFS_LEAF_DATA_SIZE(root) -
+	if (name_len + datalen > BTRFS_LEAF_DATA_SIZE(root->fs_info) -
 	    sizeof(struct btrfs_item) - sizeof(struct btrfs_dir_item)) {
 		fprintf(stderr, "skip large xattr on inode %Lu name %.*s\n",
 			objectid - INO_OFFSET, name_len, namebuf);
@@ -659,19 +642,10 @@ out:
 		free(ext2_inode);
 	return ret;
 }
-#define MINORBITS	20
-#define MKDEV(ma, mi)	(((ma) << MINORBITS) | (mi))
 
 static inline dev_t old_decode_dev(u16 val)
 {
 	return MKDEV((val >> 8) & 255, val & 255);
-}
-
-static inline dev_t new_decode_dev(u32 dev)
-{
-	unsigned major = (dev & 0xfff00) >> 8;
-	unsigned minor = (dev & 0xff) | ((dev >> 12) & 0xfff00);
-	return MKDEV(major, minor);
 }
 
 static void ext2_copy_inode_item(struct btrfs_inode_item *dst,
@@ -713,7 +687,7 @@ static void ext2_copy_inode_item(struct btrfs_inode_item *dst,
 				old_decode_dev(src->i_block[0]));
 		} else {
 			btrfs_set_stack_inode_rdev(dst,
-				new_decode_dev(src->i_block[1]));
+				decode_dev(src->i_block[1]));
 		}
 	}
 	memset(&dst->reserved, 0, sizeof(dst->reserved));
@@ -833,8 +807,8 @@ static int ext2_copy_inodes(struct btrfs_convert_context *cctx,
 	struct btrfs_trans_handle *trans;
 
 	trans = btrfs_start_transaction(root, 1);
-	if (!trans)
-		return -ENOMEM;
+	if (IS_ERR(trans))
+		return PTR_ERR(trans);
 	err = ext2fs_open_inode_scan(ext2_fs, 0, &ext2_scan);
 	if (err) {
 		fprintf(stderr, "ext2fs_open_inode_scan: %s\n", error_message(err));
@@ -860,7 +834,7 @@ static int ext2_copy_inodes(struct btrfs_convert_context *cctx,
 			ret = btrfs_commit_transaction(trans, root);
 			BUG_ON(ret);
 			trans = btrfs_start_transaction(root, 1);
-			BUG_ON(!trans);
+			BUG_ON(IS_ERR(trans));
 		}
 	}
 	if (err) {

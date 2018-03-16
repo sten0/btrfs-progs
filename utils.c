@@ -24,6 +24,7 @@
 #include <sys/mount.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
 #include <uuid/uuid.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -297,7 +298,7 @@ static int btrfs_wipe_existing_sb(int fd)
 	memset(buf, 0, len);
 	ret = pwrite(fd, buf, len, offset);
 	if (ret < 0) {
-		error("cannot wipe existing superblock: %s", strerror(errno));
+		error("cannot wipe existing superblock: %m");
 		ret = -1;
 	} else if (ret != len) {
 		error("cannot wipe existing superblock: wrote %d of %zd", ret, len);
@@ -319,7 +320,7 @@ int btrfs_prepare_device(int fd, const char *file, u64 *block_count_ret,
 
 	ret = fstat(fd, &st);
 	if (ret < 0) {
-		error("unable to stat %s: %s", file, strerror(errno));
+		error("unable to stat %s: %m", file);
 		return 1;
 	}
 
@@ -446,13 +447,28 @@ int is_mount_point(const char *path)
 	return ret;
 }
 
-static int is_reg_file(const char *path)
+int is_reg_file(const char *path)
 {
 	struct stat statbuf;
 
 	if (stat(path, &statbuf) < 0)
 		return -errno;
 	return S_ISREG(statbuf.st_mode);
+}
+
+int is_path_exist(const char *path)
+{
+	struct stat statbuf;
+	int ret;
+
+	ret = stat(path, &statbuf);
+	if (ret < 0) {
+		if (errno == ENOENT)
+			return 0;
+		else
+			return -errno;
+	}
+	return 1;
 }
 
 /*
@@ -518,7 +534,7 @@ int get_btrfs_mount(const char *dev, char *mp, size_t mp_size)
 	fd = open(dev, O_RDONLY);
 	if (fd < 0) {
 		ret = -errno;
-		error("cannot open %s: %s", dev, strerror(errno));
+		error("cannot open %s: %m", dev);
 		goto out;
 	}
 
@@ -556,8 +572,8 @@ int open_path_or_dev_mnt(const char *path, DIR **dirstream, int verbose)
 			return -1;
 		}
 		ret = open_file_or_dir(mp, dirstream);
-		error_on(verbose && ret < 0, "can't access '%s': %s",
-			 path, strerror(errno));
+		error_on(verbose && ret < 0, "can't access '%s': %m",
+			 path);
 	} else {
 		ret = btrfs_open_dir(path, dirstream, 1);
 	}
@@ -568,17 +584,16 @@ int open_path_or_dev_mnt(const char *path, DIR **dirstream, int verbose)
 /*
  * Do the following checks before calling open_file_or_dir():
  * 1: path is in a btrfs filesystem
- * 2: path is a directory
+ * 2: path is a directory if dir_only is 1
  */
-int btrfs_open_dir(const char *path, DIR **dirstream, int verbose)
+int btrfs_open(const char *path, DIR **dirstream, int verbose, int dir_only)
 {
 	struct statfs stfs;
 	struct stat st;
 	int ret;
 
 	if (statfs(path, &stfs) != 0) {
-		error_on(verbose, "cannot access '%s': %s", path,
-				strerror(errno));
+		error_on(verbose, "cannot access '%s': %m", path);
 		return -1;
 	}
 
@@ -588,23 +603,31 @@ int btrfs_open_dir(const char *path, DIR **dirstream, int verbose)
 	}
 
 	if (stat(path, &st) != 0) {
-		error_on(verbose, "cannot access '%s': %s", path,
-				strerror(errno));
+		error_on(verbose, "cannot access '%s': %m", path);
 		return -1;
 	}
 
-	if (!S_ISDIR(st.st_mode)) {
+	if (dir_only && !S_ISDIR(st.st_mode)) {
 		error_on(verbose, "not a directory: %s", path);
 		return -3;
 	}
 
 	ret = open_file_or_dir(path, dirstream);
 	if (ret < 0) {
-		error_on(verbose, "cannot access '%s': %s", path,
-				strerror(errno));
+		error_on(verbose, "cannot access '%s': %m", path);
 	}
 
 	return ret;
+}
+
+int btrfs_open_dir(const char *path, DIR **dirstream, int verbose)
+{
+	return btrfs_open(path, dirstream, verbose, 1);
+}
+
+int btrfs_open_file_or_dir(const char *path, DIR **dirstream, int verbose)
+{
+	return btrfs_open(path, dirstream, verbose, 0);
 }
 
 /* checks if a device is a loop device */
@@ -793,14 +816,9 @@ static int blk_file_in_dev_list(struct btrfs_fs_devices* fs_devices,
 		const char* file)
 {
 	int ret;
-	struct list_head *head;
-	struct list_head *cur;
 	struct btrfs_device *device;
 
-	head = &fs_devices->devices;
-	list_for_each(cur, head) {
-		device = list_entry(cur, struct btrfs_device, dev_list);
-
+	list_for_each_entry(device, &fs_devices->devices, dev_list) {
 		if((ret = is_same_loop_file(device->name, file)))
 			return ret;
 	}
@@ -877,8 +895,7 @@ int check_mounted(const char* file)
 
 	fd = open(file, O_RDONLY);
 	if (fd < 0) {
-		error("mount check: cannot open %s: %s", file,
-				strerror(errno));
+		error("mount check: cannot open %s: %m", file);
 		return -errno;
 	}
 
@@ -967,16 +984,14 @@ int btrfs_register_one_device(const char *fname)
 	fd = open("/dev/btrfs-control", O_RDWR);
 	if (fd < 0) {
 		warning(
-	"failed to open /dev/btrfs-control, skipping device registration: %s",
-			strerror(errno));
+	"failed to open /dev/btrfs-control, skipping device registration: %m");
 		return -errno;
 	}
 	memset(&args, 0, sizeof(args));
 	strncpy_null(args.name, fname);
 	ret = ioctl(fd, BTRFS_IOC_SCAN_DEV, &args);
 	if (ret < 0) {
-		error("device scan failed on '%s': %s", fname,
-				strerror(errno));
+		error("device scan failed on '%s': %m", fname);
 		ret = -errno;
 	}
 	close(fd);
@@ -1229,6 +1244,7 @@ static int set_label_unmounted(const char *dev, const char *label)
 		return -1;
 
 	trans = btrfs_start_transaction(root, 1);
+	BUG_ON(IS_ERR(trans));
 	__strncpy_null(root->fs_info->super_copy->label, label, BTRFS_LABEL_SIZE - 1);
 
 	btrfs_commit_transaction(trans, root);
@@ -1245,15 +1261,14 @@ static int set_label_mounted(const char *mount_path, const char *labelp)
 
 	fd = open(mount_path, O_RDONLY | O_NOATIME);
 	if (fd < 0) {
-		error("unable to access %s: %s", mount_path, strerror(errno));
+		error("unable to access %s: %m", mount_path);
 		return -1;
 	}
 
 	memset(label, 0, sizeof(label));
 	__strncpy_null(label, labelp, BTRFS_LABEL_SIZE - 1);
 	if (ioctl(fd, BTRFS_IOC_SET_FSLABEL, label) < 0) {
-		error("unable to set label of %s: %s", mount_path,
-				strerror(errno));
+		error("unable to set label of %s: %m", mount_path);
 		close(fd);
 		return -1;
 	}
@@ -1301,7 +1316,7 @@ int get_label_mounted(const char *mount_path, char *labelp)
 
 	fd = open(mount_path, O_RDONLY | O_NOATIME);
 	if (fd < 0) {
-		error("unable to access %s: %s", mount_path, strerror(errno));
+		error("unable to access %s: %m", mount_path);
 		return -1;
 	}
 
@@ -1309,8 +1324,7 @@ int get_label_mounted(const char *mount_path, char *labelp)
 	ret = ioctl(fd, BTRFS_IOC_GET_FSLABEL, label);
 	if (ret < 0) {
 		if (errno != ENOTTY)
-			error("unable to get label of %s: %s", mount_path,
-					strerror(errno));
+			error("unable to get label of %s: %m", mount_path);
 		ret = -errno;
 		close(fd);
 		return ret;
@@ -1527,10 +1541,16 @@ int open_file_or_dir(const char *fname, DIR **dirstream)
 
 void close_file_or_dir(int fd, DIR *dirstream)
 {
-	if (dirstream)
+	int old_errno;
+
+	old_errno = errno;
+	if (dirstream) {
 		closedir(dirstream);
-	else if (fd >= 0)
+	} else if (fd >= 0) {
 		close(fd);
+	}
+
+	errno = old_errno;
 }
 
 int get_device_info(int fd, u64 devid,
@@ -1648,7 +1668,7 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 		fd = open(path, O_RDONLY);
 		if (fd < 0) {
 			ret = -errno;
-			error("cannot open %s: %s", path, strerror(errno));
+			error("cannot open %s: %m", path);
 			goto out;
 		}
 		ret = check_mounted_where(fd, path, mp, sizeof(mp),
@@ -1745,6 +1765,109 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 out:
 	close_file_or_dir(fd, dirstream);
 	return ret;
+}
+
+int get_fsid(const char *path, u8 *fsid, int silent)
+{
+	int ret;
+	int fd;
+	struct btrfs_ioctl_fs_info_args args;
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		ret = -errno;
+		if (!silent)
+			error("failed to open %s: %s", path,
+				strerror(-ret));
+		goto out;
+	}
+
+	ret = ioctl(fd, BTRFS_IOC_FS_INFO, &args);
+	if (ret < 0) {
+		ret = -errno;
+		goto out;
+	}
+
+	memcpy(fsid, args.fsid, BTRFS_FSID_SIZE);
+	ret = 0;
+
+out:
+	if (fd != -1)
+		close(fd);
+	return ret;
+}
+
+int is_seen_fsid(u8 *fsid, struct seen_fsid *seen_fsid_hash[])
+{
+	u8 hash = fsid[0];
+	int slot = hash % SEEN_FSID_HASH_SIZE;
+	struct seen_fsid *seen = seen_fsid_hash[slot];
+
+	while (seen) {
+		if (memcmp(seen->fsid, fsid, BTRFS_FSID_SIZE) == 0)
+			return 1;
+
+		seen = seen->next;
+	}
+
+	return 0;
+}
+
+int add_seen_fsid(u8 *fsid, struct seen_fsid *seen_fsid_hash[],
+		int fd, DIR *dirstream)
+{
+	u8 hash = fsid[0];
+	int slot = hash % SEEN_FSID_HASH_SIZE;
+	struct seen_fsid *seen = seen_fsid_hash[slot];
+	struct seen_fsid *alloc;
+
+	if (!seen)
+		goto insert;
+
+	while (1) {
+		if (memcmp(seen->fsid, fsid, BTRFS_FSID_SIZE) == 0)
+			return -EEXIST;
+
+		if (!seen->next)
+			break;
+
+		seen = seen->next;
+	}
+
+insert:
+	alloc = malloc(sizeof(*alloc));
+	if (!alloc)
+		return -ENOMEM;
+
+	alloc->next = NULL;
+	memcpy(alloc->fsid, fsid, BTRFS_FSID_SIZE);
+	alloc->fd = fd;
+	alloc->dirstream = dirstream;
+
+	if (seen)
+		seen->next = alloc;
+	else
+		seen_fsid_hash[slot] = alloc;
+
+	return 0;
+}
+
+void free_seen_fsid(struct seen_fsid *seen_fsid_hash[])
+{
+	int slot;
+	struct seen_fsid *seen;
+	struct seen_fsid *next;
+
+	for (slot = 0; slot < SEEN_FSID_HASH_SIZE; slot++) {
+		seen = seen_fsid_hash[slot];
+		while (seen) {
+			next = seen->next;
+			close_file_or_dir(seen->fd, seen->dirstream);
+			free(seen);
+			seen = next;
+		}
+		seen_fsid_hash[slot] = NULL;
+	}
 }
 
 static int group_profile_devs_min(u64 flag)
@@ -1865,7 +1988,7 @@ int btrfs_scan_devices(void)
 
 		fd = open(path, O_RDONLY);
 		if (fd < 0) {
-			error("cannot open %s: %s", path, strerror(errno));
+			error("cannot open %s: %m", path);
 			continue;
 		}
 		ret = btrfs_scan_one_device(fd, path, &tmp_devices,
@@ -2573,4 +2696,34 @@ u8 rand_u8(void)
 
 void btrfs_config_init(void)
 {
+}
+
+/* Returns total size of main memory in bytes, -1UL if error. */
+unsigned long total_memory(void)
+{
+        struct sysinfo si;
+
+        if (sysinfo(&si) < 0) {
+                error("can't determine memory size");
+                return -1UL;
+        }
+        return si.totalram * si.mem_unit;       /* bytes */
+}
+
+void print_device_info(struct btrfs_device *device, char *prefix)
+{
+	if (prefix)
+		printf("%s", prefix);
+	printf("Device: id = %llu, name = %s\n",
+	       device->devid, device->name);
+}
+
+void print_all_devices(struct list_head *devices)
+{
+	struct btrfs_device *dev;
+
+	printf("All Devices:\n");
+	list_for_each_entry(dev, devices, dev_list)
+		print_device_info(dev, "\t");
+	printf("\n");
 }

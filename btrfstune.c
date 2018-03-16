@@ -66,6 +66,7 @@ static int update_seeding_flag(struct btrfs_root *root, int set_flag)
 	}
 
 	trans = btrfs_start_transaction(root, 1);
+	BUG_ON(IS_ERR(trans));
 	btrfs_set_super_flags(disk_super, super_flags);
 	ret = btrfs_commit_transaction(trans, root);
 
@@ -83,6 +84,7 @@ static int set_super_incompat_flags(struct btrfs_root *root, u64 flags)
 	super_flags = btrfs_super_incompat_flags(disk_super);
 	super_flags |= flags;
 	trans = btrfs_start_transaction(root, 1);
+	BUG_ON(IS_ERR(trans));
 	btrfs_set_super_incompat_flags(disk_super, super_flags);
 	ret = btrfs_commit_transaction(trans, root);
 
@@ -149,7 +151,7 @@ static int change_extents_uuid(struct btrfs_fs_info *fs_info)
 			goto next;
 
 		bytenr = key.objectid;
-		eb = read_tree_block(fs_info, bytenr, fs_info->nodesize, 0);
+		eb = read_tree_block(fs_info, bytenr, 0);
 		if (IS_ERR(eb)) {
 			error("failed to read tree block: %llu", bytenr);
 			ret = PTR_ERR(eb);

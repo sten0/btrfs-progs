@@ -2,12 +2,13 @@
 # create a base image, convert to btrfs, remove all files, rollback the ext4 image
 # note: ext4 only
 
-source "$TOP/tests/common"
-source "$TOP/tests/common.convert"
+source "$TEST_TOP/common"
+source "$TEST_TOP/common.convert"
 
 setup_root_helper
-prepare_test_dev 512M
+prepare_test_dev
 check_prereq btrfs-convert
+check_global_prereq mke2fs
 
 # simple wrapper for a convert test
 # $1: btrfs features, argument to -O
@@ -45,7 +46,7 @@ do_test() {
 	cd "$here"
 	run_check "$TOP/btrfs" filesystem sync "$TEST_MNT"
 	run_check_umount_test_dev
-	convert_test_post_rollback
+	convert_test_post_rollback ext4
 
 	run_check_mount_convert_dev ext4
 	convert_test_post_check_checksums "$CHECKSUMTMP"

@@ -29,6 +29,9 @@
 #include <lzo/lzoconf.h>
 #include <lzo/lzo1x.h>
 #include <zlib.h>
+#if BTRFSRESTORE_ZSTD
+#include <zstd.h>
+#endif
 #include <regex.h>
 #include <getopt.h>
 #include <sys/types.h>
@@ -156,6 +159,50 @@ static int decompress_lzo(struct btrfs_root *root, unsigned char *inbuf,
 	return 0;
 }
 
+static int decompress_zstd(const char *inbuf, char *outbuf, u64 compress_len,
+			   u64 decompress_len)
+{
+#if !BTRFSRESTORE_ZSTD
+	error("btrfs not compiled with zstd support");
+	return -1;
+#else
+	ZSTD_DStream *strm;
+	size_t zret;
+	int ret = 0;
+	ZSTD_inBuffer in = {inbuf, compress_len, 0};
+	ZSTD_outBuffer out = {outbuf, decompress_len, 0};
+
+	strm = ZSTD_createDStream();
+	if (!strm) {
+		error("zstd create failed");
+		return -1;
+	}
+
+	zret = ZSTD_initDStream(strm);
+	if (ZSTD_isError(zret)) {
+		error("zstd init failed: %s", ZSTD_getErrorName(zret));
+		ret = -1;
+		goto out;
+	}
+
+	zret = ZSTD_decompressStream(strm, &out, &in);
+	if (ZSTD_isError(zret)) {
+		error("zstd decompress failed %s\n", ZSTD_getErrorName(zret));
+		ret = -1;
+		goto out;
+	}
+	if (zret != 0) {
+		error("zstd frame incomplete");
+		ret = -1;
+		goto out;
+	}
+
+out:
+	ZSTD_freeDStream(strm);
+	return ret;
+#endif
+}
+
 static int decompress(struct btrfs_root *root, char *inbuf, char *outbuf,
 			u64 compress_len, u64 *decompress_len, int compress)
 {
@@ -166,6 +213,9 @@ static int decompress(struct btrfs_root *root, char *inbuf, char *outbuf,
 	case BTRFS_COMPRESS_LZO:
 		return decompress_lzo(root, (unsigned char *)inbuf, outbuf,
 					compress_len, decompress_len);
+	case BTRFS_COMPRESS_ZSTD:
+		return decompress_zstd(inbuf, outbuf, compress_len,
+				       *decompress_len);
 	default:
 		break;
 	}
@@ -392,7 +442,7 @@ again:
 				      pos+total);
 			if (done < 0) {
 				ret = -1;
-				error("cannot write data: %d %s", errno, strerror(errno));
+				error("cannot write data: %d %m", errno);
 				goto out;
 			}
 			total += done;
@@ -537,8 +587,8 @@ static int set_file_xattrs(struct btrfs_root *root, u64 inode,
 			data_len = len;
 
 			if (fsetxattr(fd, name, data, data_len, 0))
-				error("setting extended attribute %s on file %s: %s",
-					name, file_name, strerror(errno));
+				error("setting extended attribute %s on file %s: %m",
+					name, file_name);
 
 			len = sizeof(*di) + name_len + data_len;
 			cur += len;
@@ -574,13 +624,13 @@ static int copy_metadata(struct btrfs_root *root, int fd,
 		ret = fchown(fd, btrfs_inode_uid(path.nodes[0], inode_item),
 				btrfs_inode_gid(path.nodes[0], inode_item));
 		if (ret) {
-			error("failed to change owner: %s", strerror(errno));
+			error("failed to change owner: %m");
 			goto out;
 		}
 
 		ret = fchmod(fd, btrfs_inode_mode(path.nodes[0], inode_item));
 		if (ret) {
-			error("failed to change mode: %s", strerror(errno));
+			error("failed to change mode: %m");
 			goto out;
 		}
 
@@ -594,7 +644,7 @@ static int copy_metadata(struct btrfs_root *root, int fd,
 
 		ret = futimens(fd, times);
 		if (ret) {
-			error("failed to set times: %s", strerror(errno));
+			error("failed to set times: %m");
 			goto out;
 		}
 	}
@@ -854,8 +904,8 @@ static int copy_symlink(struct btrfs_root *root, struct btrfs_key *key,
 	if (!dry_run) {
 		ret = symlink(symlink_target, path_name);
 		if (ret < 0) {
-			fprintf(stderr, "Failed to restore symlink '%s': %s\n",
-					path_name, strerror(errno));
+			fprintf(stderr, "Failed to restore symlink '%s': %m\n",
+					path_name);
 			goto out;
 		}
 	}
@@ -887,8 +937,7 @@ static int copy_symlink(struct btrfs_root *root, struct btrfs_key *key,
 				   btrfs_inode_gid(path.nodes[0], inode_item),
 				   AT_SYMLINK_NOFOLLOW);
 	if (ret) {
-		fprintf(stderr, "Failed to change owner: %s\n",
-				strerror(errno));
+		fprintf(stderr, "Failed to change owner: %m\n");
 		goto out;
 	}
 
@@ -902,7 +951,7 @@ static int copy_symlink(struct btrfs_root *root, struct btrfs_key *key,
 
 	ret = utimensat(-1, file, times, AT_SYMLINK_NOFOLLOW);
 	if (ret)
-		fprintf(stderr, "Failed to set times: %s\n", strerror(errno));
+		fprintf(stderr, "Failed to set times: %m\n");
 out:
 	btrfs_release_path(&path);
 	return ret;
@@ -1255,7 +1304,7 @@ static struct btrfs_root *open_fs(const char *dev, u64 root_location,
 			root_location = btrfs_super_root(fs_info->super_copy);
 		generation = btrfs_super_generation(fs_info->super_copy);
 		root->node = read_tree_block(fs_info, root_location,
-					     fs_info->nodesize, generation);
+					     generation);
 		if (!extent_buffer_uptodate(root->node)) {
 			fprintf(stderr, "Error opening tree root\n");
 			close_ctree(root);
@@ -1501,8 +1550,7 @@ int cmd_restore(int argc, char **argv)
 
 	if (fs_location != 0) {
 		free_extent_buffer(root->node);
-		root->node = read_tree_block(root->fs_info, fs_location,
-				root->fs_info->nodesize, 0);
+		root->node = read_tree_block(root->fs_info, fs_location, 0);
 		if (!extent_buffer_uptodate(root->node)) {
 			fprintf(stderr, "Failed to read fs location\n");
 			ret = 1;

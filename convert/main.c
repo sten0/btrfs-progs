@@ -103,11 +103,15 @@
 #include "convert/source-fs.h"
 #include "fsfeatures.h"
 
-const struct btrfs_convert_operations ext2_convert_ops;
+extern const struct btrfs_convert_operations ext2_convert_ops;
+extern const struct btrfs_convert_operations reiserfs_convert_ops;
 
 static const struct btrfs_convert_operations *convert_operations[] = {
 #if BTRFSCONVERT_EXT2
 	&ext2_convert_ops,
+#endif
+#if BTRFSCONVERT_REISERFS
+	&reiserfs_convert_ops,
 #endif
 };
 
@@ -343,10 +347,12 @@ static int migrate_one_reserved_range(struct btrfs_trans_handle *trans,
 	 * migrate ranges that covered by old fs data.
 	 */
 	while (cur_off < range_end(range)) {
-		cache = lookup_cache_extent(used, cur_off, cur_len);
+		cache = search_cache_extent(used, cur_off);
 		if (!cache)
 			break;
 		cur_off = max(cache->start, cur_off);
+		if (cur_off >= range_end(range))
+			break;
 		cur_len = min(cache->start + cache->size, range_end(range)) -
 			  cur_off;
 		BUG_ON(cur_len < root->fs_info->sectorsize);
@@ -414,7 +420,7 @@ static int migrate_one_reserved_range(struct btrfs_trans_handle *trans,
 }
 
 /*
- * Relocate the used ext2 data in reserved ranges
+ * Relocate the used source fs data in reserved ranges
  */
 static int migrate_reserved_ranges(struct btrfs_trans_handle *trans,
 				   struct btrfs_root *root,
@@ -633,7 +639,7 @@ static int calculate_available_space(struct btrfs_convert_context *cctx)
 	 * Twice the minimal chunk size, to allow later wipe_reserved_ranges()
 	 * works without need to consider overlap
 	 */
-	u64 min_stripe_size = 2 * 16 * 1024 * 1024;
+	u64 min_stripe_size = SZ_32M;
 	int ret;
 
 	/* Calculate data_chunks */
@@ -745,8 +751,8 @@ static int create_image(struct btrfs_root *root,
 		flags |= BTRFS_INODE_NODATASUM;
 
 	trans = btrfs_start_transaction(root, 1);
-	if (!trans)
-		return -ENOMEM;
+	if (IS_ERR(trans))
+		return PTR_ERR(trans);
 
 	cache_tree_init(&used_tmp);
 	btrfs_init_path(&path);
@@ -762,7 +768,7 @@ static int create_image(struct btrfs_root *root,
 	if (ret < 0)
 		goto out;
 	ret = btrfs_add_link(trans, root, ino, BTRFS_FIRST_FREE_OBJECTID, name,
-			     strlen(name), BTRFS_FT_REG_FILE, NULL, 1);
+			     strlen(name), BTRFS_FT_REG_FILE, NULL, 1, 0);
 	if (ret < 0)
 		goto out;
 
@@ -798,7 +804,7 @@ static int create_image(struct btrfs_root *root,
 	 * Start from 1M, as 0~1M is reserved, and create_image_file_range()
 	 * can't handle bytenr 0(will consider it as a hole)
 	 */
-	cur = 1024 * 1024;
+	cur = SZ_1M;
 	while (cur < size) {
 		u64 len = size - cur;
 
@@ -830,129 +836,6 @@ out:
 	btrfs_release_path(&path);
 	btrfs_commit_transaction(trans, root);
 	return ret;
-}
-
-static struct btrfs_root* link_subvol(struct btrfs_root *root,
-		const char *base, u64 root_objectid)
-{
-	struct btrfs_trans_handle *trans;
-	struct btrfs_fs_info *fs_info = root->fs_info;
-	struct btrfs_root *tree_root = fs_info->tree_root;
-	struct btrfs_root *new_root = NULL;
-	struct btrfs_path path;
-	struct btrfs_inode_item *inode_item;
-	struct extent_buffer *leaf;
-	struct btrfs_key key;
-	u64 dirid = btrfs_root_dirid(&root->root_item);
-	u64 index = 2;
-	char buf[BTRFS_NAME_LEN + 1]; /* for snprintf null */
-	int len;
-	int i;
-	int ret;
-
-	len = strlen(base);
-	if (len == 0 || len > BTRFS_NAME_LEN)
-		return NULL;
-
-	btrfs_init_path(&path);
-	key.objectid = dirid;
-	key.type = BTRFS_DIR_INDEX_KEY;
-	key.offset = (u64)-1;
-
-	ret = btrfs_search_slot(NULL, root, &key, &path, 0, 0);
-	if (ret <= 0) {
-		error("search for DIR_INDEX dirid %llu failed: %d",
-				(unsigned long long)dirid, ret);
-		goto fail;
-	}
-
-	if (path.slots[0] > 0) {
-		path.slots[0]--;
-		btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
-		if (key.objectid == dirid && key.type == BTRFS_DIR_INDEX_KEY)
-			index = key.offset + 1;
-	}
-	btrfs_release_path(&path);
-
-	trans = btrfs_start_transaction(root, 1);
-	if (!trans) {
-		error("unable to start transaction");
-		goto fail;
-	}
-
-	key.objectid = dirid;
-	key.offset = 0;
-	key.type =  BTRFS_INODE_ITEM_KEY;
-
-	ret = btrfs_lookup_inode(trans, root, &path, &key, 1);
-	if (ret) {
-		error("search for INODE_ITEM %llu failed: %d",
-				(unsigned long long)dirid, ret);
-		goto fail;
-	}
-	leaf = path.nodes[0];
-	inode_item = btrfs_item_ptr(leaf, path.slots[0],
-				    struct btrfs_inode_item);
-
-	key.objectid = root_objectid;
-	key.offset = (u64)-1;
-	key.type = BTRFS_ROOT_ITEM_KEY;
-
-	memcpy(buf, base, len);
-	for (i = 0; i < 1024; i++) {
-		ret = btrfs_insert_dir_item(trans, root, buf, len,
-					    dirid, &key, BTRFS_FT_DIR, index);
-		if (ret != -EEXIST)
-			break;
-		len = snprintf(buf, ARRAY_SIZE(buf), "%s%d", base, i);
-		if (len < 1 || len > BTRFS_NAME_LEN) {
-			ret = -EINVAL;
-			break;
-		}
-	}
-	if (ret)
-		goto fail;
-
-	btrfs_set_inode_size(leaf, inode_item, len * 2 +
-			     btrfs_inode_size(leaf, inode_item));
-	btrfs_mark_buffer_dirty(leaf);
-	btrfs_release_path(&path);
-
-	/* add the backref first */
-	ret = btrfs_add_root_ref(trans, tree_root, root_objectid,
-				 BTRFS_ROOT_BACKREF_KEY,
-				 root->root_key.objectid,
-				 dirid, index, buf, len);
-	if (ret) {
-		error("unable to add root backref for %llu: %d",
-				root->root_key.objectid, ret);
-		goto fail;
-	}
-
-	/* now add the forward ref */
-	ret = btrfs_add_root_ref(trans, tree_root, root->root_key.objectid,
-				 BTRFS_ROOT_REF_KEY, root_objectid,
-				 dirid, index, buf, len);
-	if (ret) {
-		error("unable to add root ref for %llu: %d",
-				root->root_key.objectid, ret);
-		goto fail;
-	}
-
-	ret = btrfs_commit_transaction(trans, root);
-	if (ret) {
-		error("transaction commit failed: %d", ret);
-		goto fail;
-	}
-
-	new_root = btrfs_read_fs_root(fs_info, &key);
-	if (IS_ERR(new_root)) {
-		error("unable to fs read root: %lu", PTR_ERR(new_root));
-		new_root = NULL;
-	}
-fail:
-	btrfs_init_path(&path);
-	return new_root;
 }
 
 static int create_subvol(struct btrfs_trans_handle *trans,
@@ -1013,7 +896,7 @@ static int make_convert_data_block_groups(struct btrfs_trans_handle *trans,
 	 * And for single chunk, don't create chunk larger than 1G.
 	 */
 	max_chunk_size = cfg->num_bytes / 10;
-	max_chunk_size = min((u64)(1024 * 1024 * 1024), max_chunk_size);
+	max_chunk_size = min((u64)(SZ_1G), max_chunk_size);
 	max_chunk_size = round_down(max_chunk_size,
 				    extent_root->fs_info->sectorsize);
 
@@ -1033,9 +916,7 @@ static int make_convert_data_block_groups(struct btrfs_trans_handle *trans,
 			if (ret < 0)
 				break;
 			ret = btrfs_make_block_group(trans, fs_info, 0,
-					BTRFS_BLOCK_GROUP_DATA,
-					BTRFS_FIRST_CHUNK_TREE_OBJECTID,
-					cur, len);
+					BTRFS_BLOCK_GROUP_DATA, cur, len);
 			if (ret < 0)
 				break;
 			cur += len;
@@ -1071,9 +952,9 @@ static int init_btrfs(struct btrfs_mkfs_config *cfg, struct btrfs_root *root,
 	fs_info->avoid_sys_chunk_alloc = 1;
 	fs_info->avoid_meta_chunk_alloc = 1;
 	trans = btrfs_start_transaction(root, 1);
-	if (!trans) {
+	if (IS_ERR(trans)) {
 		error("unable to start transaction");
-		ret = -EINVAL;
+		ret = PTR_ERR(trans);
 		goto err;
 	}
 	ret = btrfs_fix_block_accounting(trans, root);
@@ -1232,7 +1113,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		goto fail;
 	fd = open(devname, O_RDWR);
 	if (fd < 0) {
-		error("unable to open %s: %s", devname, strerror(errno));
+		error("unable to open %s: %m", devname);
 		goto fail;
 	}
 	btrfs_parse_features_to_string(features_buf, features);
@@ -1289,7 +1170,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		goto fail;
 	}
 
-	printf("creating btrfs metadata");
+	printf("creating btrfs metadata\n");
 	ret = pthread_mutex_init(&ctx.mutex, NULL);
 	if (ret) {
 		error("failed to initialize mutex: %d", ret);
@@ -1313,7 +1194,8 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		task_deinit(ctx.info);
 	}
 
-	image_root = link_subvol(root, subvol_name, CONV_IMAGE_SUBVOL_OBJECTID);
+	image_root = btrfs_mksubvol(root, subvol_name,
+				    CONV_IMAGE_SUBVOL_OBJECTID, true);
 	if (!image_root) {
 		error("unable to link subvolume %s", subvol_name);
 		goto fail;
@@ -1357,7 +1239,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	close_ctree(root);
 	close(fd);
 
-	printf("conversion complete");
+	printf("conversion complete\n");
 	return 0;
 fail:
 	clean_convert_context(&cctx);
@@ -1559,6 +1441,8 @@ next:
 		}
 	}
 	btrfs_release_path(&path);
+	if (ret)
+		return ret;
 	/*
 	 * For HOLES mode (without NO_HOLES), we must ensure file extents
 	 * cover the whole range of the image
@@ -1595,7 +1479,7 @@ next:
  * |   RSV 1   |  | Old  |   |    RSV 2  | | Old  | |   RSV 3   |
  * |   0~1M    |  | Fs   |   | SB2 + 64K | | Fs   | | SB3 + 64K |
  *
- * On the other hande, the converted fs image in btrfs is a completely 
+ * On the other hand, the converted fs image in btrfs is a completely
  * valid old fs.
  *
  * |<-----------------Converted fs image in btrfs-------------------->|
@@ -1640,12 +1524,18 @@ static int do_rollback(const char *devname)
 	}
 	fd = open(devname, O_RDWR);
 	if (fd < 0) {
-		error("unable to open %s: %s", devname, strerror(errno));
+		error("unable to open %s: %m", devname);
 		ret = -EIO;
 		goto free_mem;
 	}
 	fsize = lseek(fd, 0, SEEK_END);
-	root = open_ctree_fd(fd, devname, 0, OPEN_CTREE_WRITES);
+
+	/*
+	 * For rollback, we don't really need to write anything so open it
+	 * read-only.  The write part will happen after we close the
+	 * filesystem.
+	 */
+	root = open_ctree_fd(fd, devname, 0, 0);
 	if (!root) {
 		error("unable to open ctree");
 		ret = -EIO;
@@ -1664,11 +1554,11 @@ static int do_rollback(const char *devname)
 	ret = btrfs_search_slot(NULL, fs_info->tree_root, &key, &path, 0, 0);
 	btrfs_release_path(&path);
 	if (ret > 0) {
-		error("unable to find ext2 image subvolume, is it deleted?");
+		error("unable to find source fs image subvolume, is it deleted?");
 		ret = -ENOENT;
 		goto close_fs;
 	} else if (ret < 0) {
-		error("failed to find ext2 image subvolume: %s",
+		error("failed to find source fs image subvolume: %s",
 			strerror(-ret));
 		goto close_fs;
 	}
@@ -1786,6 +1676,7 @@ static void print_usage(void)
 	printf("\n");
 	printf("Supported filesystems:\n");
 	printf("\text2/3/4: %s\n", BTRFSCONVERT_EXT2 ? "yes" : "no");
+	printf("\treiserfs: %s\n", BTRFSCONVERT_REISERFS ? "yes" : "no");
 }
 
 int main(int argc, char *argv[])

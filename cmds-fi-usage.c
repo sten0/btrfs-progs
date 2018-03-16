@@ -22,6 +22,7 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <getopt.h>
+#include <fcntl.h>
 
 #include "utils.h"
 #include "kerncompat.h"
@@ -29,6 +30,7 @@
 #include "string-table.h"
 #include "cmds-fi-usage.h"
 #include "commands.h"
+#include "disk-io.h"
 
 #include "version.h"
 #include "help.h"
@@ -162,8 +164,7 @@ static int load_chunk_info(int fd, struct chunk_info **info_ptr, int *info_count
 			return -e;
 
 		if (ret < 0) {
-			error("cannot look up chunk tree info: %s",
-				strerror(e));
+			error("cannot look up chunk tree info: %m");
 			return 1;
 		}
 		/* the ioctl returns the number of item it found in nr_items */
@@ -242,8 +243,7 @@ static struct btrfs_ioctl_space_args *load_space_info(int fd, char *path)
 
 	ret = ioctl(fd, BTRFS_IOC_SPACE_INFO, sargs);
 	if (ret < 0) {
-		error("cannot get space info on '%s': %s", path,
-			strerror(errno));
+		error("cannot get space info on '%s': %m", path);
 		free(sargs);
 		return NULL;
 	}
@@ -268,8 +268,8 @@ static struct btrfs_ioctl_space_args *load_space_info(int fd, char *path)
 
 	ret = ioctl(fd, BTRFS_IOC_SPACE_INFO, sargs);
 	if (ret < 0) {
-		error("cannot get space info with %u slots: %s",
-			count, strerror(errno));
+		error("cannot get space info with %u slots: %m",
+			count);
 		free(sargs);
 		return NULL;
 	}
@@ -354,8 +354,7 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 	}
 
 	if (r_total_size == 0) {
-		error("cannot get space info on '%s': %s",
-			path, strerror(errno));
+		error("cannot get space info on '%s': %m", path);
 
 		ret = 1;
 		goto exit;
@@ -506,6 +505,33 @@ static int cmp_device_info(const void *a, const void *b)
 			((struct device_info *)b)->path);
 }
 
+int dev_to_fsid(const char *dev, u8 *fsid)
+{
+	struct btrfs_super_block *disk_super;
+	char buf[BTRFS_SUPER_INFO_SIZE];
+	int ret;
+	int fd;
+
+	fd = open(dev, O_RDONLY);
+	if (fd < 0) {
+		ret = -errno;
+		return ret;
+	}
+
+	disk_super = (struct btrfs_super_block *)buf;
+	ret = btrfs_read_dev_super(fd, disk_super,
+				   BTRFS_SUPER_INFO_OFFSET, SBREAD_DEFAULT);
+	if (ret)
+		goto out;
+
+	memcpy(fsid, disk_super->fsid, BTRFS_FSID_SIZE);
+	ret = 0;
+
+out:
+	close(fd);
+	return ret;
+}
+
 /*
  *  This function loads the device_info structure and put them in an array
  */
@@ -516,6 +542,7 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 	struct btrfs_ioctl_fs_info_args fi_args;
 	struct btrfs_ioctl_dev_info_args dev_info;
 	struct device_info *info;
+	u8 fsid[BTRFS_UUID_SIZE];
 
 	*device_info_count = 0;
 	*device_info_ptr = NULL;
@@ -524,8 +551,7 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 	if (ret < 0) {
 		if (errno == EPERM)
 			return -errno;
-		error("cannot get filesystem info: %s",
-				strerror(errno));
+		error("cannot get filesystem info: %m");
 		return 1;
 	}
 
@@ -539,6 +565,8 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 		if (ndevs >= fi_args.num_devices) {
 			error("unexpected number of devices: %d >= %llu", ndevs,
 				(unsigned long long)fi_args.num_devices);
+			error(
+		"if seed device is used, try running this command as root");
 			goto out;
 		}
 		memset(&dev_info, 0, sizeof(dev_info));
@@ -550,6 +578,17 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 			error("cannot get info about device devid=%d", i);
 			goto out;
 		}
+
+		/*
+		 * Skip seed device by checking device's fsid (requires root).
+		 * And we will skip only if dev_to_fsid is successful and dev
+		 * is a seed device.
+		 * Ignore any other error including -EACCES, which is seen when
+		 * a non-root process calls dev_to_fsid(path)->open(path).
+		 */
+		ret = dev_to_fsid((const char *)dev_info.path, fsid);
+		if (!ret && memcmp(fi_args.fsid, fsid, BTRFS_FSID_SIZE) != 0)
+			continue;
 
 		info[ndevs].devid = dev_info.devid;
 		if (!dev_info.path[0]) {
@@ -1040,6 +1079,7 @@ void print_device_sizes(struct device_info *devinfo, unsigned unit_mode)
 		pretty_size_mode(devinfo->device_size, unit_mode));
 	printf("   Device slack: %*s%10s\n",
 		(int)(20 - strlen("Device slack")), "",
-		pretty_size_mode(devinfo->device_size - devinfo->size,
+		pretty_size_mode(devinfo->device_size > 0 ?
+			devinfo->device_size - devinfo->size : 0,
 			unit_mode));
 }

@@ -1,94 +1,48 @@
-btrfs-progs (4.12+dfsg-0.1~bpo9+1) stretch-backports; urgency=medium
+btrfs-progs (4.15.1-1) unstable; urgency=medium
 
-  * Rebuild for stretch-backports.
+  * New upstream release
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 28 Jul 2017 20:12:31 -0400
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 19 Feb 2018 15:50:12 +0000
 
-btrfs-progs (4.12+dfsg-0.1) unstable; urgency=medium
+btrfs-progs (4.14.1-1) unstable; urgency=medium
 
-  * Non-maintainer upload
-  * New upstream version
+  * New upstream release.
+  * Add libzstd-dev build dependency.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 28 Jul 2017 20:08:28 -0400
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Thu, 11 Jan 2018 15:43:20 +0000
 
-btrfs-progs (4.11.1+dfsg-0.2) unstable; urgency=medium
+btrfs-progs (4.13.3-1) unstable; urgency=medium
 
-  * debian/control: Bump standards version. (no changes needed)
-  * Switch to debhelper 10
-    - debian/compat: Bump version.
-    - debian/rules: drop --parallel because it is now default
-    - debian/rules: drop --with autoreconf because it is now default
-  * debian/rules: Change -dbgsym version dependency for my nmu package.
+  [ Dimitri John Ledkov ]
+  * New upstream release.
+  * Add breaks against incompatible btrbk. Closes: #872836
+  * Use noawait trigger variant, updating initramfs is optional, and
+    doesn't relly matter when it happens, as long as it does, eventually.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 13 Jul 2017 19:25:24 -0400
+  [ Nicholas D Steeves ]
+  * Add copyright for tests/sha.h tests/sha224-256.c tests/sha-private.h
+  * Drop dh-autoreconf from build-depends, because it's automatic now.
 
-btrfs-progs (4.11.1+dfsg-0.1) unstable; urgency=medium
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Wed, 18 Oct 2017 13:15:37 +0100
 
-  * Non-maintainer upload
-  * New upstream version
-  * debian/control: Drop btrfs-tools transitional dummy packages.
-  * Switch to automatically generated -dbgsym package.
-    - debian/rules: Switch to dh_strip --dbgsym-migration.
-    - debian/control: Drop btrfs-progs-dbg.
-    - debian/control: Bump Build-Depends to debhelper >= 10.
+btrfs-progs (4.12-1) unstable; urgency=medium
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 30 Jun 2017 15:34:22 -0400
+  [ Dimitri John Ledkov ]
+  * New upstream release.
+  * Update watch file to v4.
 
-btrfs-progs (4.11+dfsg-0.1) unstable; urgency=medium
-
-  * New upstream version
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Mon, 22 May 2017 15:17:42 -0400
-
-btrfs-progs (4.10.2+dfsg-0.1) unstable; urgency=medium
-
-  * Non-maintainer upload
-  * New upstream version
-  * debian/rules: Tighten override_dh_auto_clean to only run auto_clean if
-    Makefile.inc exists
-  * debian/watch: Switch to version 4 and add repacksuffix=+dfsg
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 06 Apr 2017 19:23:45 -0400
-
-btrfs-progs (4.10.1+dfsg-0.2) unstable; urgency=medium
-
-  * debian/watch: Add dversionmangle to handle dfsg version suffix
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Sun, 19 Mar 2017 16:06:08 -0400
-
-btrfs-progs (4.10.1+dfsg-0.1) unstable; urgency=medium
-
-  * Non-maintainer upload
-  * New upstream version
-  * debian/copyright
-    - Exclude non-free-RFC-BCP78 files (affects test suite)
-    - Update Source, because Chris Mason's branch has not been updated
-      since v4.4
-    - 4.6.1-1 did not fix license.  Btrfs-progs is explicitly GPL2
-      and not GPL2+
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Sun, 19 Mar 2017 15:26:37 -0400
-
-btrfs-progs (4.10-0.1) unstable; urgency=medium
-
-  * Non-maintainer upload
-  * New upstream version
-  * Drop redundant patches for documentation (merged upstream)
-  * Override dh_auto_clean to work around upstream bug where make clean
-    cannot be run before ./configure
+  [ Nicholas D Steeves ]
+  * Override dh_auto_clean to work around upstream bug where make clean cannot
+    be run before ./configure
   * Drop btrfs-convert (Closes: #824895, #854489)
-  * Move all binaries back to /sbin (Closes: #786893)
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Sat, 11 Mar 2017 21:53:44 -0500
-
-btrfs-progs (4.9.1-1.1) unstable; urgency=medium
-
-  * d/control: add whitespace (cosmetic fix)
-  * Update changelog for new release
+  * Update Source, because Chris Mason's branch hasn't been updated since v4.4
+  * 4.6.1-1 did not fix package license Btrfs-progs is explicitly GPL2 and
+    not GPL2+.
   * Update copyright for new locations of: radix-tree.c and radix-tree.h
-  * Backport upstream fixes for documentation
+  * d/control: add whitespace (cosmetic fix)
+  * Switch to debhelper 10 and automatically generated -dbgsym package
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Mon, 06 Mar 2017 22:37:41 -0500
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 31 Jul 2017 15:18:39 +0100
 
 btrfs-progs (4.9.1-1) unstable; urgency=medium
 

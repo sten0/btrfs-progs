@@ -1,5 +1,5 @@
 AC_INIT([btrfs-progs],
-	m4_esyscmd([./version.sh --configure]),
+	m4_chomp(m4_include([VERSION])),
 	[linux-btrfs@vger.kernel.org],,
 	[http://btrfs.wiki.kernel.org])
 
@@ -38,6 +38,7 @@ AC_PROG_LN_S
 AC_CHECK_TOOL([AR], [ar])
 AC_PATH_PROG([RM], [rm], [rm])
 AC_PATH_PROG([RMDIR], [rmdir], [rmdir])
+
 
 AC_CHECK_FUNCS([openat], [],
 	[AC_MSG_ERROR([cannot find openat() function])])
@@ -88,13 +89,27 @@ AS_IF([test "x$enable_documentation" = xyes], [DISABLE_DOCUMENTATION=0], [DISABL
 AC_SUBST([DISABLE_DOCUMENTATION])
 
 dnl detect tools to build documentation
+ASCIIDOC_TOOL="none"
 if test "x$enable_documentation" = xyes; then
-	AC_PATH_PROG([ASCIIDOC], [asciidoc], [asciidoc])
 	AC_PATH_PROG([XMLTO], [xmlto], [xmlto])
 	AC_PATH_PROG([GZIP], [gzip], [gzip])
 	AC_PATH_PROG([MV], [mv], [mv])
 	AC_PROG_SED
+	AC_PATH_PROG([ASCIIDOC], [asciidoc])
+	AC_PATH_PROG([ASCIIDOCTOR], [asciidoctor])
+
+	dnl asciidoc is preferred
+	if test -n "$ASCIIDOC"; then
+		ASCIIDOC_TOOL="asciidoc"
+	else
+		if test -n "$ASCIIDOCTOR"; then
+			ASCIIDOC_TOOL="asciidoctor"
+		else
+			AC_MSG_ERROR([cannot find asciidoc or asciidoctor, cannot build documentation])
+		fi
+	fi
 fi
+AC_SUBST([ASCIIDOC_TOOL])
 
 AC_ARG_ENABLE([convert],
 	      AS_HELP_STRING([--disable-convert], [do not build btrfs-convert]),
@@ -106,7 +121,7 @@ AC_SUBST([DISABLE_BTRFSCONVERT])
 
 AC_ARG_WITH([convert],
 	    AS_HELP_STRING([[[]--with-convert[[=auto]]]], [built-in filesystems for convert (default: auto)
-supported (comma separated list): ext2]),
+supported (comma separated list): ext2,reiserfs]),
   [], [with_convert=auto]
 )
 
@@ -120,6 +135,7 @@ fi
 
 convertfs=
 BTRFSCONVERT_EXT2=0
+BTRFSCONVERT_REISERFS=0
 if test "x$enable_convert" = xyes; then
 	if test "x$with_convert" = "xauto" || echo "$with_convert" | grep -q "ext2"; then
 		PKG_CHECK_MODULES(EXT2FS, [ext2fs >= 1.42],,
@@ -131,11 +147,23 @@ if test "x$enable_convert" = xyes; then
 		convertfs="${convertfs:+$convertfs,}ext2"
 		BTRFSCONVERT_EXT2=1
 	fi
+	if test "x$with_convert" = "xauto"; then
+		PKG_CHECK_MODULES(REISERFS, [reiserfscore >= 3.6.27],
+				  [BTRFSCONVERT_REISERFS=1],
+				  [BTRFSCONVERT_REISERFS=0])
+	elif echo "$with_convert" | grep -q "reiserfs"; then
+		PKG_CHECK_MODULES(REISERFS, [reiserfscore >= 3.6.27],
+				  [BTRFSCONVERT_REISERFS=1],[])
+	fi
+	if test "$BTRFSCONVERT_REISERFS" = 1; then
+		convertfs="${convertfs:+$convertfs,}reiserfs"
+	fi
 fi
 AC_SUBST([BTRFSCONVERT_EXT2])
+AC_SUBST([BTRFSCONVERT_REISERFS])
 
 # catch typos
-tmp=$(echo "$with_convert" | sed -e 's/auto//' | sed -e 's/ext2//' | sed -e 's/,\+/,/')
+tmp=$(echo "$with_convert" | sed -e 's/auto//' | sed -e 's/ext2//' | sed -e 's/reiserfs//' | sed -e 's/,\+//')
 if ! test "x$tmp" = "x"; then
 	AC_MSG_ERROR([unknown tokens for --with-convert: $tmp])
 fi
@@ -168,6 +196,19 @@ PKG_STATIC(UUID_LIBS_STATIC, [uuid])
 
 PKG_CHECK_MODULES(ZLIB, [zlib])
 PKG_STATIC(ZLIB_LIBS_STATIC, [zlib])
+
+AC_ARG_ENABLE([zstd],
+	AS_HELP_STRING([--disable-zstd], [build without zstd support]),
+	[], [enable_zstd=yes]
+)
+
+if test "x$enable_zstd" = xyes; then
+	PKG_CHECK_MODULES(ZSTD, [libzstd >= 1.0.0])
+	PKG_STATIC(ZSTD_LIBS_STATIC, [libzstd])
+fi
+
+AS_IF([test "x$enable_zstd" = xyes], [BTRFSRESTORE_ZSTD=1], [BTRFSRESTORE_ZSTD=0])
+AC_SUBST(BTRFSRESTORE_ZSTD)
 
 # udev v190 introduced the btrfs builtin and a udev rule to use it.
 # Our udev rule gives us the friendly dm names but isn't required (or valid)
@@ -208,21 +249,22 @@ AC_OUTPUT
 AC_MSG_RESULT([
 	${PACKAGE_NAME} ${PACKAGE_VERSION}
 
-	prefix:            ${prefix}
-	exec prefix:       ${exec_prefix}
+	prefix:             ${prefix}
+	exec prefix:        ${exec_prefix}
 
-	bindir:            ${bindir}
-	libdir:            ${libdir}
-	includedir:        ${includedir}
+	bindir:             ${bindir}
+	libdir:             ${libdir}
+	includedir:         ${includedir}
 
-	compiler:          ${CC}
-	cflags:            ${CFLAGS}
-	ldflags:           ${LDFLAGS}
+	compiler:           ${CC}
+	cflags:             ${CFLAGS}
+	ldflags:            ${LDFLAGS}
 
-	documentation:     ${enable_documentation}
-	backtrace support: ${enable_backtrace}
-	btrfs-convert:     ${enable_convert} ${convertfs:+($convertfs)}
+	documentation:      ${enable_documentation}
+	doc generator:      ${ASCIIDOC_TOOL}
+	backtrace support:  ${enable_backtrace}
+	btrfs-convert:      ${enable_convert} ${convertfs:+($convertfs)}
+	btrfs-restore zstd: ${enable_zstd}
 
 	Type 'make' to compile.
 ])
-

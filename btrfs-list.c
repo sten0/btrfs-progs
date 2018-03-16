@@ -644,8 +644,8 @@ static int lookup_ino_path(int fd, struct root_info *ri)
 			ri->ref_tree = 0;
 			return -ENOENT;
 		}
-		error("failed to lookup path for root %llu: %s",
-			(unsigned long long)ri->ref_tree, strerror(errno));
+		error("failed to lookup path for root %llu: %m",
+			(unsigned long long)ri->ref_tree);
 		return ret;
 	}
 
@@ -695,9 +695,8 @@ static u64 find_root_gen(int fd)
 	/* this ioctl fills in ino_args->treeid */
 	ret = ioctl(fd, BTRFS_IOC_INO_LOOKUP, &ino_args);
 	if (ret < 0) {
-		error("failed to lookup path for dirid %llu: %s",
-			(unsigned long long)BTRFS_FIRST_FREE_OBJECTID,
-			strerror(errno));
+		error("failed to lookup path for dirid %llu: %m",
+			(unsigned long long)BTRFS_FIRST_FREE_OBJECTID);
 		return 0;
 	}
 
@@ -721,7 +720,7 @@ static u64 find_root_gen(int fd)
 	while (1) {
 		ret = ioctl(fd, BTRFS_IOC_TREE_SEARCH, &args);
 		if (ret < 0) {
-			error("can't perform the search: %s", strerror(errno));
+			error("can't perform the search: %m");
 			return 0;
 		}
 		/* the ioctl returns the number of item it found in nr_items */
@@ -781,8 +780,8 @@ static char *__ino_resolve(int fd, u64 dirid)
 
 	ret = ioctl(fd, BTRFS_IOC_INO_LOOKUP, &args);
 	if (ret < 0) {
-		error("failed to lookup path for dirid %llu: %s",
-			(unsigned long long)dirid, strerror(errno));
+		error("failed to lookup path for dirid %llu: %m",
+			(unsigned long long)dirid);
 		return ERR_PTR(ret);
 	}
 
@@ -860,7 +859,7 @@ static char *ino_resolve(int fd, u64 ino, u64 *cache_dirid, char **cache_name)
 
 	ret = ioctl(fd, BTRFS_IOC_TREE_SEARCH, &args);
 	if (ret < 0) {
-		error("can't perform the search: %s", strerror(errno));
+		error("can't perform the search: %m");
 		return NULL;
 	}
 	/* the ioctl returns the number of item it found in nr_items */
@@ -1273,8 +1272,18 @@ static void filter_and_sort_subvol(struct root_lookup *all_subvols,
 
 		ret = resolve_root(all_subvols, entry, top_id);
 		if (ret == -ENOENT) {
-			entry->full_path = strdup("DELETED");
-			entry->deleted = 1;
+			if (entry->root_id != BTRFS_FS_TREE_OBJECTID) {
+				entry->full_path = strdup("DELETED");
+				entry->deleted = 1;
+			} else {
+				/*
+				 * The full path is not supposed to be printed,
+				 * but we don't want to print an empty string,
+				 * in case it appears somewhere.
+				 */
+				entry->full_path = strdup("TOPLEVEL");
+				entry->deleted = 0;
+			}
 		}
 		ret = filter_root(entry, filter_set);
 		if (ret)
@@ -1340,21 +1349,21 @@ static void print_subvolume_column(struct root_info *subv,
 			strcpy(uuidparse, "-");
 		else
 			uuid_unparse(subv->uuid, uuidparse);
-		printf("%s", uuidparse);
+		printf("%-36s", uuidparse);
 		break;
 	case BTRFS_LIST_PUUID:
 		if (uuid_is_null(subv->puuid))
 			strcpy(uuidparse, "-");
 		else
 			uuid_unparse(subv->puuid, uuidparse);
-		printf("%s", uuidparse);
+		printf("%-36s", uuidparse);
 		break;
 	case BTRFS_LIST_RUUID:
 		if (uuid_is_null(subv->ruuid))
 			strcpy(uuidparse, "-");
 		else
 			uuid_unparse(subv->ruuid, uuidparse);
-		printf("%s", uuidparse);
+		printf("%-36s", uuidparse);
 		break;
 	case BTRFS_LIST_PATH:
 		BUG_ON(!subv->full_path);
@@ -1459,6 +1468,11 @@ static void print_all_subvol_info(struct root_lookup *sorted_tree,
 	n = rb_first(&sorted_tree->root);
 	while (n) {
 		entry = rb_entry(n, struct root_info, sort_node);
+
+		/* The toplevel subvolume is not listed by default */
+		if (entry->root_id == BTRFS_FS_TREE_OBJECTID)
+			goto next;
+
 		switch (layout) {
 		case BTRFS_LIST_LAYOUT_DEFAULT:
 			print_one_subvol_info_default(entry);
@@ -1470,6 +1484,7 @@ static void print_all_subvol_info(struct root_lookup *sorted_tree,
 			print_one_subvol_info_raw(entry, raw_prefix);
 			break;
 		}
+next:
 		n = rb_next(n);
 	}
 }
@@ -1480,7 +1495,7 @@ static int btrfs_list_subvols(int fd, struct root_lookup *root_lookup)
 
 	ret = list_subvol_search(fd, root_lookup);
 	if (ret) {
-		error("can't perform the search: %s", strerror(errno));
+		error("can't perform the search: %m");
 		return ret;
 	}
 
@@ -1716,7 +1731,7 @@ int btrfs_list_find_updated_files(int fd, u64 root_id, u64 oldest_gen)
 	while(1) {
 		ret = ioctl(fd, BTRFS_IOC_TREE_SEARCH, &args);
 		if (ret < 0) {
-			error("can't perform the search: %s", strerror(errno));
+			error("can't perform the search: %m");
 			break;
 		}
 		/* the ioctl returns the number of item it found in nr_items */
@@ -1910,8 +1925,7 @@ int btrfs_list_get_path_rootid(int fd, u64 *treeid)
 
 	ret = lookup_path_rootid(fd, treeid);
 	if (ret < 0)
-		error("cannot resolve rootid for path: %s",
-			strerror(errno));
+		error("cannot resolve rootid for path: %m");
 
 	return ret;
 }

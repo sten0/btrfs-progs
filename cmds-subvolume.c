@@ -210,7 +210,7 @@ static int cmd_subvol_create(int argc, char **argv)
 	}
 
 	if (res < 0) {
-		error("cannot create subvolume: %s", strerror(errno));
+		error("cannot create subvolume: %m");
 		goto out;
 	}
 
@@ -263,12 +263,16 @@ static int cmd_subvol_delete(int argc, char **argv)
 	DIR	*dirstream = NULL;
 	int verbose = 0;
 	int commit_mode = 0;
+	u8 fsid[BTRFS_FSID_SIZE];
+	char uuidbuf[BTRFS_UUID_UNPARSED_SIZE];
+	struct seen_fsid *seen_fsid_hash[SEEN_FSID_HASH_SIZE] = { NULL, };
+	enum { COMMIT_AFTER = 1, COMMIT_EACH = 2 };
 
 	while (1) {
 		int c;
 		static const struct option long_options[] = {
-			{"commit-after", no_argument, NULL, 'c'},  /* commit mode 1 */
-			{"commit-each", no_argument, NULL, 'C'},  /* commit mode 2 */
+			{"commit-after", no_argument, NULL, 'c'},
+			{"commit-each", no_argument, NULL, 'C'},
 			{"verbose", no_argument, NULL, 'v'},
 			{NULL, 0, NULL, 0}
 		};
@@ -279,10 +283,10 @@ static int cmd_subvol_delete(int argc, char **argv)
 
 		switch(c) {
 		case 'c':
-			commit_mode = 1;
+			commit_mode = COMMIT_AFTER;
 			break;
 		case 'C':
-			commit_mode = 2;
+			commit_mode = COMMIT_EACH;
 			break;
 		case 'v':
 			verbose++;
@@ -298,7 +302,7 @@ static int cmd_subvol_delete(int argc, char **argv)
 	if (verbose > 0) {
 		printf("Transaction commit: %s\n",
 			!commit_mode ? "none (default)" :
-			commit_mode == 1 ? "at the end" : "after each");
+			commit_mode == COMMIT_AFTER ? "at the end" : "after each");
 	}
 
 	cnt = optind;
@@ -321,8 +325,7 @@ again:
 	cpath = realpath(path, NULL);
 	if (!cpath) {
 		ret = errno;
-		error("cannot find real path for '%s': %s",
-			path, strerror(errno));
+		error("cannot find real path for '%s': %m", path);
 		goto out;
 	}
 	dupdname = strdup(cpath);
@@ -338,50 +341,91 @@ again:
 	}
 
 	printf("Delete subvolume (%s): '%s/%s'\n",
-		commit_mode == 2 || (commit_mode == 1 && cnt + 1 == argc)
+		commit_mode == COMMIT_EACH || (commit_mode == COMMIT_AFTER && cnt + 1 == argc)
 		? "commit" : "no-commit", dname, vname);
 	memset(&args, 0, sizeof(args));
 	strncpy_null(args.name, vname);
 	res = ioctl(fd, BTRFS_IOC_SNAP_DESTROY, &args);
 	if(res < 0 ){
-		error("cannot delete '%s/%s': %s", dname, vname,
-			strerror(errno));
+		error("cannot delete '%s/%s': %m", dname, vname);
 		ret = 1;
 		goto out;
 	}
 
-	if (commit_mode == 1) {
+	if (commit_mode == COMMIT_EACH) {
 		res = wait_for_commit(fd);
 		if (res < 0) {
-			error("unable to wait for commit after '%s': %s",
-				path, strerror(errno));
+			error("unable to wait for commit after '%s': %m", path);
 			ret = 1;
+		}
+	} else if (commit_mode == COMMIT_AFTER) {
+		res = get_fsid(dname, fsid, 0);
+		if (res < 0) {
+			error("unable to get fsid for '%s': %s",
+				path, strerror(-res));
+			error(
+			"delete suceeded but commit may not be done in the end");
+			ret = 1;
+			goto out;
+		}
+
+		if (add_seen_fsid(fsid, seen_fsid_hash, fd, dirstream) == 0) {
+			if (verbose > 0) {
+				uuid_unparse(fsid, uuidbuf);
+				printf("  new fs is found for '%s', fsid: %s\n",
+						path, uuidbuf);
+			}
+			/*
+			 * This is the first time a subvolume on this
+			 * filesystem is deleted, keep fd in order to issue
+			 * SYNC ioctl in the end
+			 */
+			goto keep_fd;
 		}
 	}
 
 out:
+	close_file_or_dir(fd, dirstream);
+keep_fd:
+	fd = -1;
+	dirstream = NULL;
 	free(dupdname);
 	free(dupvname);
 	dupdname = NULL;
 	dupvname = NULL;
 	cnt++;
-	if (cnt < argc) {
-		close_file_or_dir(fd, dirstream);
-		/* avoid double free */
-		fd = -1;
-		dirstream = NULL;
+	if (cnt < argc)
 		goto again;
-	}
 
-	if (commit_mode == 2 && fd != -1) {
-		res = wait_for_commit(fd);
-		if (res < 0) {
-			error("unable to do final sync after deletion: %s",
-				strerror(errno));
-			ret = 1;
+	if (commit_mode == COMMIT_AFTER) {
+		int slot;
+
+		/*
+		 * Traverse seen_fsid_hash and issue SYNC ioctl on each
+		 * filesystem
+		 */
+		for (slot = 0; slot < SEEN_FSID_HASH_SIZE; slot++) {
+			struct seen_fsid *seen = seen_fsid_hash[slot];
+
+			while (seen) {
+				res = wait_for_commit(seen->fd);
+				if (res < 0) {
+					uuid_unparse(seen->fsid, uuidbuf);
+					error(
+			"unable to do final sync after deletion: %m, fsid: %s",
+						uuidbuf);
+					ret = 1;
+				} else if (verbose > 0) {
+					uuid_unparse(seen->fsid, uuidbuf);
+					printf("final sync is done for fsid: %s\n",
+						uuidbuf);
+				}
+				seen = seen->next;
+			}
 		}
+		/* fd will also be closed in free_seen_fsid */
+		free_seen_fsid(seen_fsid_hash);
 	}
-	close_file_or_dir(fd, dirstream);
 
 	return ret;
 }
@@ -392,24 +436,32 @@ out:
  * - lowercase for enabling specific items in the output
  */
 static const char * const cmd_subvol_list_usage[] = {
-	"btrfs subvolume list [options] [-G [+|-]value] [-C [+|-]value] "
-	"[--sort=gen,ogen,rootid,path] <path>",
-	"List subvolumes (and snapshots)",
+	"btrfs subvolume list [options] <path>",
+	"List subvolumes and snapshots in the filesystem.",
 	"",
-	"-p           print parent ID",
+	"Path filtering:",
+	"-o           print only subvolumes below specified path",
 	"-a           print all the subvolumes in the filesystem and",
 	"             distinguish absolute and relative path with respect",
 	"             to the given <path>",
+	"",
+	"Field selection:",
+	"-p           print parent ID",
 	"-c           print the ogeneration of the subvolume",
 	"-g           print the generation of the subvolume",
-	"-o           print only subvolumes below specified path",
 	"-u           print the uuid of subvolumes (and snapshots)",
 	"-q           print the parent uuid of the snapshots",
 	"-R           print the uuid of the received snapshots",
-	"-t           print the result as a table",
-	"-s           list snapshots only in the filesystem",
+	"",
+	"Type filtering:",
+	"-s           list only snapshots",
 	"-r           list readonly subvolumes (including snapshots)",
 	"-d           list deleted subvolumes that are not yet cleaned",
+	"",
+	"Other:",
+	"-t           print the result as a table",
+	"",
+	"Sorting:",
 	"-G [+|-]value",
 	"             filter the subvolumes by generation",
 	"             (+value: >= value; -value: <= value; value: = value)",
@@ -721,7 +773,7 @@ static int cmd_subvol_snapshot(int argc, char **argv)
 	res = ioctl(fddst, BTRFS_IOC_SNAP_CREATE_V2, &args);
 
 	if (res < 0) {
-		error("cannot snapshot '%s': %s", subvol, strerror(errno));
+		error("cannot snapshot '%s': %m", subvol);
 		goto out;
 	}
 
@@ -764,8 +816,7 @@ static int cmd_subvol_get_default(int argc, char **argv)
 
 	ret = btrfs_list_get_default_subvolume(fd, &default_id);
 	if (ret) {
-		error("failed to look up default subvolume: %s",
-			strerror(errno));
+		error("failed to look up default subvolume: %m");
 		goto out;
 	}
 
@@ -803,14 +854,17 @@ out:
 }
 
 static const char * const cmd_subvol_set_default_usage[] = {
+	"btrfs subvolume set-default <subvolume>\n"
 	"btrfs subvolume set-default <subvolid> <path>",
-	"Set the default subvolume of a filesystem",
+	"Set the default subvolume of the filesystem mounted as default.",
+	"The subvolume can be specified by its path,",
+	"or the pair of subvolume id and path to the filesystem.",
 	NULL
 };
 
 static int cmd_subvol_set_default(int argc, char **argv)
 {
-	int	ret=0, fd, e;
+	int	ret=0, fd;
 	u64	objectid;
 	char	*path;
 	char	*subvolid;
@@ -818,24 +872,48 @@ static int cmd_subvol_set_default(int argc, char **argv)
 
 	clean_args_no_options(argc, argv, cmd_subvol_set_default_usage);
 
-	if (check_argc_exact(argc - optind, 2))
+	if (check_argc_min(argc - optind, 1) ||
+			check_argc_max(argc - optind, 2))
 		usage(cmd_subvol_set_default_usage);
 
-	subvolid = argv[optind];
-	path = argv[optind + 1];
+	if (argc - optind == 1) {
+		/* path to the subvolume is specified */
+		path = argv[optind];
 
-	objectid = arg_strtou64(subvolid);
+		ret = test_issubvolume(path);
+		if (ret < 0) {
+			error("stat error: %s", strerror(-ret));
+			return 1;
+		} else if (!ret) {
+			error("'%s' is not a subvolume", path);
+			return 1;
+		}
 
-	fd = btrfs_open_dir(path, &dirstream, 1);
-	if (fd < 0)
-		return 1;
+		fd = btrfs_open_dir(path, &dirstream, 1);
+		if (fd < 0)
+			return 1;
+
+		ret = lookup_path_rootid(fd, &objectid);
+		if (ret) {
+			error("unable to get subvol id: %s", strerror(-ret));
+			close_file_or_dir(fd, dirstream);
+			return 1;
+		}
+	} else {
+		/* subvol id and path to the filesystem are specified */
+		subvolid = argv[optind];
+		path = argv[optind + 1];
+		objectid = arg_strtou64(subvolid);
+
+		fd = btrfs_open_dir(path, &dirstream, 1);
+		if (fd < 0)
+			return 1;
+	}
 
 	ret = ioctl(fd, BTRFS_IOC_DEFAULT_SUBVOL, &objectid);
-	e = errno;
 	close_file_or_dir(fd, dirstream);
 	if (ret < 0) {
-		error("unable to set a new default subvolume: %s",
-			strerror(e));
+		error("unable to set a new default subvolume: %m");
 		return 1;
 	}
 	return 0;
@@ -879,8 +957,7 @@ static int cmd_subvol_find_new(int argc, char **argv)
 
 	ret = ioctl(fd, BTRFS_IOC_SYNC);
 	if (ret < 0) {
-		error("sync ioctl failed on '%s': %s",
-			subvol, strerror(errno));
+		error("sync ioctl failed on '%s': %m", subvol);
 		close_file_or_dir(fd, dirstream);
 		return 1;
 	}
@@ -955,8 +1032,7 @@ static int cmd_subvol_show(int argc, char **argv)
 	memset(&get_ri, 0, sizeof(get_ri));
 	fullpath = realpath(argv[optind], NULL);
 	if (!fullpath) {
-		error("cannot find real path for '%s': %s",
-			argv[optind], strerror(errno));
+		error("cannot find real path for '%s': %m", argv[optind]);
 		goto out;
 	}
 

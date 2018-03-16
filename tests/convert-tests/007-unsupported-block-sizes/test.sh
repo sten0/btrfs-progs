@@ -1,12 +1,13 @@
 #!/bin/bash
 # Check if block sizes smaller than 4k expectedly fail to convert
 
-source "$TOP/tests/common"
-source "$TOP/tests/common.convert"
+source "$TEST_TOP/common"
+source "$TEST_TOP/common.convert"
 
 setup_root_helper
-prepare_test_dev 512M
+prepare_test_dev
 check_prereq btrfs-convert
+check_global_prereq mke2fs
 
 for bs in 1024 2048; do
 	default_mke2fs="mke2fs -t ext4 -b $bs"

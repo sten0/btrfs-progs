@@ -2,14 +2,14 @@
 #
 # test receiving stream that's not valid, simple cases
 
-source $TOP/tests/common
+source "$TEST_TOP/common"
 
 check_prereq mkfs.btrfs
 check_prereq btrfs
 
 setup_root_helper
 
-prepare_test_dev 1g
+prepare_test_dev
 run_check "$TOP/mkfs.btrfs" -f "$TEST_DEV"
 run_check_mount_test_dev
 

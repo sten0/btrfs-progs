@@ -28,6 +28,7 @@
 #include "btrfs-list.h"
 #include "sizes.h"
 #include "messages.h"
+#include "ioctl.h"
 
 #define BTRFS_SCAN_MOUNTED	(1ULL << 0)
 #define BTRFS_SCAN_LBLKID	(1ULL << 1)
@@ -68,6 +69,14 @@ void units_set_base(unsigned *units, unsigned base);
 #define	PREP_DEVICE_DISCARD	(1U << 1)
 #define	PREP_DEVICE_VERBOSE	(1U << 2)
 
+#define SEEN_FSID_HASH_SIZE 256
+struct seen_fsid {
+	u8 fsid[BTRFS_FSID_SIZE];
+	struct seen_fsid *next;
+	DIR *dirstream;
+	int fd;
+};
+
 int btrfs_make_root_dir(struct btrfs_trans_handle *trans,
 			struct btrfs_root *root, u64 objectid);
 int btrfs_prepare_device(int fd, const char *file, u64 *block_count_ret,
@@ -100,15 +109,26 @@ int open_file_or_dir3(const char *fname, DIR **dirstream, int open_flags);
 void close_file_or_dir(int fd, DIR *dirstream);
 int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 		struct btrfs_ioctl_dev_info_args **di_ret);
+int get_fsid(const char *path, u8 *fsid, int silent);
+
+int is_seen_fsid(u8 *fsid, struct seen_fsid *seen_fsid_hash[]);
+int add_seen_fsid(u8 *fsid, struct seen_fsid *seen_fsid_hash[],
+		int fd, DIR *dirstream);
+void free_seen_fsid(struct seen_fsid *seen_fsid_hash[]);
+
 int get_label(const char *btrfs_dev, char *label);
 int set_label(const char *btrfs_dev, const char *label);
 
 char *__strncpy_null(char *dest, const char *src, size_t n);
 int is_block_device(const char *file);
 int is_mount_point(const char *file);
+int is_path_exist(const char *file);
+int is_reg_file(const char *path);
 int check_arg_type(const char *input);
 int open_path_or_dev_mnt(const char *path, DIR **dirstream, int verbose);
+int btrfs_open(const char *path, DIR **dirstream, int verbose, int dir_only);
 int btrfs_open_dir(const char *path, DIR **dirstream, int verbose);
+int btrfs_open_file_or_dir(const char *path, DIR **dirstream, int verbose);
 u64 btrfs_device_size(int fd, struct stat *st);
 /* Helper to always get proper size of the destination string */
 #define strncpy_null(dest, src) __strncpy_null(dest, src, sizeof(dest))
@@ -150,6 +170,11 @@ int btrfs_tree_search2_ioctl_supported(int fd);
 unsigned int get_unit_mode_from_arg(int *argc, char *argv[], int df_mode);
 int string_is_numerical(const char *str);
 int prefixcmp(const char *str, const char *prefix);
+
+unsigned long total_memory(void);
+
+void print_device_info(struct btrfs_device *device, char *prefix);
+void print_all_devices(struct list_head *devices);
 
 /*
  * Global program state, configurable by command line and available to

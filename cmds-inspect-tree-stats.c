@@ -35,7 +35,6 @@
 #include "volumes.h"
 #include "utils.h"
 #include "commands.h"
-#include "cmds-inspect-tree-stats.h"
 #include "help.h"
 
 static int verbose = 0;
@@ -154,7 +153,6 @@ static int walk_nodes(struct btrfs_root *root, struct btrfs_path *path,
 		path->slots[level] = i;
 		if ((level - 1) > 0 || find_inline) {
 			tmp = read_tree_block(root->fs_info, cur_blocknr,
-					      nodesize,
 					      btrfs_node_ptr_generation(b, i));
 			if (!extent_buffer_uptodate(tmp)) {
 				error("failed to read blocknr %llu",
@@ -338,7 +336,7 @@ static int calc_root_size(struct btrfs_root *tree_root, struct btrfs_key *key,
 	stat.max_cluster_size = root->fs_info->nodesize;
 	path.nodes[level] = root->node;
 	if (gettimeofday(&start, NULL)) {
-		error("cannot get time: %s", strerror(errno));
+		error("cannot get time: %m");
 		goto out;
 	}
 	if (!level) {
@@ -352,7 +350,7 @@ static int calc_root_size(struct btrfs_root *tree_root, struct btrfs_key *key,
 	if (ret)
 		goto out;
 	if (gettimeofday(&end, NULL)) {
-		error("cannot get time: %s", strerror(errno));
+		error("cannot get time: %m");
 		goto out;
 	}
 	timeval_subtract(&diff, &end, &start);
