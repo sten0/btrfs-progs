@@ -1,3 +1,16 @@
+btrfs-progs (4.15.1-2) unstable; urgency=medium
+
+  * If libzstd is provided in both deb & udeb variants (such as Ubuntu
+    bionic) enable zstd support. If libzstd is not provided with both deb
+    & udeb variants (such as current Debian unstable) disable zstd
+    support. If and when libzstd is provided in both deb & udeb variants,
+    a binNMU of this package is sufficient to enable zstd support. Closes:
+    #886968
+  * Drop obsolete lintian overrides.
+  * Add alternative email address as uploader.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Sat, 21 Apr 2018 11:59:50 +0100
+
 btrfs-progs (4.15.1-1) unstable; urgency=medium
 
   * New upstream release
