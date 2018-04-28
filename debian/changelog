@@ -1,3 +1,9 @@
+btrfs-progs (4.15.1-2~bpo9+1) stretch-backports; urgency=medium
+
+  * Rebuild for stretch-backports.
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 27 Apr 2018 20:48:43 -0400
+
 btrfs-progs (4.15.1-2) unstable; urgency=medium
 
   * If libzstd is provided in both deb & udeb variants (such as Ubuntu
