@@ -184,8 +184,7 @@ struct extent_buffer *btrfs_find_tree_block(struct btrfs_fs_info *fs_info,
 struct extent_buffer* btrfs_find_create_tree_block(
 		struct btrfs_fs_info *fs_info, u64 bytenr)
 {
-	return alloc_extent_buffer(&fs_info->extent_cache, bytenr,
-			fs_info->nodesize);
+	return alloc_extent_buffer(fs_info, bytenr, fs_info->nodesize);
 }
 
 void readahead_tree_block(struct btrfs_fs_info *fs_info, u64 bytenr,
@@ -396,10 +395,12 @@ int read_extent_data(struct btrfs_fs_info *fs_info, char *data, u64 logical,
 	}
 	device = multi->stripes[0].dev;
 
-	if (device->fd <= 0)
-		goto err;
 	if (*len > max_len)
 		*len = max_len;
+	if (device->fd < 0) {
+		ret = -EIO;
+		goto err;
+	}
 
 	ret = pread64(device->fd, data, *len, multi->stripes[0].physical);
 	if (ret != *len)
@@ -1115,14 +1116,14 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, const char *path,
 		fs_info->ignore_chunk_tree_error = 1;
 
 	if ((flags & OPEN_CTREE_RECOVER_SUPER)
-	     && (flags & OPEN_CTREE_FS_PARTIAL)) {
+	     && (flags & OPEN_CTREE_TEMPORARY_SUPER)) {
 		fprintf(stderr,
-		    "cannot open a partially created filesystem for recovery");
+	"cannot open a filesystem with temporary super block for recovery");
 		goto out;
 	}
 
-	if (flags & OPEN_CTREE_FS_PARTIAL)
-		sbflags = SBREAD_PARTIAL;
+	if (flags & OPEN_CTREE_TEMPORARY_SUPER)
+		sbflags = SBREAD_TEMPORARY;
 
 	ret = btrfs_scan_fs_devices(fp, path, &fs_devices, sb_bytenr, sbflags,
 			(flags & OPEN_CTREE_NO_DEVICES));
@@ -1212,7 +1213,7 @@ struct btrfs_fs_info *open_ctree_fs_info(const char *filename,
 
 	ret = stat(filename, &st);
 	if (ret < 0) {
-		error("cannot stat '%s': %s", filename, strerror(errno));
+		error("cannot stat '%s': %m", filename);
 		return NULL;
 	}
 	if (!(((st.st_mode & S_IFMT) == S_IFREG) || ((st.st_mode & S_IFMT) == S_IFBLK))) {
@@ -1225,7 +1226,7 @@ struct btrfs_fs_info *open_ctree_fs_info(const char *filename,
 
 	fp = open(filename, oflags);
 	if (fp < 0) {
-		error("cannot open '%s': %s", filename, strerror(errno));
+		error("cannot open '%s': %m", filename);
 		return NULL;
 	}
 	info = __open_ctree_fd(fp, filename, sb_bytenr, root_tree_bytenr,
@@ -1283,8 +1284,8 @@ static int check_super(struct btrfs_super_block *sb, unsigned sbflags)
 	int csum_size;
 
 	if (btrfs_super_magic(sb) != BTRFS_MAGIC) {
-		if (btrfs_super_magic(sb) == BTRFS_MAGIC_PARTIAL) {
-			if (!(sbflags & SBREAD_PARTIAL)) {
+		if (btrfs_super_magic(sb) == BTRFS_MAGIC_TEMPORARY) {
+			if (!(sbflags & SBREAD_TEMPORARY)) {
 				error("superblock magic doesn't match");
 				return -EIO;
 			}
@@ -1419,6 +1420,23 @@ error_out:
 	return -EIO;
 }
 
+/*
+ * btrfs_read_dev_super - read a valid superblock from a block device
+ * @fd:		file descriptor of the device
+ * @sb:		buffer where the superblock is going to be read in
+ * @sb_bytenr:  offset of the particular superblock copy we want
+ * @sbflags:	flags controlling how the superblock is read
+ *
+ * This function is used by various btrfs comands to obtain a valid superblock.
+ *
+ * It's mode of operation is controlled by the @sb_bytenr and @sbdflags
+ * parameters. If SBREAD_RECOVER flag is set and @sb_bytenr is
+ * BTRFS_SUPER_INFO_OFFSET then the function reads all 3 superblock copies and
+ * returns the newest one. If SBREAD_RECOVER is not set then only a single
+ * copy is read, which one is decided by @sb_bytenr. If @sb_bytenr !=
+ * BTRFS_SUPER_INFO_OFFSET then the @sbflags is effectively ignored and only a
+ * single copy is read.
+ */
 int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 			 unsigned sbflags)
 {
@@ -1549,14 +1567,12 @@ write_err:
 	if (ret > 0)
 		fprintf(stderr, "WARNING: failed to write all sb data\n");
 	else
-		fprintf(stderr, "WARNING: failed to write sb: %s\n",
-			strerror(errno));
+		fprintf(stderr, "WARNING: failed to write sb: %m\n");
 	return ret;
 }
 
 int write_all_supers(struct btrfs_fs_info *fs_info)
 {
-	struct list_head *cur;
 	struct list_head *head = &fs_info->fs_devices->devices;
 	struct btrfs_device *dev;
 	struct btrfs_super_block *sb;
@@ -1566,8 +1582,7 @@ int write_all_supers(struct btrfs_fs_info *fs_info)
 
 	sb = fs_info->super_copy;
 	dev_item = &sb->dev_item;
-	list_for_each(cur, head) {
-		dev = list_entry(cur, struct btrfs_device, dev_list);
+	list_for_each_entry(dev, head, dev_list) {
 		if (!dev->writeable)
 			continue;
 

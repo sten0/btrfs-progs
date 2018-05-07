@@ -54,6 +54,13 @@ _log()
 	echo "$*" | tee -a "$RESULTS"
 }
 
+# copy stdout to log and pass to stdout, eg. another stdout consumer, commands
+# should redirect stderr to stdout if this is consmed by further commands
+_log_stdout()
+{
+	tee -a "$RESULTS"
+}
+
 _not_run()
 {
 	echo "    [NOTRUN] $*"
@@ -290,8 +297,12 @@ run_mustfail_stdout()
 
 check_prereq()
 {
-	if ! [ -f "$TOP/$1" ]; then
-		_fail "Failed prerequisites: $1";
+	if [ "$1" = "btrfs-corrupt-block" -o "$1" = "fssum" ]; then
+		if ! [ -f "$INTERNAL_BIN/$1" ]; then
+			_fail "Failed prerequisites: $INTERNAL_BIN/$1";
+		fi
+	elif ! [ -f "$TOP/$1" ]; then
+		_fail "Failed prerequisites: $TOP/$1";
 	fi
 }
 
@@ -331,7 +342,7 @@ extract_image()
 	case "$image" in
 	*.img)
 		rm -f "$image.restored"
-		: ;;
+		;;
 	*.img.xz)
 		xz --decompress --keep "$image" || \
 			_fail "failed to decompress image $image" >&2
@@ -444,14 +455,16 @@ prepare_test_dev()
 	[[ "$size" ]] || size='2G'
 	# Still truncate it to new size
 	if [ -n "$TEST_DEV" ]; then
+		truncate -s 0 "$TEST_DEV"
 		truncate -s "$size" "$TEST_DEV"
 		return;
 	fi
 
-	echo "\$TEST_DEV not given, use $TOP/test/test.img as fallback" >> \
+	echo "\$TEST_DEV not given, using $TEST_TOP/test.img as fallback" >> \
 		"$RESULTS"
-	TEST_DEV="$TOP/tests/test.img"
+	TEST_DEV="$TEST_TOP/test.img"
 
+	truncate -s 0 "$TEST_DEV"
 	truncate -s "$size" "$TEST_DEV" || _not_run "create file for loop device failed"
 }
 
@@ -475,10 +488,14 @@ run_check_mount_test_dev()
 	run_check $SUDO_HELPER mount -t btrfs $loop_opt "$@" "$TEST_DEV" "$TEST_MNT"
 }
 
+# $1-$n: optional paths to unmount, otherwise fallback to TEST_DEV
 run_check_umount_test_dev()
 {
 	setup_root_helper
-	run_check $SUDO_HELPER umount "$@" "$TEST_DEV"
+	if [ "$#" = 0 ]; then
+		set -- "$TEST_DEV"
+	fi
+	run_check $SUDO_HELPER umount "$@"
 }
 
 check_kernel_support()
@@ -626,11 +643,11 @@ cleanup_loopdevs()
 
 init_env()
 {
-	TEST_MNT="${TEST_MNT:-$TOP/tests/mnt}"
+	TEST_MNT="${TEST_MNT:-$TEST_TOP/mnt}"
 	export TEST_MNT
 	mkdir -p "$TEST_MNT" || { echo "Failed mkdir -p $TEST_MNT"; exit 1; }
 
-	source $TOP/tests/common.local
+	source $TEST_TOP/common.local
 
 	if [ "$TEST_ENABLE_OVERRIDE" = 'true' -a -n "$RESULTS" ]; then
 		echo "INCLUDE common.local" >> "$RESULTS"

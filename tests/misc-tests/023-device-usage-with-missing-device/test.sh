@@ -1,7 +1,7 @@
 #!/bin/bash
 # check if 'device slack' is reported as zero when a device is missing
 
-source "$TOP/tests/common"
+source "$TEST_TOP/common"
 
 check_prereq btrfs-image
 check_prereq mkfs.btrfs
@@ -12,7 +12,7 @@ setup_root_helper
 test_run()
 {
 	# empty filesystem, with enough redundancy so degraded mount works
-	run_check $SUDO_HELPER "$TOP/mkfs.btrfs" -f -d raid1 -m raid1 $dev1 $dev2
+	run_check $SUDO_HELPER "$TOP/mkfs.btrfs" -f -d raid1 -m raid1 "$dev1" "$dev2"
 
 	TEST_DEV="$dev1"
 	run_check_mount_test_dev
@@ -21,8 +21,8 @@ test_run()
 		grep -q "slack.*16\\.00EiB" && _fail
 	run_check_umount_test_dev
 
-	run_mayfail wipefs -a $dev2
-	run_check $SUDO_HELPER losetup -d $dev2
+	run_mayfail wipefs -a "$dev2"
+	run_check $SUDO_HELPER losetup -d "$dev2"
 	unset loopdevs[2]
 
 	run_check_mount_test_dev -o degraded,ro

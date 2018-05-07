@@ -350,8 +350,7 @@ static int convert_direct(struct btrfs_trans_handle *trans,
 	if (ret)
 		return ret;
 
-	eb = alloc_extent_buffer(&root->fs_info->extent_cache, key.objectid,
-				 sectorsize);
+	eb = alloc_extent_buffer(root->fs_info, key.objectid, sectorsize);
 
 	if (!eb)
 		return -ENOMEM;
@@ -376,7 +375,8 @@ static int reiserfs_convert_tail(struct btrfs_trans_handle *trans,
 	u64 isize;
 	int ret;
 
-	if (length >= BTRFS_MAX_INLINE_DATA_SIZE(root))
+	if (length >= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info) ||
+	    length >= root->fs_info->sectorsize)
 		return convert_direct(trans, root, objectid, inode, body,
 				      length, offset, convert_flags);
 
@@ -676,7 +676,7 @@ static int reiserfs_xattr_indirect_fn(reiserfs_filsys_t fs, u64 position,
 	size_t alloc = min(position + num_blocks * fs->fs_blocksize, size);
 	char *body;
 
-	if (size > BTRFS_LEAF_DATA_SIZE(xa_data->root) -
+	if (size > BTRFS_LEAF_DATA_SIZE(xa_data->root->fs_info) -
 	    sizeof(struct btrfs_item) - sizeof(struct btrfs_dir_item)) {
 		fprintf(stderr, "skip large xattr on objectid %llu name %.*s\n",
 			xa_data->target_oid, (int)xa_data->namelen,
@@ -714,7 +714,7 @@ static int reiserfs_xattr_direct_fn(reiserfs_filsys_t fs, __u64 position,
 	struct reiserfs_xattr_data *xa_data = data;
 	char *newbody;
 
-	if (size > BTRFS_LEAF_DATA_SIZE(xa_data->root) -
+	if (size > BTRFS_LEAF_DATA_SIZE(xa_data->root->fs_info) -
 	    sizeof(struct btrfs_item) - sizeof(struct btrfs_dir_item)) {
 		fprintf(stderr, "skip large xattr on objectid %llu name %.*s\n",
 			xa_data->target_oid, (int)xa_data->namelen,

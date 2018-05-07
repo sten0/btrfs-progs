@@ -1,5 +1,5 @@
 AC_INIT([btrfs-progs],
-	m4_esyscmd([./version.sh --configure]),
+	m4_chomp(m4_include([VERSION])),
 	[linux-btrfs@vger.kernel.org],,
 	[http://btrfs.wiki.kernel.org])
 
@@ -39,8 +39,11 @@ AC_CHECK_TOOL([AR], [ar])
 AC_PATH_PROG([RM], [rm], [rm])
 AC_PATH_PROG([RMDIR], [rmdir], [rmdir])
 
+
 AC_CHECK_FUNCS([openat], [],
 	[AC_MSG_ERROR([cannot find openat() function])])
+
+AC_CHECK_FUNCS([reallocarray])
 
 m4_ifndef([PKG_PROG_PKG_CONFIG],
   [m4_fatal([Could not locate the pkg-config autoconf
@@ -55,8 +58,8 @@ dnl
 dnl Calls pkg-config --static
 dnl
 AC_DEFUN([PKG_STATIC], [
-  if AC_RUN_LOG([pkg-config --exists --print-errors "$2"]); then
-    $1=`pkg-config --libs --static "$2"`
+  if AC_RUN_LOG([${PKG_CONFIG} --exists --print-errors "$2"]); then
+    $1=`${PKG_CONFIG} --libs --static "$2"`
     AC_SUBST([$1])
   else
     AC_MSG_ERROR([pkg-config description of $2, needed for static build, is not available])
@@ -88,13 +91,31 @@ AS_IF([test "x$enable_documentation" = xyes], [DISABLE_DOCUMENTATION=0], [DISABL
 AC_SUBST([DISABLE_DOCUMENTATION])
 
 dnl detect tools to build documentation
+ASCIIDOC_TOOL="none"
 if test "x$enable_documentation" = xyes; then
-	AC_PATH_PROG([ASCIIDOC], [asciidoc], [asciidoc])
-	AC_PATH_PROG([XMLTO], [xmlto], [xmlto])
+	AC_PATH_PROG([XMLTO], [xmlto])
+	if test -z "$XMLTO"; then
+		AC_MSG_ERROR([cannot find xmlto, cannot build documentation])
+	fi
+
 	AC_PATH_PROG([GZIP], [gzip], [gzip])
 	AC_PATH_PROG([MV], [mv], [mv])
 	AC_PROG_SED
+	AC_PATH_PROG([ASCIIDOC], [asciidoc])
+	AC_PATH_PROG([ASCIIDOCTOR], [asciidoctor])
+
+	dnl asciidoc is preferred
+	if test -n "$ASCIIDOC"; then
+		ASCIIDOC_TOOL="asciidoc"
+	else
+		if test -n "$ASCIIDOCTOR"; then
+			ASCIIDOC_TOOL="asciidoctor"
+		else
+			AC_MSG_ERROR([cannot find asciidoc or asciidoctor, cannot build documentation])
+		fi
+	fi
 fi
+AC_SUBST([ASCIIDOC_TOOL])
 
 AC_ARG_ENABLE([convert],
 	      AS_HELP_STRING([--disable-convert], [do not build btrfs-convert]),
@@ -183,13 +204,9 @@ PKG_CHECK_MODULES(ZLIB, [zlib])
 PKG_STATIC(ZLIB_LIBS_STATIC, [zlib])
 
 AC_ARG_ENABLE([zstd],
-	AS_HELP_STRING([--disable-zstd@<:@=yes@:>@], [build with zstd support (default: yes)]),
+	AS_HELP_STRING([--disable-zstd], [build without zstd support]),
 	[], [enable_zstd=yes]
 )
-
-if test "x$enable_zstd" = xauto; then
-	PKG_CHECK_EXISTS([libzstd >= 1.0.0], [enable_zstd=yes], [enable_zstd=no])
-fi
 
 if test "x$enable_zstd" = xyes; then
 	PKG_CHECK_MODULES(ZSTD, [libzstd >= 1.0.0])
@@ -199,12 +216,26 @@ fi
 AS_IF([test "x$enable_zstd" = xyes], [BTRFSRESTORE_ZSTD=1], [BTRFSRESTORE_ZSTD=0])
 AC_SUBST(BTRFSRESTORE_ZSTD)
 
+AC_ARG_ENABLE([python],
+	AS_HELP_STRING([--disable-python], [do not build libbtrfsutil Python bindings]),
+	[], [enable_python=yes]
+)
+
+if test "x$enable_python" = xyes; then
+	AM_PATH_PYTHON([3.4])
+	PKG_CHECK_MODULES(PYTHON, [python-${PYTHON_VERSION}])
+fi
+
+AS_IF([test "x$enable_python" = xyes], [PYTHON_BINDINGS=1], [PYTHON_BINDINGS=0])
+AC_SUBST(PYTHON_BINDINGS)
+AC_SUBST(PYTHON)
+
 # udev v190 introduced the btrfs builtin and a udev rule to use it.
 # Our udev rule gives us the friendly dm names but isn't required (or valid)
 # on earlier releases.
 UDEVDIR=
-if pkg-config udev --atleast-version 190; then
-	UDEVDIR="$(pkg-config udev --variable=udevdir)"
+if ${PKG_CONFIG} udev --atleast-version 190; then
+	UDEVDIR="$(${PKG_CONFIG} udev --variable=udevdir)"
 fi
 AC_SUBST(UDEVDIR)
 
@@ -250,9 +281,12 @@ AC_MSG_RESULT([
 	ldflags:            ${LDFLAGS}
 
 	documentation:      ${enable_documentation}
+	doc generator:      ${ASCIIDOC_TOOL}
 	backtrace support:  ${enable_backtrace}
 	btrfs-convert:      ${enable_convert} ${convertfs:+($convertfs)}
 	btrfs-restore zstd: ${enable_zstd}
+	Python bindings:    ${enable_python}
+	Python interpreter: ${PYTHON}
 
 	Type 'make' to compile.
 ])

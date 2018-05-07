@@ -6,8 +6,8 @@
 # We use separate inputs for tails and real blocks so we can determine
 # if there was a failure in copying either.
 
-source "$TOP/tests/common"
-source "$TOP/tests/common.convert"
+source "$TEST_TOP/common"
+source "$TEST_TOP/common.convert"
 
 if ! check_kernel_support_reiserfs >/dev/null; then
 	_not_run "no reiserfs support"
@@ -18,10 +18,9 @@ prepare_test_dev
 check_prereq btrfs-convert
 check_global_prereq md5sum
 check_global_prereq mkreiserfs
-check_global_prereq perl
 
-perl -e "print 'a'x8192;" > input
-perl -e "print 'b'x8192;" > input2
+printf "%0.sa" {1..8192} > input
+printf "%0.sb" {1..8192} > input2
 
 default_mkfs="mkreiserfs -b 4096"
 convert_test_preamble '' 'tail conversion test' 16k "$default_mkfs"

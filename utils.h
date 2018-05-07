@@ -122,6 +122,8 @@ int set_label(const char *btrfs_dev, const char *label);
 char *__strncpy_null(char *dest, const char *src, size_t n);
 int is_block_device(const char *file);
 int is_mount_point(const char *file);
+int is_path_exist(const char *file);
+int is_reg_file(const char *path);
 int check_arg_type(const char *input);
 int open_path_or_dev_mnt(const char *path, DIR **dirstream, int verbose);
 int btrfs_open(const char *path, DIR **dirstream, int verbose, int dir_only);
@@ -147,15 +149,9 @@ u64 disk_size(const char *path);
 u64 get_partition_size(const char *dev);
 
 int test_issubvolname(const char *name);
-int test_issubvolume(const char *path);
 int test_isdir(const char *path);
 
 const char *subvol_strip_mountpoint(const char *mnt, const char *full_path);
-int get_subvol_info(const char *fullpath, struct root_info *get_ri);
-int get_subvol_info_by_rootid(const char *mnt, struct root_info *get_ri,
-							u64 rootid_arg);
-int get_subvol_info_by_uuid(const char *mnt, struct root_info *get_ri,
-							u8 *uuid_arg);
 int find_next_key(struct btrfs_path *path, struct btrfs_key *key);
 const char* btrfs_group_type_str(u64 flag);
 const char* btrfs_group_profile_str(u64 flag);
@@ -170,6 +166,9 @@ int string_is_numerical(const char *str);
 int prefixcmp(const char *str, const char *prefix);
 
 unsigned long total_memory(void);
+
+void print_device_info(struct btrfs_device *device, char *prefix);
+void print_all_devices(struct list_head *devices);
 
 /*
  * Global program state, configurable by command line and available to

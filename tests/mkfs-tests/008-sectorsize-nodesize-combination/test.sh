@@ -4,7 +4,7 @@
 # only do mkfs and fsck check, no mounting as
 # sub/multi-pagesize is not supported yet
 
-source $TOP/tests/common
+source "$TEST_TOP/common"
 
 check_prereq mkfs.btrfs
 check_prereq btrfs
@@ -19,13 +19,13 @@ do_test()
 {
 	sectorsize=$1
 	nodesize=$2
-	run_mayfail $TOP/mkfs.btrfs -f -O $features -n $nodesize -s $sectorsize \
-		$TEST_DEV
+	run_mayfail "$TOP/mkfs.btrfs" -f -O "$features" -n "$nodesize" -s "$sectorsize" \
+		"$TEST_DEV"
 	ret=$?
-	if [ $ret == 0 ]; then
-		run_check $TOP/btrfs check $TEST_DEV
+	if [ "$ret" == 0 ]; then
+		run_check "$TOP/btrfs" check "$TEST_DEV"
 	fi
-	return $ret
+	return "$ret"
 }
 
 # Invalid: Unaligned sectorsize and nodesize

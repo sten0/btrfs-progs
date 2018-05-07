@@ -1,3 +1,67 @@
+btrfs-progs-4.16.1 (2018-04-24)
+  * remove obsolete tools: btrfs-debug-tree, btrfs-zero-log, btrfs-show-super,
+    btrfs-calc-size
+  * sb-mod: new debugging tool to edit superblock items
+  * mkfs: detect if thin-provisioned device does not have enough space
+  * check: don't try to verify checksums on metadata dump images
+  * build: fail documentation build if xmlto is not found
+  * build: fix build of btrfs.static
+
+btrfs-progs-4.16 (2018-04-06)
+  * libbtrfsutil - new LGPL library to wrap userspace functionality
+    * several 'btrfs' commands converted to use it:
+      * properties
+      * filesystem sync
+      * subvolume set-default/get-default/delete/show/sync
+    * python bindings, tests
+  * build
+    * use configured pkg-config path
+    * CI: add python, musl/clang, built dependencies caching
+    * convert: build fix for e2fsprogs 1.44+
+    * don't install library links with wrong permissions
+  * fixes
+    * prevent incorrect use of subvol_strip_mountpoint
+    * dump-super: don't verify csum for unknown type
+    * convert: fix inline extent creation condition
+  * check:
+    * lowmem: fix false alert for 'data extent backref lost for snapshot'
+    * lowmem: fix false alert for orphan inode
+    * lowmem: fix false alert for shared prealloc extents
+  * mkfs:
+    * add UUID and otime to root of FS_TREE - with the uuid, snapshots will
+      be now linked to the toplevel subvol by the parent UUID
+    * don't follow symlinks when calculating size
+    * pre-create the UUID tree
+    * fix --rootdir with selinux enabled
+  * dump-tree: add option to print only children nodes of a given block
+  * image: handle missing device for RAID1
+  * other
+    * new tests
+    * test script cleanups (quoting, helpers)
+    * tool to edit superblocks
+    * updated docs
+
+btrfs-progs-4.15.1 (2018-02-16)
+  * build
+    * fix build on musl
+    * support asciidoctor for doc generation
+  * cleanups
+    * sync some code with kernel
+    * check: move code to own directory, split to more files
+  * tests
+    * more build tests in travis
+    * tests now pass with asan and ubsan
+    * testsuite can be exported and used separately
+
+btrfs-progs-4.15 (2018-02-01)
+  * mkfs --rootdir reworked, does not minimize the final image but can be still
+    done using a new option --shrink
+  * fix allocation of system chunk, don't allocate from the reserved area
+  * other
+    * new and updated tests
+    * cleanups, refactoring
+    * doc updates
+
 btrfs-progs-4.14.1 (2018-01-05)
   * dump-tree: print times of root items
   * check: fix several lowmem mode bugs

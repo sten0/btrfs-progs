@@ -1,5 +1,5 @@
 btrfs-man5(5)
-==============
+=============
 
 NAME
 ----
@@ -14,9 +14,11 @@ tools.  Currently covers:
 
 2. filesystem features
 
-3. file attributes
+3. filesystem limits
 
-4. control device
+4. file attributes
+
+5. control device
 
 
 MOUNT OPTIONS
@@ -208,7 +210,7 @@ system at that point.
 Enable discarding of freed file blocks.  This is useful for SSD devices, thinly
 provisioned LUNs, or virtual machine images; however, every storage layer must
 support discard for it to work. if the backing device does not support
-asynchronous queued TRIM, then this operation can severly degrade performance,
+asynchronous queued TRIM, then this operation can severely degrade performance,
 because a synchronous TRIM operation will be attempted instead. Queued TRIM
 requires newer than SATA revision 3.1 chipsets and devices.
 
@@ -221,7 +223,7 @@ of actually discarding the blocks.
 
 If discarding is not necessary to be done at the block freeing time, there's
 `fstrim`(8) tool that lets the filesystem discard all free blocks in a batch,
-possibly not much interfering with other operations. Also, the the device may
+possibly not much interfering with other operations. Also, the device may
 ignore the TRIM command if the range is too small, so running the batch discard
 can actually discard the blocks.
 
@@ -287,7 +289,7 @@ checksums don't fit inside a single page.
 +
 Don't use this option unless you really need it. The inode number limit
 on 64bit system is 2^64^, which is practically enough for the whole filesystem
-lifetime. Due to implemention of linux VFS layer, the inode numbers on 32bit
+lifetime. Due to implementation of linux VFS layer, the inode numbers on 32bit
 systems are only 32 bits wide. This lowers the limit significantly and makes
 it possible to reach it. In such case, this mount option will help.
 Alternatively, files with high inode numbers can be copied to a new subvolume
@@ -413,7 +415,7 @@ will disable all SSD options.
 
 *subvol='path'*::
 Mount subvolume from 'path' rather than the toplevel subvolume. The
-'path' is always treated as relative to the the toplevel subvolume.
+'path' is always treated as relative to the toplevel subvolume.
 This mount option overrides the default subvolume set for the given filesystem.
 
 *subvolid='subvolid'*::
@@ -607,6 +609,40 @@ the filesystem contains or contained a raid56 profile of block groups
 (since: 3.10)
 +
 reduced-size metadata for extent references, saves a few percent of metadata
+
+
+FILESYSTEM LIMITS
+-----------------
+
+maximum file name length::
+255
+
+maximum symlink target length::
+depends on the 'nodesize' value, for 4k it's 3949 bytes, for larger nodesize
+it's 4095
++
+The symlink target may not be a valid path, ie the path name components
+can exceed the limits, there's no content validation at `symlink`(3) creation.
+
+maximum number of inodes::
+2^64^ but depends on the available metadata space as the inodes are created
+dynamically
+
+inode numbers::
+minimum number: 256 (for subvolumes), regular files and directories: 257
+
+maximum file length::
+inherent limit of btrfs is 2^64^ (16 EiB) but the linux VFS limit is 2^63^ (8 EiB)
+
+maximum number of subvolumes::
+2^64^ but depends on the available metadata space, the space consumed by all
+subvolume metadata includes bookeeping of the shared extents can be large (MiB,
+GiB)
+
+maximum number of hardlinks of a file in a directory::
+65536 when the `extref` feature is turned on during mkfs (default), roughly
+100 otherwise
+
 
 FILE ATTRIBUTES
 ---------------

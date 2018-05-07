@@ -916,9 +916,7 @@ static int make_convert_data_block_groups(struct btrfs_trans_handle *trans,
 			if (ret < 0)
 				break;
 			ret = btrfs_make_block_group(trans, fs_info, 0,
-					BTRFS_BLOCK_GROUP_DATA,
-					BTRFS_FIRST_CHUNK_TREE_OBJECTID,
-					cur, len);
+					BTRFS_BLOCK_GROUP_DATA, cur, len);
 			if (ret < 0)
 				break;
 			cur += len;
@@ -1028,7 +1026,7 @@ static int migrate_super_block(int fd, u64 old_bytenr)
 	BUG_ON(btrfs_super_bytenr(super) != old_bytenr);
 	btrfs_set_super_bytenr(super, BTRFS_SUPER_INFO_OFFSET);
 
-	csum_tree_block_size(buf, BTRFS_CRC32_SIZE, 0);
+	csum_tree_block_size(buf, btrfs_csum_sizes[BTRFS_CSUM_TYPE_CRC32], 0);
 	ret = pwrite(fd, buf->data, BTRFS_SUPER_INFO_SIZE,
 		BTRFS_SUPER_INFO_OFFSET);
 	if (ret != BTRFS_SUPER_INFO_SIZE)
@@ -1115,7 +1113,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		goto fail;
 	fd = open(devname, O_RDWR);
 	if (fd < 0) {
-		error("unable to open %s: %s", devname, strerror(errno));
+		error("unable to open %s: %m", devname);
 		goto fail;
 	}
 	btrfs_parse_features_to_string(features_buf, features);
@@ -1142,7 +1140,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	}
 
 	root = open_ctree_fd(fd, devname, mkfs_cfg.super_bytenr,
-			     OPEN_CTREE_WRITES | OPEN_CTREE_FS_PARTIAL);
+			     OPEN_CTREE_WRITES | OPEN_CTREE_TEMPORARY_SUPER);
 	if (!root) {
 		error("unable to open ctree");
 		goto fail;
@@ -1232,7 +1230,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	}
 
 	root = open_ctree_fd(fd, devname, 0,
-			OPEN_CTREE_WRITES | OPEN_CTREE_FS_PARTIAL);
+			     OPEN_CTREE_WRITES | OPEN_CTREE_TEMPORARY_SUPER);
 	if (!root) {
 		error("unable to open ctree for finalization");
 		goto fail;
@@ -1526,7 +1524,7 @@ static int do_rollback(const char *devname)
 	}
 	fd = open(devname, O_RDWR);
 	if (fd < 0) {
-		error("unable to open %s: %s", devname, strerror(errno));
+		error("unable to open %s: %m", devname);
 		ret = -EIO;
 		goto free_mem;
 	}

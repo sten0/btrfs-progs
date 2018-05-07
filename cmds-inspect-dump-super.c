@@ -339,7 +339,10 @@ static void dump_superblock(struct btrfs_super_block *sb, int full)
 	printf("csum\t\t\t0x");
 	for (i = 0, p = sb->csum; i < csum_size; i++)
 		printf("%02x", p[i]);
-	if (check_csum_sblock(sb, csum_size))
+	if (csum_type != BTRFS_CSUM_TYPE_CRC32 ||
+	    csum_size != btrfs_csum_sizes[BTRFS_CSUM_TYPE_CRC32])
+		printf(" [UNKNOWN CSUM TYPE OR SIZE]");
+	else if (check_csum_sblock(sb, csum_size))
 		printf(" [match]");
 	else
 		printf(" [DON'T MATCH]");
@@ -472,7 +475,7 @@ static int load_and_dump_sb(char *filename, int fd, u64 sb_bytenr, int full,
 
 		error("failed to read the superblock on %s at %llu",
 				filename, (unsigned long long)sb_bytenr);
-		error("error = '%s', errno = %d", strerror(errno), errno);
+		error("error = '%m', errno = %d", errno);
 		return 1;
 	}
 	printf("superblock: bytenr=%llu, device=%s\n", sb_bytenr, filename);
@@ -583,7 +586,7 @@ int cmd_inspect_dump_super(int argc, char **argv)
 		filename = argv[i];
 		fd = open(filename, O_RDONLY);
 		if (fd < 0) {
-			error("cannot open %s: %s", filename, strerror(errno));
+			error("cannot open %s: %m", filename);
 			ret = 1;
 			goto out;
 		}
