@@ -139,7 +139,8 @@ static int fill_inode_item(struct btrfs_trans_handle *trans,
 	}
 	if (S_ISREG(src->st_mode)) {
 		btrfs_set_stack_inode_size(dst, (u64)src->st_size);
-		if (src->st_size <= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info))
+		if (src->st_size <= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info) &&
+		    src->st_size < sectorsize)
 			btrfs_set_stack_inode_nbytes(dst, src->st_size);
 		else {
 			blocks = src->st_size / sectorsize;
@@ -248,7 +249,7 @@ static int add_xattr_item(struct btrfs_trans_handle *trans,
 		cur_name_len = strlen(cur_name);
 		next_location += cur_name_len + 1;
 
-		ret = getxattr(file_name, cur_name, cur_value, XATTR_SIZE_MAX);
+		ret = lgetxattr(file_name, cur_name, cur_value, XATTR_SIZE_MAX);
 		if (ret < 0) {
 			if (errno == ENOTSUP)
 				return 0;
@@ -327,7 +328,8 @@ static int add_file_items(struct btrfs_trans_handle *trans,
 	if (st->st_size % sectorsize)
 		blocks += 1;
 
-	if (st->st_size <= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info)) {
+	if (st->st_size <= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info) &&
+	    st->st_size < sectorsize) {
 		char *buffer = malloc(st->st_size);
 
 		if (!buffer) {
@@ -694,7 +696,7 @@ out:
 }
 
 static int ftw_add_entry_size(const char *fpath, const struct stat *st,
-			      int type)
+			      int type, struct FTW *ftwbuf)
 {
 	/*
 	 * Failed to read the directory, mostly due to EPERM.  Abort ASAP, so
@@ -729,7 +731,12 @@ u64 btrfs_mkfs_size_dir(const char *dir_name, u32 sectorsize, u64 min_dev_size,
 	fs_block_size = sectorsize;
 	ftw_data_size = 0;
 	ftw_meta_nr_inode = 0;
-	ret = ftw(dir_name, ftw_add_entry_size, 10);
+
+	/*
+	 * Symbolic link is not followed when creating files, so no need to
+	 * follow them here.
+	 */
+	ret = nftw(dir_name, ftw_add_entry_size, 10, FTW_PHYS);
 	if (ret < 0) {
 		error("ftw subdir walk of %s failed: %s", dir_name,
 			strerror(errno));

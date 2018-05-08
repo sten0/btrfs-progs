@@ -91,13 +91,14 @@ struct extent_buffer {
 	struct cache_extent cache_node;
 	u64 start;
 	u64 dev_bytenr;
-	u32 len;
 	struct extent_io_tree *tree;
 	struct list_head lru;
 	struct list_head recow;
+	u32 len;
 	int refs;
 	u32 flags;
 	int fd;
+	struct btrfs_fs_info *fs_info;
 	char data[] __attribute__((aligned(8)));
 };
 
@@ -145,7 +146,7 @@ struct extent_buffer *find_extent_buffer(struct extent_io_tree *tree,
 					 u64 bytenr, u32 blocksize);
 struct extent_buffer *find_first_extent_buffer(struct extent_io_tree *tree,
 					       u64 start);
-struct extent_buffer *alloc_extent_buffer(struct extent_io_tree *tree,
+struct extent_buffer *alloc_extent_buffer(struct btrfs_fs_info *fs_info,
 					  u64 bytenr, u32 blocksize);
 struct extent_buffer *btrfs_clone_extent_buffer(struct extent_buffer *src);
 void free_extent_buffer(struct extent_buffer *eb);

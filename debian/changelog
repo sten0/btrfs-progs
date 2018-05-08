@@ -1,3 +1,9 @@
+btrfs-progs (4.16.1-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 08 May 2018 14:17:03 -0700
+
 btrfs-progs (4.15.1-2) unstable; urgency=medium
 
   * If libzstd is provided in both deb & udeb variants (such as Ubuntu
