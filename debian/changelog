@@ -1,6 +1,11 @@
 btrfs-progs (4.16.1-1) unstable; urgency=medium
 
   * New upstream release.
+  * Drop transitional btrfs-tools package.
+  * Drop cross.patch, similar change done upstream.
+  * Package without libbtrfsutils, or python bindings for now, as these
+    appear to be statically linked only. Clarification is sought from
+    linux-btrfs mailing list if these should be publically exposed or not.
 
  -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 08 May 2018 14:17:03 -0700
 
