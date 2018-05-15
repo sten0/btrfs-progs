@@ -1,3 +1,10 @@
+btrfs-progs (4.16.1-2) unstable; urgency=medium
+
+  * Do not copy_exec btrfs-zero-log into initramfs, superseeded by `btrfs
+    rescue zero-log` sub-command. Closes: #898720, #898719.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 15 May 2018 14:15:27 +0100
+
 btrfs-progs (4.16.1-1) unstable; urgency=medium
 
   * New upstream release.
