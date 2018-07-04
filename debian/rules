@@ -15,7 +15,7 @@ CFLAGS := $(patsubst -O2,-Os,$(CFLAGS))
 ZSTD := $(shell grep '^udeb: ' /var/lib/dpkg/info/libzstd*.shlibs)
 
 %:
-	dh ${@} --with bash-completion
+	dh ${@} --with bash-completion,python3
 
 override_dh_autoreconf:
 	dh_autoreconf ./autogen.sh
@@ -31,7 +31,7 @@ override_dh_auto_build:
 	dh_auto_build -- V=1
 
 override_dh_auto_install:
-	dh_auto_install --destdir=debian/btrfs-progs
+	dh_auto_install -- install install_python
 
 	# Adding initramfs-tools integration
 	install -D -m 0755 debian/local/btrfs.hook debian/btrfs-progs/usr/share/initramfs-tools/hooks/btrfs
@@ -39,6 +39,10 @@ override_dh_auto_install:
 
 # Needs autopkgtest
 override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	dh_missing --list-missing
 
 override_dh_strip:
 	dh_strip --dbgsym-migration='btrfs-progs (<< 4.11.1+dfsg-1~)'

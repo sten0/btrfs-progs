@@ -1,1 +1,3 @@
-ioctl.h                /usr/include/btrfs
+lib/
+bin/
+usr/share/

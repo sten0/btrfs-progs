@@ -1,4 +1,4 @@
-Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Contact: linux-btrfs@vger.kernel.org
 Source: https://git.kernel.org/pub/scm/linux/kernel/git/kdave/btrfs-progs.git
 

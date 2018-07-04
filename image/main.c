@@ -119,11 +119,11 @@ static struct extent_buffer *alloc_dummy_eb(u64 bytenr, u32 size);
 
 static void csum_block(u8 *buf, size_t len)
 {
-	u8 result[BTRFS_CRC32_SIZE];
+	u8 result[btrfs_csum_sizes[BTRFS_CSUM_TYPE_CRC32]];
 	u32 crc = ~(u32)0;
 	crc = crc32c(crc, buf + BTRFS_CSUM_SIZE, len - BTRFS_CSUM_SIZE);
 	btrfs_csum_final(crc, result);
-	memcpy(buf, result, BTRFS_CRC32_SIZE);
+	memcpy(buf, result, btrfs_csum_sizes[BTRFS_CSUM_TYPE_CRC32]);
 }
 
 static int has_name(struct btrfs_key *key)
@@ -571,7 +571,7 @@ static int read_data_extent(struct metadump_struct *md,
 	num_copies = btrfs_num_copies(root->fs_info, logical, bytes_left);
 
 	/* Try our best to read data, just like read_tree_block() */
-	for (cur_mirror = 0; cur_mirror < num_copies; cur_mirror++) {
+	for (cur_mirror = 1; cur_mirror <= num_copies; cur_mirror++) {
 		while (bytes_left) {
 			read_len = bytes_left;
 			ret = read_extent_data(fs_info,

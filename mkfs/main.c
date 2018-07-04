@@ -315,6 +315,7 @@ static int create_tree(struct btrfs_trans_handle *trans,
 	struct btrfs_key location;
 	struct btrfs_root_item root_item;
 	struct extent_buffer *tmp;
+	u8 uuid[BTRFS_UUID_SIZE] = {0};
 	int ret;
 
 	ret = btrfs_copy_root(trans, root, root->node, &tmp, objectid);
@@ -325,6 +326,10 @@ static int create_tree(struct btrfs_trans_handle *trans,
 	btrfs_set_root_bytenr(&root_item, tmp->start);
 	btrfs_set_root_level(&root_item, btrfs_header_level(tmp));
 	btrfs_set_root_generation(&root_item, trans->transid);
+	/* clear uuid and o/ctime of source tree */
+	memcpy(root_item.uuid, uuid, BTRFS_UUID_SIZE);
+	btrfs_set_stack_timespec_sec(&root_item.otime, 0);
+	btrfs_set_stack_timespec_sec(&root_item.ctime, 0);
 	free_extent_buffer(tmp);
 
 	location.objectid = objectid;
@@ -1094,7 +1099,7 @@ int main(int argc, char **argv)
 	}
 
 	fs_info = open_ctree_fs_info(file, 0, 0, 0,
-			OPEN_CTREE_WRITES | OPEN_CTREE_FS_PARTIAL);
+			OPEN_CTREE_WRITES | OPEN_CTREE_TEMPORARY_SUPER);
 	if (!fs_info) {
 		error("open ctree failed");
 		goto error;
@@ -1203,6 +1208,11 @@ raid_groups:
 		goto out;
 	}
 
+	ret = create_tree(trans, root, BTRFS_UUID_TREE_OBJECTID);
+	if (ret)
+		warning(
+	"unable to create uuid tree, will be created after mount: %d", ret);
+
 	ret = btrfs_commit_transaction(trans, root);
 	if (ret) {
 		error("unable to commit transaction: %d", ret);
@@ -1283,6 +1293,12 @@ out:
 			if (is_block_device(file) == 1)
 				btrfs_register_one_device(file);
 		}
+	}
+
+	if (!ret && close_ret) {
+		ret = close_ret;
+		error("failed to close ctree, the filesystem may be inconsistent: %d",
+		      ret);
 	}
 
 	btrfs_close_all_devices();

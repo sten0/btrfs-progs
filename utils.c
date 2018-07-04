@@ -40,6 +40,8 @@
 #include <linux/magic.h>
 #include <getopt.h>
 
+#include <btrfsutil.h>
+
 #include "kerncompat.h"
 #include "radix-tree.h"
 #include "ctree.h"
@@ -1048,7 +1050,7 @@ int btrfs_device_already_in_root(struct btrfs_root *root, int fd,
 	 * structures.
 	 */
 	if (btrfs_super_magic(disk_super) != BTRFS_MAGIC &&
-			btrfs_super_magic(disk_super) != BTRFS_MAGIC_PARTIAL)
+			btrfs_super_magic(disk_super) != BTRFS_MAGIC_TEMPORARY)
 		goto brelse;
 
 	if (!memcmp(disk_super->fsid, root->fs_info->super_copy->fsid,
@@ -1453,6 +1455,7 @@ u64 parse_qgroupid(const char *p)
 	char *s = strchr(p, '/');
 	const char *ptr_src_end = p + strlen(p);
 	char *ptr_parse_end = NULL;
+	enum btrfs_util_error err;
 	u64 level;
 	u64 id;
 	int fd;
@@ -1480,8 +1483,8 @@ u64 parse_qgroupid(const char *p)
 
 path:
 	/* Path format like subv at 'my_subvol' is the fallback case */
-	ret = test_issubvolume(p);
-	if (ret < 0 || !ret)
+	err = btrfs_util_is_subvolume(p);
+	if (err)
 		goto err;
 	fd = open(p, O_RDONLY);
 	if (fd < 0)
@@ -2451,161 +2454,21 @@ int test_issubvolname(const char *name)
 		strcmp(name, ".") && strcmp(name, "..");
 }
 
-/*
- * Test if path is a subvolume
- * Returns:
- *   0 - path exists but it is not a subvolume
- *   1 - path exists and it is  a subvolume
- * < 0 - error
- */
-int test_issubvolume(const char *path)
-{
-	struct stat	st;
-	struct statfs stfs;
-	int		res;
-
-	res = stat(path, &st);
-	if (res < 0)
-		return -errno;
-
-	if (st.st_ino != BTRFS_FIRST_FREE_OBJECTID || !S_ISDIR(st.st_mode))
-		return 0;
-
-	res = statfs(path, &stfs);
-	if (res < 0)
-		return -errno;
-
-	return (int)stfs.f_type == BTRFS_SUPER_MAGIC;
-}
-
 const char *subvol_strip_mountpoint(const char *mnt, const char *full_path)
 {
 	int len = strlen(mnt);
 	if (!len)
 		return full_path;
 
+	if ((strncmp(mnt, full_path, len) != 0) || (full_path[len] != '/')) {
+		error("not on mount point: %s", mnt);
+		exit(1);
+	}
+
 	if (mnt[len - 1] != '/')
 		len += 1;
 
 	return full_path + len;
-}
-
-/*
- * Returns
- * <0: Std error
- * 0: All fine
- * 1: Error; and error info printed to the terminal. Fixme.
- * 2: If the fullpath is root tree instead of subvol tree
- */
-int get_subvol_info(const char *fullpath, struct root_info *get_ri)
-{
-	u64 sv_id;
-	int ret = 1;
-	int fd = -1;
-	int mntfd = -1;
-	char *mnt = NULL;
-	const char *svpath = NULL;
-	DIR *dirstream1 = NULL;
-	DIR *dirstream2 = NULL;
-
-	ret = test_issubvolume(fullpath);
-	if (ret < 0)
-		return ret;
-	if (!ret) {
-		error("not a subvolume: %s", fullpath);
-		return 1;
-	}
-
-	ret = find_mount_root(fullpath, &mnt);
-	if (ret < 0)
-		return ret;
-	if (ret > 0) {
-		error("%s doesn't belong to btrfs mount point", fullpath);
-		return 1;
-	}
-	ret = 1;
-	svpath = subvol_strip_mountpoint(mnt, fullpath);
-
-	fd = btrfs_open_dir(fullpath, &dirstream1, 1);
-	if (fd < 0)
-		goto out;
-
-	ret = btrfs_list_get_path_rootid(fd, &sv_id);
-	if (ret)
-		goto out;
-
-	mntfd = btrfs_open_dir(mnt, &dirstream2, 1);
-	if (mntfd < 0)
-		goto out;
-
-	memset(get_ri, 0, sizeof(*get_ri));
-	get_ri->root_id = sv_id;
-
-	if (sv_id == BTRFS_FS_TREE_OBJECTID)
-		ret = btrfs_get_toplevel_subvol(mntfd, get_ri);
-	else
-		ret = btrfs_get_subvol(mntfd, get_ri);
-	if (ret)
-		error("can't find '%s': %d", svpath, ret);
-
-out:
-	close_file_or_dir(mntfd, dirstream2);
-	close_file_or_dir(fd, dirstream1);
-	free(mnt);
-
-	return ret;
-}
-
-int get_subvol_info_by_rootid(const char *mnt, struct root_info *get_ri, u64 r_id)
-{
-	int fd;
-	int ret;
-	DIR *dirstream = NULL;
-
-	fd = btrfs_open_dir(mnt, &dirstream, 1);
-	if (fd < 0)
-		return -EINVAL;
-
-	memset(get_ri, 0, sizeof(*get_ri));
-	get_ri->root_id = r_id;
-
-	if (r_id == BTRFS_FS_TREE_OBJECTID)
-		ret = btrfs_get_toplevel_subvol(fd, get_ri);
-	else
-		ret = btrfs_get_subvol(fd, get_ri);
-
-	if (ret)
-		error("can't find rootid '%llu' on '%s': %d", r_id, mnt, ret);
-
-	close_file_or_dir(fd, dirstream);
-
-	return ret;
-}
-
-int get_subvol_info_by_uuid(const char *mnt, struct root_info *get_ri, u8 *uuid_arg)
-{
-	int fd;
-	int ret;
-	DIR *dirstream = NULL;
-
-	fd = btrfs_open_dir(mnt, &dirstream, 1);
-	if (fd < 0)
-		return -EINVAL;
-
-	memset(get_ri, 0, sizeof(*get_ri));
-	uuid_copy(get_ri->uuid, uuid_arg);
-
-	ret = btrfs_get_subvol(fd, get_ri);
-	if (ret) {
-		char uuid_parsed[BTRFS_UUID_UNPARSED_SIZE];
-		uuid_unparse(uuid_arg, uuid_parsed);
-		error("can't find uuid '%s' on '%s': %d",
-					uuid_parsed, mnt, ret);
-	}
-
-	close_file_or_dir(fd, dirstream);
-
-	return ret;
 }
 
 /* Set the seed manually */

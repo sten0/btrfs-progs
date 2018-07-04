@@ -350,8 +350,7 @@ static int convert_direct(struct btrfs_trans_handle *trans,
 	if (ret)
 		return ret;
 
-	eb = alloc_extent_buffer(&root->fs_info->extent_cache, key.objectid,
-				 sectorsize);
+	eb = alloc_extent_buffer(root->fs_info, key.objectid, sectorsize);
 
 	if (!eb)
 		return -ENOMEM;
@@ -376,7 +375,8 @@ static int reiserfs_convert_tail(struct btrfs_trans_handle *trans,
 	u64 isize;
 	int ret;
 
-	if (length >= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info))
+	if (length >= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info) ||
+	    length >= root->fs_info->sectorsize)
 		return convert_direct(trans, root, objectid, inode, body,
 				      length, offset, convert_flags);
 

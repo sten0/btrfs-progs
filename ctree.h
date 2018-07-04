@@ -45,10 +45,12 @@ struct btrfs_free_space_ctl;
 #define BTRFS_MAGIC 0x4D5F53665248425FULL /* ascii _BHRfS_M, no null */
 
 /*
- * Fake signature for an unfinalized filesystem, structures might be partially
- * created or missing.
+ * Fake signature for an unfinalized filesystem, which only has barebone tree
+ * structures (normally 6 near empty trees, on SINGLE meta/sys temporary chunks)
+ *
+ * ascii !BHRfS_M, no null
  */
-#define BTRFS_MAGIC_PARTIAL 0x4D5F536652484221ULL /* ascii !BHRfS_M, no null */
+#define BTRFS_MAGIC_TEMPORARY 0x4D5F536652484221ULL
 
 #define BTRFS_MAX_MIRRORS 3
 
@@ -167,10 +169,9 @@ struct btrfs_free_space_ctl;
 /* csum types */
 #define BTRFS_CSUM_TYPE_CRC32	0
 
+/* four bytes for CRC32 */
 static int btrfs_csum_sizes[] = { 4 };
 
-/* four bytes for CRC32 */
-#define BTRFS_CRC32_SIZE 4
 #define BTRFS_EMPTY_DIR_SIZE 0
 
 #define BTRFS_FT_UNKNOWN	0
@@ -958,7 +959,17 @@ struct btrfs_csum_item {
 #define BTRFS_BLOCK_GROUP_RAID5    	(1ULL << 7)
 #define BTRFS_BLOCK_GROUP_RAID6    	(1ULL << 8)
 #define BTRFS_BLOCK_GROUP_RESERVED	BTRFS_AVAIL_ALLOC_BIT_SINGLE
-#define BTRFS_NR_RAID_TYPES             7
+
+enum btrfs_raid_types {
+	BTRFS_RAID_RAID10,
+	BTRFS_RAID_RAID1,
+	BTRFS_RAID_DUP,
+	BTRFS_RAID_RAID0,
+	BTRFS_RAID_SINGLE,
+	BTRFS_RAID_RAID5,
+	BTRFS_RAID_RAID6,
+	BTRFS_NR_RAID_TYPES
+};
 
 #define BTRFS_BLOCK_GROUP_TYPE_MASK	(BTRFS_BLOCK_GROUP_DATA |    \
 					 BTRFS_BLOCK_GROUP_SYSTEM |  \
@@ -2653,7 +2664,8 @@ static inline int btrfs_next_item(struct btrfs_root *root,
 }
 
 int btrfs_prev_leaf(struct btrfs_root *root, struct btrfs_path *path);
-int btrfs_leaf_free_space(struct btrfs_root *root, struct extent_buffer *leaf);
+int btrfs_leaf_free_space(struct btrfs_fs_info *fs_info,
+			  struct extent_buffer *leaf);
 void btrfs_fixup_low_keys(struct btrfs_root *root, struct btrfs_path *path,
 			  struct btrfs_disk_key *key, int level);
 int btrfs_set_item_key_safe(struct btrfs_root *root, struct btrfs_path *path,

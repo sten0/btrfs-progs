@@ -1,8 +1,18 @@
-btrfs-progs (4.15.1-2~bpo9+1) stretch-backports; urgency=medium
+btrfs-progs (4.16.1-2) unstable; urgency=medium
 
-  * Rebuild for stretch-backports.
+  * Do not copy_exec btrfs-zero-log into initramfs, superseeded by `btrfs
+    rescue zero-log` sub-command. Closes: #898720, #898719.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 27 Apr 2018 20:48:43 -0400
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 15 May 2018 14:15:27 +0100
+
+btrfs-progs (4.16.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Drop transitional btrfs-tools package.
+  * Drop cross.patch, similar change done upstream.
+  * Package libbtrfs, libbtrfsutil, and python bindings.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 08 May 2018 14:17:03 -0700
 
 btrfs-progs (4.15.1-2) unstable; urgency=medium
 
