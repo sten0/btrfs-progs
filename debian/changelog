@@ -1,3 +1,9 @@
+btrfs-progs (4.16.1-2~bpo9+1) stretch-backports; urgency=medium
+
+  * Rebuild for stretch-backports.
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Wed, 04 Jul 2018 17:45:30 -0400
+
 btrfs-progs (4.16.1-2) unstable; urgency=medium
 
   * Do not copy_exec btrfs-zero-log into initramfs, superseeded by `btrfs
