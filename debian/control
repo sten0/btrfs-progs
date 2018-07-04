@@ -3,7 +3,7 @@ Section: admin
 Priority: optional
 Maintainer: Dimitri John Ledkov <xnox@debian.org>
 Uploaders: Dimitri John Ledkov <xnox@ubuntu.com>
-Build-Depends: debhelper (>= 11),
+Build-Depends: debhelper (>= 11~),
                e2fslibs-dev,
                pkg-config,
                libacl1-dev,
