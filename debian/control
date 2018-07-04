@@ -104,3 +104,10 @@ Architecture: linux-any
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Provides: btrfs-tools-udeb
 Description: Checksumming Copy on Write Filesystem utilities (udeb)
+
+Package: btrfs-tools
+Section: oldlibs
+Architecture: linux-any
+Depends: btrfs-progs, ${misc:Depends}, ${shlibs:Depends}
+Description: transitional dummy package
+ This is a transitional dummy package. It can safely be removed.
