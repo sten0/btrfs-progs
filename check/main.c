@@ -560,6 +560,8 @@ static void print_inode_error(struct btrfs_root *root, struct inode_record *rec)
 		fprintf(stderr, ", bad file extent");
 	if (errors & I_ERR_FILE_EXTENT_OVERLAP)
 		fprintf(stderr, ", file extent overlap");
+	if (errors & I_ERR_FILE_EXTENT_TOO_LARGE)
+		fprintf(stderr, ", inline file extent too large");
 	if (errors & I_ERR_FILE_EXTENT_DISCOUNT)
 		fprintf(stderr, ", file extent discount");
 	if (errors & I_ERR_DIR_ISIZE_WRONG)
@@ -1433,6 +1435,8 @@ static int process_file_extent(struct btrfs_root *root,
 	u64 disk_bytenr = 0;
 	u64 extent_offset = 0;
 	u64 mask = root->fs_info->sectorsize - 1;
+	u32 max_inline_size = min_t(u32, mask,
+				BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info));
 	int extent_type;
 	int ret;
 
@@ -1458,9 +1462,21 @@ static int process_file_extent(struct btrfs_root *root,
 	extent_type = btrfs_file_extent_type(eb, fi);
 
 	if (extent_type == BTRFS_FILE_EXTENT_INLINE) {
+		u8 compression = btrfs_file_extent_compression(eb, fi);
+		struct btrfs_item *item = btrfs_item_nr(slot);
+
 		num_bytes = btrfs_file_extent_inline_len(eb, slot, fi);
 		if (num_bytes == 0)
 			rec->errors |= I_ERR_BAD_FILE_EXTENT;
+		if (compression) {
+			if (btrfs_file_extent_inline_item_len(eb, item) >
+			    max_inline_size ||
+			    num_bytes > root->fs_info->sectorsize)
+				rec->errors |= I_ERR_FILE_EXTENT_TOO_LARGE;
+		} else {
+			if (num_bytes > max_inline_size)
+				rec->errors |= I_ERR_FILE_EXTENT_TOO_LARGE;
+		}
 		rec->found_size += num_bytes;
 		num_bytes = (num_bytes + mask) & ~mask;
 	} else if (extent_type == BTRFS_FILE_EXTENT_REG ||
@@ -1511,8 +1527,15 @@ static int process_file_extent(struct btrfs_root *root,
 			if (found < num_bytes)
 				rec->some_csum_missing = 1;
 		} else if (extent_type == BTRFS_FILE_EXTENT_PREALLOC) {
-			if (found > 0)
-				rec->errors |= I_ERR_ODD_CSUM_ITEM;
+			if (found > 0) {
+				ret = check_prealloc_extent_written(root->fs_info,
+								    disk_bytenr,
+								    num_bytes);
+				if (ret < 0)
+					return ret;
+				if (ret == 0)
+					rec->errors |= I_ERR_ODD_CSUM_ITEM;
+			}
 		}
 	}
 	return 0;
@@ -5339,7 +5362,9 @@ static int check_space_cache(struct btrfs_root *root)
 			error += ret;
 		} else {
 			ret = load_free_space_cache(root->fs_info, cache);
-			if (!ret)
+			if (ret < 0)
+				error++;
+			if (ret <= 0)
 				continue;
 		}
 
@@ -5576,6 +5601,7 @@ static int check_csums(struct btrfs_root *root)
 	int ret;
 	u64 data_len;
 	unsigned long leaf_offset;
+	bool verify_csum = !!check_data_csum;
 
 	root = root->fs_info->csum_root;
 	if (!extent_buffer_uptodate(root->node)) {
@@ -5598,6 +5624,16 @@ static int check_csums(struct btrfs_root *root)
 		path.slots[0]--;
 	ret = 0;
 
+	/*
+	 * For metadata dump (btrfs-image) all data is wiped so verifying data
+	 * csum is meaningless and will always report csum error.
+	 */
+	if (check_data_csum && (btrfs_super_flags(root->fs_info->super_copy) &
+	    (BTRFS_SUPER_FLAG_METADUMP | BTRFS_SUPER_FLAG_METADUMP_V2))) {
+		printf("skip data csum verification for metadata dump\n");
+		verify_csum = false;
+	}
+
 	while (1) {
 		if (path.slots[0] >= btrfs_header_nritems(path.nodes[0])) {
 			ret = btrfs_next_leaf(root, &path);
@@ -5619,7 +5655,7 @@ static int check_csums(struct btrfs_root *root)
 
 		data_len = (btrfs_item_size_nr(leaf, path.slots[0]) /
 			      csum_size) * root->fs_info->sectorsize;
-		if (!check_data_csum)
+		if (!verify_csum)
 			goto skip_csum_check;
 		leaf_offset = btrfs_item_ptr_offset(leaf, path.slots[0]);
 		ret = check_extent_csums(root, key.offset, data_len,
@@ -5934,7 +5970,7 @@ static int run_next_block(struct btrfs_root *root,
 		goto out;
 
 	if (btrfs_is_leaf(buf)) {
-		btree_space_waste += btrfs_leaf_free_space(root, buf);
+		btree_space_waste += btrfs_leaf_free_space(fs_info, buf);
 		for (i = 0; i < nritems; i++) {
 			struct btrfs_file_extent_item *fi;
 
@@ -6078,12 +6114,7 @@ static int run_next_block(struct btrfs_root *root,
 		}
 	} else {
 		int level;
-		struct btrfs_key first_key;
 
-		first_key.objectid = 0;
-
-		if (nritems > 0)
-			btrfs_item_key_to_cpu(buf, &first_key, 0);
 		level = btrfs_header_level(buf);
 		for (i = 0; i < nritems; i++) {
 			struct extent_record tmpl;
@@ -7636,28 +7667,6 @@ repair_abort:
 	if (err)
 		err = -EIO;
 	return err;
-}
-
-u64 calc_stripe_length(u64 type, u64 length, int num_stripes)
-{
-	u64 stripe_size;
-
-	if (type & BTRFS_BLOCK_GROUP_RAID0) {
-		stripe_size = length;
-		stripe_size /= num_stripes;
-	} else if (type & BTRFS_BLOCK_GROUP_RAID10) {
-		stripe_size = length * 2;
-		stripe_size /= num_stripes;
-	} else if (type & BTRFS_BLOCK_GROUP_RAID5) {
-		stripe_size = length;
-		stripe_size /= (num_stripes - 1);
-	} else if (type & BTRFS_BLOCK_GROUP_RAID6) {
-		stripe_size = length;
-		stripe_size /= (num_stripes - 2);
-	} else {
-		stripe_size = length;
-	}
-	return stripe_size;
 }
 
 /*

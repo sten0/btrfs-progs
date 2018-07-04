@@ -116,7 +116,7 @@ static int setup_temp_super(int fd, struct btrfs_mkfs_config *cfg,
 
 	btrfs_set_super_bytenr(super, cfg->super_bytenr);
 	btrfs_set_super_num_devices(super, 1);
-	btrfs_set_super_magic(super, BTRFS_MAGIC_PARTIAL);
+	btrfs_set_super_magic(super, BTRFS_MAGIC_TEMPORARY);
 	btrfs_set_super_generation(super, 1);
 	btrfs_set_super_root(super, root_bytenr);
 	btrfs_set_super_chunk_root(super, chunk_bytenr);
@@ -219,7 +219,7 @@ static inline int write_temp_extent_buffer(int fd, struct extent_buffer *buf,
 {
 	int ret;
 
-	csum_tree_block_size(buf, BTRFS_CRC32_SIZE, 0);
+	csum_tree_block_size(buf, btrfs_csum_sizes[BTRFS_CSUM_TYPE_CRC32], 0);
 
 	/* Temporary extent buffer is always mapped 1:1 on disk */
 	ret = pwrite(fd, buf->data, buf->len, bytenr);

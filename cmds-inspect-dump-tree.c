@@ -33,8 +33,9 @@
 #include "utils.h"
 #include "help.h"
 
-static void print_extents(struct btrfs_root *root, struct extent_buffer *eb)
+static void print_extents(struct extent_buffer *eb)
 {
+	struct btrfs_fs_info *fs_info = eb->fs_info;
 	struct extent_buffer *next;
 	int i;
 	u32 nr;
@@ -43,13 +44,13 @@ static void print_extents(struct btrfs_root *root, struct extent_buffer *eb)
 		return;
 
 	if (btrfs_is_leaf(eb)) {
-		btrfs_print_leaf(root, eb);
+		btrfs_print_leaf(eb);
 		return;
 	}
 
 	nr = btrfs_header_nritems(eb);
 	for (i = 0; i < nr; i++) {
-		next = read_tree_block(root->fs_info,
+		next = read_tree_block(fs_info,
 				btrfs_node_blockptr(eb, i),
 				btrfs_node_ptr_generation(eb, i));
 		if (!extent_buffer_uptodate(next))
@@ -68,7 +69,7 @@ static void print_extents(struct btrfs_root *root, struct extent_buffer *eb)
 				btrfs_header_level(eb));
 			goto out;
 		}
-		print_extents(root, next);
+		print_extents(next);
 		free_extent_buffer(next);
 	}
 
@@ -198,6 +199,7 @@ const char * const cmd_inspect_dump_tree_usage[] = {
 	"-u|--uuid              print only the uuid tree",
 	"-b|--block <block_num> print info from the specified block only",
 	"-t|--tree <tree_id>    print only tree with the given id (string or number)",
+	"--follow               use with -b, to show all children tree blocks of <block_num>",
 	NULL
 };
 
@@ -219,13 +221,23 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 	int uuid_tree_only = 0;
 	int roots_only = 0;
 	int root_backups = 0;
-	unsigned open_ctree_flags = OPEN_CTREE_FS_PARTIAL;
+	unsigned open_ctree_flags;
 	u64 block_only = 0;
 	struct btrfs_root *tree_root_scan;
 	u64 tree_id = 0;
+	bool follow = false;
 
+	/*
+	 * For debug-tree, we care nothing about extent tree (it's just backref
+	 * and usage accounting, only makes sense for RW operations).
+	 * Use NO_BLOCK_GROUPS here could also speedup open_ctree() and allow us
+	 * to inspect fs with corrupted extent tree blocks, and show as many good
+	 * tree blocks as possible.
+	 */
+	open_ctree_flags = OPEN_CTREE_PARTIAL | OPEN_CTREE_NO_BLOCK_GROUPS;
 	while (1) {
 		int c;
+		enum { GETOPT_VAL_FOLLOW = 256 };
 		static const struct option long_options[] = {
 			{ "extents", no_argument, NULL, 'e'},
 			{ "device", no_argument, NULL, 'd'},
@@ -234,6 +246,7 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 			{ "uuid", no_argument, NULL, 'u'},
 			{ "block", required_argument, NULL, 'b'},
 			{ "tree", required_argument, NULL, 't'},
+			{ "follow", no_argument, NULL, GETOPT_VAL_FOLLOW },
 			{ NULL, 0, NULL, 0 }
 		};
 
@@ -286,6 +299,9 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 			}
 			break;
 			}
+		case GETOPT_VAL_FOLLOW:
+			follow = true;
+			break;
 		default:
 			usage(cmd_inspect_dump_tree_usage);
 		}
@@ -324,7 +340,7 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 				(unsigned long long)block_only);
 			goto close_root;
 		}
-		btrfs_print_tree(root, leaf, 0);
+		btrfs_print_tree(leaf, follow);
 		free_extent_buffer(leaf);
 		goto close_root;
 	}
@@ -351,20 +367,17 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 		} else {
 			if (info->tree_root->node) {
 				printf("root tree\n");
-				btrfs_print_tree(info->tree_root,
-						 info->tree_root->node, 1);
+				btrfs_print_tree(info->tree_root->node, 1);
 			}
 
 			if (info->chunk_root->node) {
 				printf("chunk tree\n");
-				btrfs_print_tree(info->chunk_root,
-						 info->chunk_root->node, 1);
+				btrfs_print_tree(info->chunk_root->node, 1);
 			}
 
 			if (info->log_root_tree) {
 				printf("log root tree\n");
-				btrfs_print_tree(info->log_root_tree,
-						info->log_root_tree->node, 1);
+				btrfs_print_tree(info->log_root_tree->node, 1);
 			}
 		}
 	}
@@ -384,7 +397,7 @@ again:
 			goto close_root;
 		}
 		printf("root tree\n");
-		btrfs_print_tree(info->tree_root, info->tree_root->node, 1);
+		btrfs_print_tree(info->tree_root->node, 1);
 		goto close_root;
 	}
 
@@ -394,7 +407,7 @@ again:
 			goto close_root;
 		}
 		printf("chunk tree\n");
-		btrfs_print_tree(info->chunk_root, info->chunk_root->node, 1);
+		btrfs_print_tree(info->chunk_root->node, 1);
 		goto close_root;
 	}
 
@@ -404,8 +417,7 @@ again:
 			goto close_root;
 		}
 		printf("log root tree\n");
-		btrfs_print_tree(info->log_root_tree, info->log_root_tree->node,
-				 1);
+		btrfs_print_tree(info->log_root_tree->node, 1);
 		goto close_root;
 	}
 
@@ -541,7 +553,7 @@ again:
 				printf(" tree ");
 				btrfs_print_key(&disk_key);
 				printf("\n");
-				print_extents(tree_root_scan, buf);
+				print_extents(buf);
 			} else if (!skip) {
 				printf(" tree ");
 				btrfs_print_key(&disk_key);
@@ -551,7 +563,7 @@ again:
 					       btrfs_header_level(buf));
 				} else {
 					printf(" \n");
-					btrfs_print_tree(tree_root_scan, buf, 1);
+					btrfs_print_tree(buf, 1);
 				}
 			}
 			free_extent_buffer(buf);

@@ -20,6 +20,8 @@
 #include <unistd.h>
 #include <getopt.h>
 
+#include <btrfsutil.h>
+
 #include "ctree.h"
 #include "ioctl.h"
 
@@ -299,6 +301,7 @@ static int cmd_qgroup_show(int argc, char **argv)
 	int filter_flag = 0;
 	unsigned unit_mode;
 	int sync = 0;
+	enum btrfs_util_error err;
 
 	struct btrfs_qgroup_comparer_set *comparer_set;
 	struct btrfs_qgroup_filter_set *filter_set;
@@ -372,9 +375,10 @@ static int cmd_qgroup_show(int argc, char **argv)
 	}
 
 	if (sync) {
-		ret = ioctl(fd, BTRFS_IOC_SYNC);
-		if (ret < 0)
-			warning("sync ioctl failed on '%s': %m", path);
+		err = btrfs_util_sync_fd(fd);
+		if (err)
+			warning("sync ioctl failed on '%s': %s", path,
+				strerror(errno));
 	}
 
 	if (filter_flag) {
@@ -423,6 +427,7 @@ static int cmd_qgroup_limit(int argc, char **argv)
 	int compressed = 0;
 	int exclusive = 0;
 	DIR *dirstream = NULL;
+	enum btrfs_util_error err;
 
 	while (1) {
 		int c = getopt(argc, argv, "ce");
@@ -463,13 +468,9 @@ static int cmd_qgroup_limit(int argc, char **argv)
 	if (argc - optind == 2) {
 		args.qgroupid = 0;
 		path = argv[optind + 1];
-		ret = test_issubvolume(path);
-		if (ret < 0) {
-			error("cannot access '%s': %s", path, strerror(-ret));
-			return 1;
-		}
-		if (!ret) {
-			error("'%s' is not a subvolume", path);
+		err = btrfs_util_is_subvolume(path);
+		if (err) {
+			error_btrfs_util(err);
 			return 1;
 		}
 		/*
