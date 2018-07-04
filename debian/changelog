@@ -5,6 +5,9 @@ btrfs-progs (4.16.1-2~bpo9+1) stretch-backports; urgency=medium
   * Restore btrfs-tools transitional package.  This is needed for the
     following packages on stretch: xen-tools, schroot, lxc,
     linaro-image-tools, kvpm, fsarchiver, and libguestfs0.
+  * Add Breaks snapper (<< 0.5.4-4~).  Needed because upstream
+    btrfs-progs-4.16.1 changed some library names and locations.
+    See Bug #900314 for more information.
 
  -- Nicholas D Steeves <nsteeves@gmail.com>  Wed, 04 Jul 2018 17:45:30 -0400
 
