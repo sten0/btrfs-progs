@@ -1,3 +1,9 @@
+btrfs-progs (4.17-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 23 Jul 2018 14:31:22 +0100
+
 btrfs-progs (4.16.1-2) unstable; urgency=medium
 
   * Do not copy_exec btrfs-zero-log into initramfs, superseeded by `btrfs

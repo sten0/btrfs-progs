@@ -114,11 +114,11 @@ static void print_usage(int ret)
 	printf("\t-i   The inode item to corrupt (must also specify the field to corrupt)\n");
 	printf("\t-x   The file extent item to corrupt (must also specify -i for the inode and -f for the field to corrupt)\n");
 	printf("\t-m   The metadata block to corrupt (must also specify -f for the field to corrupt)\n");
-	printf("\t-K   The key to corrupt in the format <num>,<num>,<num> (must also specify -f for the field)\n");
+	printf("\t-K <u64,u8,u64> Corrupt the given key (must also specify -f for the field and optionally -r for the root)\n");
 	printf("\t-f   The field in the item to corrupt\n");
-	printf("\t-I   An item to corrupt (must also specify the field to corrupt and a root+key for the item)\n");
-	printf("\t-D   Corrupt a dir item, must specify key and field\n");
-	printf("\t-d   Delete this item (must specify -K)\n");
+	printf("\t-I <u64,u8,u64> Corrupt an item corresponding to the passed key triplet (must also specify the field to corrupt and root for the item)\n");
+	printf("\t-D <u64,u8,u64> Corrupt a dir item corresponding to the passed key triplet, must also specify a field\n");
+	printf("\t-d <u64,u8,u64> Delete item corresponding to passed key triplet\n");
 	printf("\t-r   Operate on this root (only works with -d)\n");
 	printf("\t-C   Delete a csum for the specified bytenr.  When used with -b it'll delete that many bytes, otherwise it's just sectorsize\n");
 	exit(ret);
@@ -449,7 +449,6 @@ static int corrupt_key(struct btrfs_root *root, struct btrfs_key *key,
 	struct btrfs_trans_handle *trans;
 	int ret;
 
-	root = root->fs_info->fs_root;
 	if (corrupt_field == BTRFS_KEY_BAD) {
 		fprintf(stderr, "Invalid field %s\n", field);
 		return -EINVAL;
@@ -726,7 +725,7 @@ out:
 static void shift_items(struct btrfs_root *root, struct extent_buffer *eb)
 {
 	int nritems = btrfs_header_nritems(eb);
-	int shift_space = btrfs_leaf_free_space(root->fs_info, eb) / 2;
+	int shift_space = btrfs_leaf_free_space(eb) / 2;
 	int slot = nritems / 2;
 	int i = 0;
 	unsigned int data_end = btrfs_item_offset_nr(eb, nritems - 1);
@@ -1080,11 +1079,41 @@ out:
 	return ret;
 
 }
+
+static void parse_key(u64 *objectid, u8 *type, u64 *offset)
+{
+
+	int ret = sscanf(optarg, "%llu,%hhu,%llu", objectid, type, offset);
+	if (ret != 3) {
+	        fprintf(stderr, "error parsing key '%s': %d\n", optarg, errno);
+	        print_usage(1);
+	}
+}
+
+static struct btrfs_root *open_root(struct btrfs_fs_info *fs_info,
+				    u64 root_objectid)
+{
+
+	struct btrfs_key root_key;
+	struct btrfs_root *root;
+
+	root_key.objectid = root_objectid;
+	root_key.type = BTRFS_ROOT_ITEM_KEY;
+	root_key.offset = (u64)-1;
+
+	root = btrfs_read_fs_root(fs_info, &root_key);
+	if (IS_ERR(root)) {
+		fprintf(stderr, "couldn't find root %llu\n", root_objectid);
+		print_usage(1);
+	}
+
+	return root;
+}
 int main(int argc, char **argv)
 {
 	struct cache_tree root_cache;
 	struct btrfs_key key;
-	struct btrfs_root *root;
+	struct btrfs_root *root, *target_root;
 	char *dev;
 	/* chunk offset can be 0,so change to (u64)-1 */
 	u64 logical = (u64)-1;
@@ -1099,6 +1128,7 @@ int main(int argc, char **argv)
 	int corrupt_item = 0;
 	int corrupt_di = 0;
 	int delete = 0;
+	int should_corrupt_key = 0;
 	u64 metadata_block = 0;
 	u64 inode = 0;
 	u64 file_extent = (u64)-1;
@@ -1135,7 +1165,7 @@ int main(int argc, char **argv)
 			{ NULL, 0, NULL, 0 }
 		};
 
-		c = getopt_long(argc, argv, "l:c:b:eEkuUi:f:x:m:K:IDdr:C:",
+		c = getopt_long(argc, argv, "l:c:b:eEkuUi:f:x:m:K:I:D:d:r:C:",
 				long_options, NULL);
 		if (c < 0)
 			break;
@@ -1177,24 +1207,20 @@ int main(int argc, char **argv)
 				metadata_block = arg_strtou64(optarg);
 				break;
 			case 'K':
-				ret = sscanf(optarg, "%llu,%u,%llu",
-					     &key.objectid,
-					     (unsigned int *)&key.type,
-					     &key.offset);
-				if (ret != 3) {
-					fprintf(stderr, "error reading key "
-						"%d\n", errno);
-					print_usage(1);
-				}
+				should_corrupt_key = 1;
+				parse_key(&key.objectid, &key.type, &key.offset);
 				break;
 			case 'D':
 				corrupt_di = 1;
+				parse_key(&key.objectid, &key.type, &key.offset);
 				break;
 			case 'I':
 				corrupt_item = 1;
+				parse_key(&key.objectid, &key.type, &key.offset);
 				break;
 			case 'd':
 				delete = 1;
+				parse_key(&key.objectid, &key.type, &key.offset);
 				break;
 			case 'r':
 				root_objectid = arg_strtou64(optarg);
@@ -1220,6 +1246,10 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Open ctree failed\n");
 		exit(1);
 	}
+	target_root = root;
+	if (root_objectid)
+		target_root = open_root(root->fs_info, root_objectid);
+
 	if (extent_rec) {
 		struct btrfs_trans_handle *trans;
 
@@ -1309,7 +1339,7 @@ int main(int argc, char **argv)
 	if (corrupt_di) {
 		if (!key.objectid || *field == 0)
 			print_usage(1);
-		ret = corrupt_dir_item(root, &key, field);
+		ret = corrupt_dir_item(target_root, &key, field);
 		goto out_close;
 	}
 	if (csum_bytenr) {
@@ -1319,34 +1349,24 @@ int main(int argc, char **argv)
 	if (corrupt_item) {
 		if (!key.objectid)
 			print_usage(1);
-		ret = corrupt_btrfs_item(root, &key, field);
-	}
-	if (delete) {
-		struct btrfs_root *target = root;
-
-		if (!key.objectid)
+		if (!root_objectid)
 			print_usage(1);
-		if (root_objectid) {
-			struct btrfs_key root_key;
 
-			root_key.objectid = root_objectid;
-			root_key.type = BTRFS_ROOT_ITEM_KEY;
-			root_key.offset = (u64)-1;
-
-			target = btrfs_read_fs_root(root->fs_info, &root_key);
-			if (IS_ERR(target)) {
-				fprintf(stderr, "Couldn't find root %llu\n",
-					(unsigned long long)root_objectid);
-				print_usage(1);
-			}
-		}
-		ret = delete_item(target, &key);
+		ret = corrupt_btrfs_item(target_root, &key, field);
 		goto out_close;
 	}
-	if (key.objectid || key.offset || key.type) {
+	if (delete) {
+		if (!key.objectid)
+			print_usage(1);
+
+		ret = delete_item(target_root, &key);
+		goto out_close;
+	}
+	if (should_corrupt_key) {
 		if (*field == 0)
 			print_usage(1);
-		ret = corrupt_key(root, &key, field);
+
+		ret = corrupt_key(target_root, &key, field);
 		goto out_close;
 	}
 	/*

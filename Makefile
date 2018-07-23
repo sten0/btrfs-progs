@@ -63,7 +63,6 @@ ABSTOPDIR = $(shell pwd)
 TOPDIR := .
 
 # Common build flags
-CSTD = -std=gnu90
 CFLAGS = $(SUBST_CFLAGS) \
 	 $(CSTD) \
 	 -include config.h \
@@ -85,6 +84,7 @@ LIBBTRFSUTIL_CFLAGS = $(SUBST_CFLAGS) \
 		      -fvisibility=hidden \
 		      -I$(TOPDIR)/libbtrfsutil \
 		      $(EXTRAWARN_CFLAGS) \
+		      $(DEBUG_CFLAGS_INTERNAL) \
 		      $(EXTRA_CFLAGS)
 
 LDFLAGS = $(SUBST_LDFLAGS) \
