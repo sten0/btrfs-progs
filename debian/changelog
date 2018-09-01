@@ -1,4 +1,4 @@
-btrfs-progs (4.16.1-2~bpo9+1) stretch-backports; urgency=medium
+btrfs-progs (4.17-1~bpo9+1) stretch-backports; urgency=medium
 
   * Rebuild for stretch-backports.
   * Relax debhelper Build-Depends to 11~ to allow backporting.
@@ -8,10 +8,17 @@ btrfs-progs (4.16.1-2~bpo9+1) stretch-backports; urgency=medium
   * Add Breaks snapper (<< 0.5.4-4~).  Needed because upstream
     btrfs-progs-4.16.1 changed some library names and locations.
     See Bug #900314 for more information.
-  * Remove debian/source/options, which regenerates a new orig.tarball,
-    when the existing one in the archive must be used for backports.
+  * Remove debian/source/options, because this source option forces
+    regeneration of a new orig.tarball, when the existing one in the
+    archive must be used for backports.
 
  -- Nicholas D Steeves <nsteeves@gmail.com>  Wed, 04 Jul 2018 18:53:45 -0400
+
+btrfs-progs (4.17-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 23 Jul 2018 14:31:22 +0100
 
 btrfs-progs (4.16.1-2) unstable; urgency=medium
 

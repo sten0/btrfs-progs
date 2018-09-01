@@ -155,19 +155,6 @@ static void init_pref_state(struct pref_state *prefstate)
  * - if you cannot add the parent or a correct key, then we will look into the
  *   block later to set a correct key
  *
- * delayed refs
- * ============
- *        backref type | shared | indirect | shared | indirect
- * information         |   tree |     tree |   data |     data
- * --------------------+--------+----------+--------+----------
- *      parent logical |    y   |     -    |    -   |     -
- *      key to resolve |    -   |     y    |    y   |     y
- *  tree block logical |    -   |     -    |    -   |     -
- *  root for resolving |    y   |     y    |    y   |     y
- *
- * - column 1:       we've the parent -> done
- * - column 2, 3, 4: we use the key to find the parent
- *
  * on disk refs (inline or keyed)
  * ==============================
  *        backref type | shared | indirect | shared | indirect
@@ -510,7 +497,6 @@ static void __merge_refs(struct pref_state *prefstate, int mode)
 		for (pos2 = pos1->next, n2 = pos2->next; pos2 != head;
 		     pos2 = n2, n2 = pos2->next) {
 			struct __prelim_ref *ref2;
-			struct __prelim_ref *xchg;
 			struct extent_inode_elem *eie;
 
 			ref2 = list_entry(pos2, struct __prelim_ref, list);
@@ -518,12 +504,13 @@ static void __merge_refs(struct pref_state *prefstate, int mode)
 			if (mode == 1) {
 				if (!ref_for_same_block(ref1, ref2))
 					continue;
-				if (!ref1->parent && ref2->parent) {
-					xchg = ref1;
-					ref1 = ref2;
-					ref2 = xchg;
-				}
 			} else {
+				/*
+				 * Parent == 0 means that the ref is tree block
+				 * backref or its parent is unresolved.
+				 */
+				if (!ref1->parent || !ref2->parent)
+					continue;
 				if (ref1->parent != ref2->parent)
 					continue;
 			}
@@ -735,9 +722,9 @@ static int __add_keyed_refs(struct btrfs_fs_info *fs_info,
 }
 
 /*
- * this adds all existing backrefs (inline backrefs, backrefs and delayed
- * refs) for the given bytenr to the refs list, merges duplicates and resolves
- * indirect refs to their parent bytenr.
+ * this adds all existing backrefs (inline backrefs, backrefs for the given
+ * bytenr to the refs list, merges duplicates and resolves indirect refs to
+ * their parent bytenr.
  * When roots are found, they're added to the roots list
  *
  * FIXME some caching might speed things up

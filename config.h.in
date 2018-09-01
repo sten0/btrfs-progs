@@ -21,9 +21,6 @@
 /* Define to 1 if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H
 
-/* E2fsprogs does not support BIGALLOC */
-#undef HAVE_OLD_E2FSPROGS
-
 /* Define to 1 if you have the `openat' function. */
 #undef HAVE_OPENAT
 
