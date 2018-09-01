@@ -12,7 +12,7 @@ btrfs-progs (4.17-1~bpo9+1) stretch-backports; urgency=medium
     regeneration of a new orig.tarball, when the existing one in the
     archive must be used for backports.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Wed, 04 Jul 2018 18:53:45 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Sat, 01 Sep 2018 14:59:26 -0400
 
 btrfs-progs (4.17-1) unstable; urgency=medium
 
