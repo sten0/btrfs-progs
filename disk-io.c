@@ -94,6 +94,10 @@ static void print_tree_block_error(struct btrfs_fs_info *fs_info,
 	char found_uuid[BTRFS_UUID_UNPARSED_SIZE] = {'\0'};
 	u8 buf[BTRFS_UUID_SIZE];
 
+	if (!err)
+		return;
+
+	fprintf(stderr, "bad tree block %llu, ", eb->start);
 	switch (err) {
 	case BTRFS_BAD_FSID:
 		read_extent_buffer(eb, buf, btrfs_header_fsid(),
@@ -664,6 +668,9 @@ struct btrfs_root *btrfs_read_fs_root(struct btrfs_fs_info *fs_info,
 	if (location->objectid == BTRFS_QUOTA_TREE_OBJECTID)
 		return fs_info->quota_enabled ? fs_info->quota_root :
 				ERR_PTR(-ENOENT);
+	if (location->objectid == BTRFS_FREE_SPACE_TREE_OBJECTID)
+		return fs_info->free_space_root ? fs_info->free_space_root :
+						ERR_PTR(-ENOENT);
 
 	BUG_ON(location->objectid == BTRFS_TREE_RELOC_OBJECTID ||
 	       location->offset != (u64)-1);
@@ -726,7 +733,6 @@ struct btrfs_fs_info *btrfs_new_fs_info(int writable, u64 sb_bytenr)
 	extent_io_tree_init(&fs_info->free_space_cache);
 	extent_io_tree_init(&fs_info->block_group_cache);
 	extent_io_tree_init(&fs_info->pinned_extents);
-	extent_io_tree_init(&fs_info->pending_del);
 	extent_io_tree_init(&fs_info->extent_ins);
 	fs_info->excluded_extents = NULL;
 
@@ -984,7 +990,6 @@ void btrfs_cleanup_all_caches(struct btrfs_fs_info *fs_info)
 	extent_io_tree_cleanup(&fs_info->free_space_cache);
 	extent_io_tree_cleanup(&fs_info->block_group_cache);
 	extent_io_tree_cleanup(&fs_info->pinned_extents);
-	extent_io_tree_cleanup(&fs_info->pending_del);
 	extent_io_tree_cleanup(&fs_info->extent_ins);
 }
 
@@ -1124,6 +1129,9 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, const char *path,
 
 	if (flags & OPEN_CTREE_TEMPORARY_SUPER)
 		sbflags = SBREAD_TEMPORARY;
+
+	if (flags & OPEN_CTREE_IGNORE_FSID_MISMATCH)
+		sbflags |= SBREAD_IGNORE_FSID_MISMATCH;
 
 	ret = btrfs_scan_fs_devices(fp, path, &fs_devices, sb_bytenr, sbflags,
 			(flags & OPEN_CTREE_NO_DEVICES));
@@ -1376,9 +1384,14 @@ static int check_super(struct btrfs_super_block *sb, unsigned sbflags)
 
 		uuid_unparse(sb->fsid, fsid);
 		uuid_unparse(sb->dev_item.fsid, dev_fsid);
-		error("dev_item UUID does not match fsid: %s != %s",
-			dev_fsid, fsid);
-		goto error_out;
+		if (sbflags & SBREAD_IGNORE_FSID_MISMATCH) {
+			warning("ignored: dev_item fsid mismatch: %s != %s",
+					dev_fsid, fsid);
+		} else {
+			error("dev_item UUID does not match fsid: %s != %s",
+					dev_fsid, fsid);
+			goto error_out;
+		}
 	}
 
 	/*
@@ -1427,7 +1440,7 @@ error_out:
  * @sb_bytenr:  offset of the particular superblock copy we want
  * @sbflags:	flags controlling how the superblock is read
  *
- * This function is used by various btrfs comands to obtain a valid superblock.
+ * This function is used by various btrfs commands to obtain a valid superblock.
  *
  * It's mode of operation is controlled by the @sb_bytenr and @sbdflags
  * parameters. If SBREAD_RECOVER flag is set and @sb_bytenr is

@@ -91,9 +91,9 @@ static int set_super_incompat_flags(struct btrfs_root *root, u64 flags)
 	return ret;
 }
 
-static int change_header_uuid(struct btrfs_root *root, struct extent_buffer *eb)
+static int change_buffer_header_uuid(struct extent_buffer *eb)
 {
-	struct btrfs_fs_info *fs_info = root->fs_info;
+	struct btrfs_fs_info *fs_info = eb->fs_info;
 	int same_fsid = 1;
 	int same_chunk_tree_uuid = 1;
 	int ret;
@@ -157,7 +157,7 @@ static int change_extents_uuid(struct btrfs_fs_info *fs_info)
 			ret = PTR_ERR(eb);
 			goto out;
 		}
-		ret = change_header_uuid(root, eb);
+		ret = change_buffer_header_uuid(eb);
 		free_extent_buffer(eb);
 		if (ret < 0) {
 			error("failed to change uuid of tree block: %llu",
@@ -179,10 +179,10 @@ out:
 	return ret;
 }
 
-static int change_device_uuid(struct btrfs_fs_info *fs_info, struct extent_buffer *eb,
-			      int slot)
+static int change_device_uuid(struct extent_buffer *eb, int slot)
 {
 	struct btrfs_dev_item *di;
+	struct btrfs_fs_info *fs_info = eb->fs_info;
 	int ret = 0;
 
 	di = btrfs_item_ptr(eb, slot, struct btrfs_dev_item);
@@ -217,7 +217,7 @@ static int change_devices_uuid(struct btrfs_fs_info *fs_info)
 		if (key.type != BTRFS_DEV_ITEM_KEY ||
 		    key.objectid != BTRFS_DEV_ITEMS_OBJECTID)
 			goto next;
-		ret = change_device_uuid(fs_info, path.nodes[0], path.slots[0]);
+		ret = change_device_uuid(path.nodes[0], path.slots[0]);
 		if (ret < 0)
 			goto out;
 next:
@@ -394,6 +394,7 @@ int main(int argc, char *argv[])
 	char *new_fsid_str = NULL;
 	int ret;
 	u64 super_flags = 0;
+	int fd = -1;
 
 	while(1) {
 		static const struct option long_options[] = {
@@ -467,17 +468,26 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	ret = check_mounted(device);
-	if (ret < 0) {
-		error("could not check mount status of %s: %s", device,
-			strerror(-ret));
-		return 1;
-	} else if (ret) {
-		error("%s is mounted", device);
+	fd = open(device, O_RDWR);
+	if (fd < 0) {
+		error("mount check: cannot open %s: %m", device);
 		return 1;
 	}
 
-	root = open_ctree(device, 0, ctree_flags);
+	ret = check_mounted_where(fd, device, NULL, 0, NULL,
+			SBREAD_IGNORE_FSID_MISMATCH);
+	if (ret < 0) {
+		errno = -ret;
+		error("could not check mount status of %s: %m", device);
+		close(fd);
+		return 1;
+	} else if (ret) {
+		error("%s is mounted", device);
+		close(fd);
+		return 1;
+	}
+
+	root = open_ctree_fd(fd, device, 0, ctree_flags);
 
 	if (!root) {
 		error("open ctree failed");
@@ -512,9 +522,9 @@ int main(int argc, char *argv[])
 	if (random_fsid || new_fsid_str) {
 		if (!force) {
 			warning(
-	"it's highly recommended to run 'btrfs check' before this operation");
-			warning(
-	"also canceling running UUID change progress may cause corruption");
+"it's recommended to run 'btrfs check --readonly' before this operation.\n"
+"\tThe whole operation must finish before the filesystem can be mounted again.\n"
+"\tIf cancelled or interrupted, run 'btrfstune -u' to restart.");
 			ret = ask_user("We are going to change UUID, are your sure?");
 			if (!ret) {
 				fprintf(stderr, "UUID change canceled\n");

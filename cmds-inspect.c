@@ -94,6 +94,7 @@ static int cmd_inspect_inode_resolve(int argc, char **argv)
 	int ret;
 	DIR *dirstream = NULL;
 
+	optind = 0;
 	while (1) {
 		int c = getopt(argc, argv, "v");
 		if (c < 0)
@@ -148,6 +149,7 @@ static int cmd_inspect_logical_resolve(int argc, char **argv)
 	char *path_ptr;
 	DIR *dirstream = NULL;
 
+	optind = 0;
 	while (1) {
 		int c = getopt(argc, argv, "Pvs:");
 		if (c < 0)
@@ -209,6 +211,7 @@ static int cmd_inspect_logical_resolve(int argc, char **argv)
 		error("path buffer too small: %d bytes", bytes_left);
 		goto out;
 	}
+	ret = 0;
 
 	for (i = 0; i < inodes->elem_cnt; i += 3) {
 		u64 inum = inodes->val[i];
@@ -243,7 +246,8 @@ static int cmd_inspect_logical_resolve(int argc, char **argv)
 					goto out;
 				}
 			}
-			__ino_to_path_fd(inum, path_fd, verbose, full_path);
+			ret = __ino_to_path_fd(inum, path_fd, verbose,
+						full_path);
 			if (path_fd != fd)
 				close_file_or_dir(path_fd, dirs);
 		} else {
@@ -326,7 +330,8 @@ static int cmd_inspect_rootid(int argc, char **argv)
 
 	ret = lookup_path_rootid(fd, &rootid);
 	if (ret) {
-		error("failed to lookup root id: %s", strerror(-ret));
+		errno = -ret;
+		error("failed to lookup root id: %m");
 		goto out;
 	}
 
@@ -561,7 +566,8 @@ static int print_min_dev_size(int fd, u64 devid)
 				ret = add_dev_extent(&holes, last_pos,
 					btrfs_search_header_offset(sh) - 1, 1);
 			if (ret) {
-				error("add device extent: %s", strerror(-ret));
+				errno = -ret;
+				error("add device extent: %m");
 				ret = 1;
 				goto out;
 			}
@@ -591,6 +597,7 @@ static int cmd_inspect_min_dev_size(int argc, char **argv)
 	DIR *dirstream = NULL;
 	u64 devid = 1;
 
+	optind = 0;
 	while (1) {
 		int c;
 		enum { GETOPT_VAL_DEVID = 256 };

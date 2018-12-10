@@ -145,7 +145,8 @@ static int cmd_filesystem_df(int argc, char **argv)
 		print_df(sargs, unit_mode);
 		free(sargs);
 	} else {
-		error("get_df failed %s", strerror(-ret));
+		errno = -ret;
+		error("get_df failed: %m");
 	}
 
 	close_file_or_dir(fd, dirstream);
@@ -685,6 +686,7 @@ static int cmd_filesystem_show(int argc, char **argv)
 
 	unit_mode = get_unit_mode_from_arg(&argc, argv, 0);
 
+	optind = 0;
 	while (1) {
 		int c;
 		static const struct option long_options[] = {
@@ -924,6 +926,7 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 	defrag_global_errors = 0;
 	defrag_global_verbose = 0;
 	defrag_global_errors = 0;
+	optind = 0;
 	while(1) {
 		int c = getopt(argc, argv, "vrc::fs:l:t:");
 		if (c < 0)
@@ -1052,8 +1055,8 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 				break;
 			}
 			if (ret) {
-				error("defrag failed on %s: %s", argv[i],
-				      strerror(defrag_err));
+				errno = defrag_err;
+				error("defrag failed on %s: %m", argv[i]);
 				goto next;
 			}
 		}

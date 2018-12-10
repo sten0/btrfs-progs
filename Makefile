@@ -1,7 +1,7 @@
 #
 # Basic build targets:
 #   all		all main tools and the shared library
-#   static      build static bnaries, requires static version of the libraries
+#   static      build static binaries, requires static version of the libraries
 #   test        run the full testsuite
 #   install     install to default location (/usr/local)
 #   clean       clean built binaries (not the documentation)
@@ -116,7 +116,8 @@ objects = ctree.o disk-io.o kernel-lib/radix-tree.o extent-tree.o print-tree.o \
 	  qgroup.o free-space-cache.o kernel-lib/list_sort.o props.o \
 	  kernel-shared/ulist.o qgroup-verify.o backref.o string-table.o task-utils.o \
 	  inode.o file.o find-root.o free-space-tree.o help.o send-dump.o \
-	  fsfeatures.o kernel-lib/tables.o kernel-lib/raid56.o transaction.o
+	  fsfeatures.o kernel-lib/tables.o kernel-lib/raid56.o transaction.o \
+	  delayed-ref.o
 cmds_objects = cmds-subvolume.o cmds-filesystem.o cmds-device.o cmds-scrub.o \
 	       cmds-inspect.o cmds-balance.o cmds-send.o cmds-receive.o \
 	       cmds-quota.o cmds-qgroup.o cmds-replace.o check/main.o \
@@ -206,21 +207,29 @@ endif
 
 MAKEOPTS = --no-print-directory Q=$(Q)
 
-# build all by default
-progs = $(progs_install) btrfsck btrfs-corrupt-block
 
-# install only selected
+# Programs to install.
 progs_install = btrfs mkfs.btrfs btrfs-map-logical btrfs-image \
-	btrfs-find-root btrfstune \
-	btrfs-select-super
+		btrfs-find-root btrfstune btrfs-select-super
 
-# other tools, not built by default
-progs_extra = btrfs-fragments
+# Programs to build.
+progs_build = $(progs_install) btrfsck btrfs-corrupt-block
 
-progs_static = $(foreach p,$(progs),$(p).static)
+# All programs. Use := instead of = so that this is expanded before we reassign
+# progs_build below.
+progs := $(progs_build) btrfs-convert btrfs-fragments
 
 ifneq ($(DISABLE_BTRFSCONVERT),1)
 progs_install += btrfs-convert
+endif
+
+# Static programs to build. Use := instead of = because `make static` should
+# still build everything even if --disable-programs was passed to ./configure.
+progs_static := $(foreach p,$(progs_build),$(p).static)
+
+ifneq ($(BUILD_PROGRAMS),1)
+progs_install =
+progs_build =
 endif
 
 # external libs required by various binaries; for btrfs-foo,
@@ -233,7 +242,7 @@ cmds_restore_cflags = -DBTRFSRESTORE_ZSTD=$(BTRFSRESTORE_ZSTD)
 CHECKER_FLAGS += $(btrfs_convert_cflags)
 
 # collect values of the variables above
-standalone_deps = $(foreach dep,$(patsubst %,%_objects,$(subst -,_,$(filter btrfs-%, $(progs) $(progs_extra)))),$($(dep)))
+standalone_deps = $(foreach dep,$(patsubst %,%_objects,$(subst -,_,$(filter btrfs-%, $(progs)))),$($(dep)))
 
 SUBDIRS =
 BUILDDIRS = $(patsubst %,build-%,$(SUBDIRS))
@@ -266,6 +275,13 @@ libs_shared = libbtrfs.so.0.1 libbtrfsutil.so.$(libbtrfsutil_version)
 libs_static = libbtrfs.a libbtrfsutil.a
 libs = $(libs_shared) $(libs_static)
 lib_links = libbtrfs.so.0 libbtrfs.so libbtrfsutil.so.$(libbtrfsutil_major) libbtrfsutil.so
+libs_build =
+ifeq ($(BUILD_SHARED_LIBRARIES),1)
+libs_build += $(libs_shared) $(lib_links)
+endif
+ifeq ($(BUILD_STATIC_LIBRARIES),1)
+libs_build += $(libs_static)
+endif
 
 # make C=1 to enable sparse
 ifdef C
@@ -302,7 +318,7 @@ endif
 	$(Q)$(CC) $(STATIC_CFLAGS) -c $< -o $@ $($(subst -,_,$(@:%.static.o=%)-cflags)) \
 		$($(subst -,_,btrfs-$(@:%/$(notdir $@)=%)-cflags))
 
-all: $(progs) $(libs) $(lib_links) $(BUILDDIRS)
+all: $(progs_build) $(libs_build) $(BUILDDIRS)
 ifeq ($(PYTHON_BINDINGS),1)
 all: libbtrfsutil_python
 endif
@@ -495,10 +511,6 @@ btrfs-convert.static: $(static_convert_objects) $(static_objects) $(static_libbt
 	@echo "    [LD]     $@"
 	$(Q)$(CC) -o $@ $^ $(STATIC_LDFLAGS) $(btrfs_convert_libs) $(STATIC_LIBS)
 
-dir-test: dir-test.o $(objects) $(libs)
-	@echo "    [LD]     $@"
-	$(Q)$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
-
 quick-test: quick-test.o $(objects) $(libs)
 	@echo "    [LD]     $@"
 	$(Q)$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
@@ -573,9 +585,8 @@ test-build-pre:
 test-build-real:
 	$(MAKE) $(MAKEOPTS) library-test
 	-$(MAKE) $(MAKEOPTS) library-test.static
-	$(MAKE) $(MAKEOPTS) -j 8 all
+	$(MAKE) $(MAKEOPTS) -j 8 $(progs) $(libs) $(lib_links) $(BUILDDIRS)
 	-$(MAKE) $(MAKEOPTS) -j 8 static
-	$(MAKE) $(MAKEOPTS) -j 8 $(progs_extra)
 
 manpages:
 	$(Q)$(MAKE) $(MAKEOPTS) -C Documentation
@@ -603,11 +614,11 @@ clean: $(CLEANDIRS)
 		image/*.o image/*.o.d \
 		convert/*.o convert/*.o.d \
 		mkfs/*.o mkfs/*.o.d check/*.o check/*.o.d \
-	      dir-test ioctl-test quick-test library-test library-test-static \
+	      ioctl-test quick-test library-test library-test-static \
               mktables btrfs.static mkfs.btrfs.static fssum \
 	      $(check_defs) \
 	      $(libs) $(lib_links) \
-	      $(progs_static) $(progs_extra) \
+	      $(progs_static) \
 	      libbtrfsutil/*.o libbtrfsutil/*.o.d
 ifeq ($(PYTHON_BINDINGS),1)
 	$(Q)cd libbtrfsutil/python; \
@@ -620,7 +631,7 @@ clean-doc:
 
 clean-gen:
 	@echo "Cleaning Generated Files"
-	$(Q)$(RM) -rf -- version.h config.status config.cache connfig.log \
+	$(Q)$(RM) -rf -- version.h config.status config.cache config.log \
 		configure.lineno config.status.lineno Makefile.inc \
 		Documentation/Makefile tags \
 		cscope.files cscope.out cscope.in.out cscope.po.out \
@@ -631,27 +642,33 @@ $(CLEANDIRS):
 	@echo "Cleaning $(patsubst clean-%,%,$@)"
 	$(Q)$(MAKE) $(MAKEOPTS) -C $(patsubst clean-%,%,$@) clean
 
-install: $(libs) $(progs_install) $(INSTALLDIRS)
+install: $(libs_build) $(progs_install) $(INSTALLDIRS)
+ifeq ($(BUILD_PROGRAMS),1)
 	$(INSTALL) -m755 -d $(DESTDIR)$(bindir)
 	$(INSTALL) $(progs_install) $(DESTDIR)$(bindir)
 	$(INSTALL) fsck.btrfs $(DESTDIR)$(bindir)
 	# btrfsck is a link to btrfs in the src tree, make it so for installed file as well
 	$(LN_S) -f btrfs $(DESTDIR)$(bindir)/btrfsck
-	$(INSTALL) -m755 -d $(DESTDIR)$(libdir)
-	$(INSTALL) $(libs) $(DESTDIR)$(libdir)
-	cp -d $(lib_links) $(DESTDIR)$(libdir)
-	$(INSTALL) -m755 -d $(DESTDIR)$(incdir)/btrfs
-	$(INSTALL) -m644 $(libbtrfs_headers) $(DESTDIR)$(incdir)/btrfs
-	$(INSTALL) -m644 libbtrfsutil/btrfsutil.h $(DESTDIR)$(incdir)
 ifneq ($(udevdir),)
 	$(INSTALL) -m755 -d $(DESTDIR)$(udevruledir)
 	$(INSTALL) -m644 $(udev_rules) $(DESTDIR)$(udevruledir)
+endif
+endif
+ifneq ($(libs_build),)
+	$(INSTALL) -m755 -d $(DESTDIR)$(libdir)
+	$(INSTALL) $(libs_build) $(DESTDIR)$(libdir)
+ifeq ($(BUILD_SHARED_LIBRARIES),1)
+	cp -d $(lib_links) $(DESTDIR)$(libdir)
+endif
+	$(INSTALL) -m755 -d $(DESTDIR)$(incdir)/btrfs
+	$(INSTALL) -m644 $(libbtrfs_headers) $(DESTDIR)$(incdir)/btrfs
+	$(INSTALL) -m644 libbtrfsutil/btrfsutil.h $(DESTDIR)$(incdir)
 endif
 
 ifeq ($(PYTHON_BINDINGS),1)
 install_python: libbtrfsutil_python
 	$(Q)cd libbtrfsutil/python; \
-		$(PYTHON) setup.py install --install-layout=deb --skip-build $(if $(DESTDIR),--root $(DESTDIR)) --prefix $(prefix)
+		$(PYTHON) setup.py install --skip-build $(if $(DESTDIR),--root $(DESTDIR)) --prefix $(prefix)
 
 .PHONY: install_python
 endif

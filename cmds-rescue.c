@@ -32,8 +32,8 @@ static const char * const rescue_cmd_group_usage[] = {
 	NULL
 };
 
-int btrfs_recover_chunk_tree(char *path, int verbose, int yes);
-int btrfs_recover_superblocks(char *path, int verbose, int yes);
+int btrfs_recover_chunk_tree(const char *path, int verbose, int yes);
+int btrfs_recover_superblocks(const char *path, int verbose, int yes);
 
 static const char * const cmd_rescue_chunk_recover_usage[] = {
 	"btrfs rescue chunk-recover [options] <device>",
@@ -52,6 +52,7 @@ static int cmd_rescue_chunk_recover(int argc, char *argv[])
 	int yes = 0;
 	int verbose = 0;
 
+	optind = 0;
 	while (1) {
 		int c = getopt(argc, argv, "yvh");
 		if (c < 0)
@@ -76,7 +77,8 @@ static int cmd_rescue_chunk_recover(int argc, char *argv[])
 
 	ret = check_mounted(file);
 	if (ret < 0) {
-		error("could not check mount status: %s", strerror(-ret));
+		errno = -ret;
+		error("could not check mount status: %m");
 		return 1;
 	} else if (ret) {
 		error("the device is busy");
@@ -109,7 +111,7 @@ static const char * const cmd_rescue_super_recover_usage[] = {
  *   0 : All superblocks are valid, no need to recover
  *   1 : Usage or syntax error
  *   2 : Recover all bad superblocks successfully
- *   3 : Fail to Recover bad supeblocks
+ *   3 : Fail to Recover bad superblocks
  *   4 : Abort to recover bad superblocks
  */
 static int cmd_rescue_super_recover(int argc, char **argv)
@@ -119,6 +121,7 @@ static int cmd_rescue_super_recover(int argc, char **argv)
 	int yes = 0;
 	char *dname;
 
+	optind = 0;
 	while (1) {
 		int c = getopt(argc, argv, "vy");
 		if (c < 0)
@@ -140,7 +143,8 @@ static int cmd_rescue_super_recover(int argc, char **argv)
 	dname = argv[optind];
 	ret = check_mounted(dname);
 	if (ret < 0) {
-		error("could not check mount status: %s", strerror(-ret));
+		errno = -ret;
+		error("could not check mount status: %m");
 		return 1;
 	} else if (ret) {
 		error("the device is busy");
@@ -173,7 +177,8 @@ static int cmd_rescue_zero_log(int argc, char **argv)
 	devname = argv[optind];
 	ret = check_mounted(devname);
 	if (ret < 0) {
-		error("could not check mount status: %s", strerror(-ret));
+		errno = -ret;
+		error("could not check mount status: %m");
 		goto out;
 	} else if (ret) {
 		error("%s is currently mounted", devname);
@@ -224,7 +229,8 @@ static int cmd_rescue_fix_device_size(int argc, char **argv)
 	devname = argv[optind];
 	ret = check_mounted(devname);
 	if (ret < 0) {
-		error("could not check mount status: %s", strerror(-ret));
+		errno = -ret;
+		error("could not check mount status: %m");
 		goto out;
 	} else if (ret) {
 		error("%s is currently mounted", devname);

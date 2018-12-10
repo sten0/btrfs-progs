@@ -27,7 +27,7 @@
 static int split_node(struct btrfs_trans_handle *trans, struct btrfs_root
 		      *root, struct btrfs_path *path, int level);
 static int split_leaf(struct btrfs_trans_handle *trans, struct btrfs_root
-		      *root, struct btrfs_key *ins_key,
+		      *root, const struct btrfs_key *ins_key,
 		      struct btrfs_path *path, int data_size, int extend);
 static int push_node_left(struct btrfs_trans_handle *trans,
 			  struct btrfs_root *root, struct extent_buffer *dst,
@@ -74,6 +74,18 @@ void add_root_to_dirty_list(struct btrfs_root *root)
 		list_add(&root->dirty_list,
 			 &root->fs_info->dirty_cowonly_roots);
 	}
+}
+
+static void root_add_used(struct btrfs_root *root, u32 size)
+{
+        btrfs_set_root_used(&root->root_item,
+                            btrfs_root_used(&root->root_item) + size);
+}
+
+static void root_sub_used(struct btrfs_root *root, u32 size)
+{
+        btrfs_set_root_used(&root->root_item,
+                            btrfs_root_used(&root->root_item) - size);
 }
 
 int btrfs_copy_root(struct btrfs_trans_handle *trans,
@@ -322,7 +334,7 @@ int __btrfs_cow_block(struct btrfs_trans_handle *trans,
 		WARN_ON(btrfs_header_generation(parent) != trans->transid);
 
 		btrfs_free_extent(trans, root, buf->start, buf->len,
-				  0, root->root_key.objectid, level, 1);
+				  0, root->root_key.objectid, level, 0);
 	}
 	if (!list_empty(&buf->recow)) {
 		list_del_init(&buf->recow);
@@ -377,7 +389,7 @@ int btrfs_cow_block(struct btrfs_trans_handle *trans,
 	return ret;
 }
 
-int btrfs_comp_cpu_keys(struct btrfs_key *k1, struct btrfs_key *k2)
+int btrfs_comp_cpu_keys(const struct btrfs_key *k1, const struct btrfs_key *k2)
 {
 	if (k1->objectid > k2->objectid)
 		return 1;
@@ -397,7 +409,8 @@ int btrfs_comp_cpu_keys(struct btrfs_key *k1, struct btrfs_key *k2)
 /*
  * compare two keys in a memcmp fashion
  */
-static int btrfs_comp_keys(struct btrfs_disk_key *disk, struct btrfs_key *k2)
+static int btrfs_comp_keys(struct btrfs_disk_key *disk,
+		const struct btrfs_key *k2)
 {
 	struct btrfs_key k1;
 
@@ -590,7 +603,7 @@ static int noinline check_block(struct btrfs_root *root,
  * slot may point to max if the key is bigger than all of the keys
  */
 static int generic_bin_search(struct extent_buffer *eb, unsigned long p,
-			      int item_size, struct btrfs_key *key,
+			      int item_size, const struct btrfs_key *key,
 			      int max, int *slot)
 {
 	int low = 0;
@@ -624,7 +637,7 @@ static int generic_bin_search(struct extent_buffer *eb, unsigned long p,
  * simple bin_search frontend that does the right thing for
  * leaves vs nodes
  */
-static int bin_search(struct extent_buffer *eb, struct btrfs_key *key,
+static int bin_search(struct extent_buffer *eb, const struct btrfs_key *key,
 		      int level, int *slot)
 {
 	if (level == 0)
@@ -722,9 +735,11 @@ static int balance_level(struct btrfs_trans_handle *trans,
 		/* once for the path */
 		free_extent_buffer(mid);
 
+		root_sub_used(root, mid->len);
+
 		ret = btrfs_free_extent(trans, root, mid->start, mid->len,
 					0, root->root_key.objectid,
-					level, 1);
+					level, 0);
 		/* once for the root ptr */
 		free_extent_buffer(mid);
 		return ret;
@@ -777,6 +792,8 @@ static int balance_level(struct btrfs_trans_handle *trans,
 			wret = btrfs_del_ptr(root, path, level + 1, pslot + 1);
 			if (wret)
 				ret = wret;
+
+			root_sub_used(root, right->len);
 			wret = btrfs_free_extent(trans, root, bytenr,
 						 blocksize, 0,
 						 root->root_key.objectid,
@@ -823,6 +840,8 @@ static int balance_level(struct btrfs_trans_handle *trans,
 		wret = btrfs_del_ptr(root, path, level + 1, pslot);
 		if (wret)
 			ret = wret;
+
+		root_sub_used(root, blocksize);
 		wret = btrfs_free_extent(trans, root, bytenr, blocksize,
 					 0, root->root_key.objectid,
 					 level, 0);
@@ -982,10 +1001,9 @@ static int noinline push_nodes_for_insert(struct btrfs_trans_handle *trans,
 /*
  * readahead one full node of leaves
  */
-void reada_for_search(struct btrfs_root *root, struct btrfs_path *path,
-			     int level, int slot, u64 objectid)
+void reada_for_search(struct btrfs_fs_info *fs_info, struct btrfs_path *path,
+		      int level, int slot, u64 objectid)
 {
-	struct btrfs_fs_info *fs_info = root->fs_info;
 	struct extent_buffer *node;
 	struct btrfs_disk_key disk_key;
 	u32 nritems;
@@ -1111,9 +1129,9 @@ out:
  * tree.  if ins_len < 0, nodes will be merged as we walk down the tree (if
  * possible)
  */
-int btrfs_search_slot(struct btrfs_trans_handle *trans, struct btrfs_root
-		      *root, struct btrfs_key *key, struct btrfs_path *p, int
-		      ins_len, int cow)
+int btrfs_search_slot(struct btrfs_trans_handle *trans,
+		struct btrfs_root *root, const struct btrfs_key *key,
+		struct btrfs_path *p, int ins_len, int cow)
 {
 	struct extent_buffer *b;
 	int slot;
@@ -1185,7 +1203,7 @@ again:
 				break;
 
 			if (should_reada)
-				reada_for_search(root, p, level, slot,
+				reada_for_search(fs_info, p, level, slot,
 						 key->objectid);
 
 			b = read_node_slot(fs_info, b, slot);
@@ -1205,6 +1223,80 @@ again:
 		}
 	}
 	return 1;
+}
+
+/*
+ * Helper to use instead of search slot if no exact match is needed but
+ * instead the next or previous item should be returned.
+ * When find_higher is true, the next higher item is returned, the next lower
+ * otherwise.
+ * When return_any and find_higher are both true, and no higher item is found,
+ * return the next lower instead.
+ * When return_any is true and find_higher is false, and no lower item is found,
+ * return the next higher instead.
+ * It returns 0 if any item is found, 1 if none is found (tree empty), and
+ * < 0 on error
+ */
+int btrfs_search_slot_for_read(struct btrfs_root *root,
+                               const struct btrfs_key *key,
+                               struct btrfs_path *p, int find_higher,
+                               int return_any)
+{
+        int ret;
+        struct extent_buffer *leaf;
+
+again:
+        ret = btrfs_search_slot(NULL, root, key, p, 0, 0);
+        if (ret <= 0)
+                return ret;
+        /*
+	 * A return value of 1 means the path is at the position where the item
+	 * should be inserted. Normally this is the next bigger item, but in
+	 * case the previous item is the last in a leaf, path points to the
+	 * first free slot in the previous leaf, i.e. at an invalid item.
+         */
+        leaf = p->nodes[0];
+
+        if (find_higher) {
+                if (p->slots[0] >= btrfs_header_nritems(leaf)) {
+                        ret = btrfs_next_leaf(root, p);
+                        if (ret <= 0)
+                                return ret;
+                        if (!return_any)
+                                return 1;
+                        /*
+			 * No higher item found, return the next lower instead
+                         */
+                        return_any = 0;
+                        find_higher = 0;
+                        btrfs_release_path(p);
+                        goto again;
+                }
+        } else {
+                if (p->slots[0] == 0) {
+                        ret = btrfs_prev_leaf(root, p);
+                        if (ret < 0)
+                                return ret;
+                        if (!ret) {
+                                leaf = p->nodes[0];
+                                if (p->slots[0] == btrfs_header_nritems(leaf))
+                                        p->slots[0]--;
+                                return 0;
+                        }
+                        if (!return_any)
+                                return 1;
+                        /*
+			 * No lower item found, return the next higher instead
+                         */
+                        return_any = 0;
+                        find_higher = 1;
+                        btrfs_release_path(p);
+                        goto again;
+                } else {
+                        --p->slots[0];
+                }
+        }
+        return 0;
 }
 
 /*
@@ -1454,6 +1546,8 @@ static int noinline insert_new_root(struct btrfs_trans_handle *trans,
 	btrfs_set_header_backref_rev(c, BTRFS_MIXED_BACKREF_REV);
 	btrfs_set_header_owner(c, root->root_key.objectid);
 
+	root_add_used(root, root->fs_info->nodesize);
+
 	write_extent_buffer(c, root->fs_info->fsid,
 			    btrfs_header_fsid(), BTRFS_FSID_SIZE);
 
@@ -1581,6 +1675,7 @@ static int split_node(struct btrfs_trans_handle *trans, struct btrfs_root
 			    btrfs_header_chunk_tree_uuid(split),
 			    BTRFS_UUID_SIZE);
 
+	root_add_used(root, root->fs_info->nodesize);
 
 	copy_extent_buffer(split, c,
 			   btrfs_node_key_ptr_offset(0),
@@ -2052,7 +2147,7 @@ static noinline int copy_for_split(struct btrfs_trans_handle *trans,
  */
 static noinline int split_leaf(struct btrfs_trans_handle *trans,
 			       struct btrfs_root *root,
-			       struct btrfs_key *ins_key,
+			       const struct btrfs_key *ins_key,
 			       struct btrfs_path *path, int data_size,
 			       int extend)
 {
@@ -2162,6 +2257,8 @@ again:
 	write_extent_buffer(right, root->fs_info->chunk_tree_uuid,
 			    btrfs_header_chunk_tree_uuid(right),
 			    BTRFS_UUID_SIZE);
+
+	root_add_used(root, root->fs_info->nodesize);
 
 	if (split == 0) {
 		if (mid <= slot) {
@@ -2682,6 +2779,8 @@ static noinline int btrfs_del_leaf(struct btrfs_trans_handle *trans,
 	if (ret)
 		return ret;
 
+	root_sub_used(root, leaf->len);
+
 	ret = btrfs_free_extent(trans, root, leaf->start, leaf->len,
 				0, root->root_key.objectid, 0, 0);
 	return ret;
@@ -2851,18 +2950,22 @@ int btrfs_prev_leaf(struct btrfs_root *root, struct btrfs_path *path)
 }
 
 /*
- * walk up the tree as far as required to find the next leaf.
+ * Walk up the tree as far as necessary to find the next sibling tree block.
+ * More generic version of btrfs_next_leaf(), as it could find sibling nodes
+ * if @path->lowest_level is not 0.
+ *
  * returns 0 if it found something or 1 if there are no greater leaves.
  * returns < 0 on io errors.
  */
-int btrfs_next_leaf(struct btrfs_root *root, struct btrfs_path *path)
+int btrfs_next_sibling_tree_block(struct btrfs_fs_info *fs_info,
+				  struct btrfs_path *path)
 {
 	int slot;
-	int level = 1;
+	int level = path->lowest_level + 1;
 	struct extent_buffer *c;
 	struct extent_buffer *next = NULL;
-	struct btrfs_fs_info *fs_info = root->fs_info;
 
+	BUG_ON(path->lowest_level + 1 >= BTRFS_MAX_LEVEL);
 	while(level < BTRFS_MAX_LEVEL) {
 		if (!path->nodes[level])
 			return 1;
@@ -2877,7 +2980,7 @@ int btrfs_next_leaf(struct btrfs_root *root, struct btrfs_path *path)
 		}
 
 		if (path->reada)
-			reada_for_search(root, path, level, slot, 0);
+			reada_for_search(fs_info, path, level, slot, 0);
 
 		next = read_node_slot(fs_info, c, slot);
 		if (!extent_buffer_uptodate(next))
@@ -2891,10 +2994,10 @@ int btrfs_next_leaf(struct btrfs_root *root, struct btrfs_path *path)
 		free_extent_buffer(c);
 		path->nodes[level] = next;
 		path->slots[level] = 0;
-		if (!level)
+		if (level == path->lowest_level)
 			break;
 		if (path->reada)
-			reada_for_search(root, path, level, 0, 0);
+			reada_for_search(fs_info, path, level, 0, 0);
 		next = read_node_slot(fs_info, next, 0);
 		if (!extent_buffer_uptodate(next))
 			return -EIO;
@@ -2940,7 +3043,7 @@ int btrfs_previous_item(struct btrfs_root *root,
 
 /*
  * search in extent tree to find a previous Metadata/Data extent item with
- * min objecitd.
+ * min objectid.
  *
  * returns 0 if something is found, 1 if nothing was found and < 0 on error
  */

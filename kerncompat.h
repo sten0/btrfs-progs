@@ -263,6 +263,16 @@ static inline int IS_ERR_OR_NULL(const void *ptr)
 	return !ptr || IS_ERR(ptr);
 }
 
+#define div_u64(x, y) ((x) / (y))
+
+/**
+ * __swap - swap values of @a and @b
+ * @a: first value
+ * @b: second value
+ */
+#define __swap(a, b) \
+        do { typeof(a) __tmp = (a); (a) = (b); (b) = __tmp; } while (0)
+
 /*
  * This looks more complex than it should be. But we need to
  * get the type for the ~ right in round_down (it needs to be
@@ -289,6 +299,10 @@ static inline int IS_ERR_OR_NULL(const void *ptr)
 #define kfree(x) free(x)
 #define vmalloc(x) malloc(x)
 #define vfree(x) free(x)
+#define kvzalloc(x, y) kzalloc(x,y)
+#define kvfree(x) free(x)
+#define memalloc_nofs_save() (0)
+#define memalloc_nofs_restore(x)	((void)(x))
 
 #ifndef BTRFS_DISABLE_BACKTRACE
 static inline void assert_trace(const char *assertion, const char *filename,
