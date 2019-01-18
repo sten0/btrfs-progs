@@ -178,7 +178,7 @@ out:
  * 3) data read out is also aligned to sectorsize, not truncated to inode size
  *
  * Return < 0 for fatal error during read.
- * Otherwise return the number of succesfully read data in bytes.
+ * Otherwise return the number of successfully read data in bytes.
  */
 int btrfs_read_file(struct btrfs_root *root, u64 ino, u64 start, int len,
 		    char *dest)
@@ -255,8 +255,7 @@ int btrfs_read_file(struct btrfs_root *root, u64 ino, u64 start, int len,
 		/* Inline extent, one inode should only one inline extent */
 		if (btrfs_file_extent_type(leaf, fi) ==
 		    BTRFS_FILE_EXTENT_INLINE) {
-			extent_len = btrfs_file_extent_inline_len(leaf, slot,
-								  fi);
+			extent_len = btrfs_file_extent_ram_bytes(leaf, fi);
 			if (extent_start + extent_len <= start)
 				goto next;
 			read_extent_buffer(leaf, dest,
@@ -302,7 +301,7 @@ next:
 
 	/*
 	 * Special trick for no_holes, since for no_holes we don't have good
-	 * method to account skipped and tailling holes, we used
+	 * method to account skipped and tailing holes, we used
 	 * min(inode size, len) as return value
 	 */
 	if (no_holes) {

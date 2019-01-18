@@ -357,9 +357,9 @@ static void print_file_extent_item(struct extent_buffer *eb,
 			extent_type, file_extent_type_to_str(extent_type));
 
 	if (extent_type == BTRFS_FILE_EXTENT_INLINE) {
-		printf("\t\tinline extent data size %u ram_bytes %u compression %hhu (%s)\n",
+		printf("\t\tinline extent data size %u ram_bytes %llu compression %hhu (%s)\n",
 				btrfs_file_extent_inline_item_len(eb, item),
-				btrfs_file_extent_inline_len(eb, slot, fi),
+				btrfs_file_extent_ram_bytes(eb, fi),
 				btrfs_file_extent_compression(eb, fi),
 				compress_str);
 		return;
@@ -887,7 +887,7 @@ static void print_uuid_item(struct extent_buffer *l, unsigned long offset,
 })
 
 /*
- * Caller should ensure sizeof(*ret) >= 102: all charactors plus '|' of
+ * Caller should ensure sizeof(*ret) >= 102: all characters plus '|' of
  * BTRFS_INODE_* flags
  */
 static void inode_flags_to_str(u64 flags, char *ret)
@@ -1381,7 +1381,111 @@ void btrfs_print_leaf(struct extent_buffer *eb)
 	}
 }
 
-void btrfs_print_tree(struct extent_buffer *eb, int follow)
+/* Helper function to reach the leftmost tree block at @path->lowest_level */
+static int search_leftmost_tree_block(struct btrfs_fs_info *fs_info,
+				      struct btrfs_path *path, int root_level)
+{
+	int i;
+	int ret = 0;
+
+	/* Release all nodes except path->nodes[root_level] */
+	for (i = 0; i < root_level; i++) {
+		path->slots[i] = 0;
+		if (!path->nodes[i])
+			continue;
+		free_extent_buffer(path->nodes[i]);
+	}
+
+	/* Reach the leftmost tree block by always reading out slot 0 */
+	for (i = root_level; i > path->lowest_level; i--) {
+		struct extent_buffer *eb;
+
+		path->slots[i] = 0;
+		eb = read_node_slot(fs_info, path->nodes[i], 0);
+		if (!extent_buffer_uptodate(eb)) {
+			ret = -EIO;
+			goto out;
+		}
+		path->nodes[i - 1] = eb;
+	}
+out:
+	return ret;
+}
+
+static void bfs_print_children(struct extent_buffer *root_eb)
+{
+	struct btrfs_fs_info *fs_info = root_eb->fs_info;
+	struct btrfs_path path;
+	int root_level = btrfs_header_level(root_eb);
+	int cur_level;
+	int ret;
+
+	if (root_level < 1)
+		return;
+
+	btrfs_init_path(&path);
+	/* For path */
+	extent_buffer_get(root_eb);
+	path.nodes[root_level] = root_eb;
+
+	for (cur_level = root_level - 1; cur_level >= 0; cur_level--) {
+		path.lowest_level = cur_level;
+
+		/* Use the leftmost tree block as a starting point */
+		ret = search_leftmost_tree_block(fs_info, &path, root_level);
+		if (ret < 0)
+			goto out;
+
+		/* Print all sibling tree blocks */
+		while (1) {
+			btrfs_print_tree(path.nodes[cur_level], 0,
+					 BTRFS_PRINT_TREE_BFS);
+			ret = btrfs_next_sibling_tree_block(fs_info, &path);
+			if (ret < 0)
+				goto out;
+			if (ret > 0) {
+				ret = 0;
+				break;
+			}
+		}
+	}
+out:
+	btrfs_release_path(&path);
+	return;
+}
+
+static void dfs_print_children(struct extent_buffer *root_eb)
+{
+	struct btrfs_fs_info *fs_info = root_eb->fs_info;
+	struct extent_buffer *next;
+	int nr = btrfs_header_nritems(root_eb);
+	int root_eb_level = btrfs_header_level(root_eb);
+	int i;
+
+	for (i = 0; i < nr; i++) {
+		next = read_tree_block(fs_info, btrfs_node_blockptr(root_eb, i),
+				btrfs_node_ptr_generation(root_eb, i));
+		if (!extent_buffer_uptodate(next)) {
+			fprintf(stderr, "failed to read %llu in tree %llu\n",
+				btrfs_node_blockptr(root_eb, i),
+				btrfs_header_owner(root_eb));
+			continue;
+		}
+		if (btrfs_header_level(next) != root_eb_level - 1) {
+			warning(
+"eb corrupted: parent bytenr %llu slot %d level %d child bytenr %llu level has %d expect %d, skipping the slot",
+				btrfs_header_bytenr(root_eb), i, root_eb_level,
+				btrfs_header_bytenr(next),
+				btrfs_header_level(next), root_eb_level - 1);
+			free_extent_buffer(next);
+			continue;
+		}
+		btrfs_print_tree(next, 1, BTRFS_PRINT_TREE_DFS);
+		free_extent_buffer(next);
+	}
+}
+
+void btrfs_print_tree(struct extent_buffer *eb, bool follow, int traverse)
 {
 	u32 i;
 	u32 nr;
@@ -1389,10 +1493,12 @@ void btrfs_print_tree(struct extent_buffer *eb, int follow)
 	struct btrfs_fs_info *fs_info = eb->fs_info;
 	struct btrfs_disk_key disk_key;
 	struct btrfs_key key;
-	struct extent_buffer *next;
 
 	if (!eb)
 		return;
+	if (traverse != BTRFS_PRINT_TREE_DFS && traverse != BTRFS_PRINT_TREE_BFS)
+		traverse = BTRFS_PRINT_TREE_DEFAULT;
+
 	nr = btrfs_header_nritems(eb);
 	if (btrfs_is_leaf(eb)) {
 		btrfs_print_leaf(eb);
@@ -1420,9 +1526,8 @@ void btrfs_print_tree(struct extent_buffer *eb, int follow)
 		btrfs_disk_key_to_cpu(&key, &disk_key);
 		printf("\t");
 		btrfs_print_key(&disk_key);
-		printf(" block %llu (%llu) gen %llu\n",
+		printf(" block %llu gen %llu\n",
 		       (unsigned long long)blocknr,
-		       (unsigned long long)blocknr / eb->len,
 		       (unsigned long long)btrfs_node_ptr_generation(eb, i));
 		fflush(stdout);
 	}
@@ -1432,30 +1537,9 @@ void btrfs_print_tree(struct extent_buffer *eb, int follow)
 	if (follow && !fs_info)
 		return;
 
-	for (i = 0; i < nr; i++) {
-		next = read_tree_block(fs_info,
-				btrfs_node_blockptr(eb, i),
-				btrfs_node_ptr_generation(eb, i));
-		if (!extent_buffer_uptodate(next)) {
-			fprintf(stderr, "failed to read %llu in tree %llu\n",
-				(unsigned long long)btrfs_node_blockptr(eb, i),
-				(unsigned long long)btrfs_header_owner(eb));
-			continue;
-		}
-		if (btrfs_header_level(next) != btrfs_header_level(eb) - 1) {
-			warning(
-"eb corrupted: parent bytenr %llu slot %d level %d child bytenr %llu level has %d expect %d, skipping the slot",
-				btrfs_header_bytenr(eb), i,
-				btrfs_header_level(eb),
-				btrfs_header_bytenr(next),
-				btrfs_header_level(next),
-				btrfs_header_level(eb) - 1);
-			free_extent_buffer(next);
-			continue;
-		}
-		btrfs_print_tree(next, 1);
-		free_extent_buffer(next);
-	}
-
+	if (traverse == BTRFS_PRINT_TREE_DFS)
+		dfs_print_children(eb);
+	else
+		bfs_print_children(eb);
 	return;
 }

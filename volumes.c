@@ -254,7 +254,7 @@ again:
 		device = list_entry(fs_devices->devices.next,
 				    struct btrfs_device, dev_list);
 		if (device->fd != -1) {
-			if (fsync(device->fd) == -1) {
+			if (device->writeable && fsync(device->fd) == -1) {
 				warning("fsync on device %llu failed: %m",
 					device->devid);
 				ret = -errno;
@@ -561,7 +561,8 @@ static int btrfs_alloc_dev_extent(struct btrfs_trans_handle *trans,
 	key.type = BTRFS_DEV_EXTENT_KEY;
 	ret = btrfs_insert_empty_item(trans, root, path, &key,
 				      sizeof(*extent));
-	BUG_ON(ret);
+	if (ret < 0)
+		goto err;
 
 	leaf = path->nodes[0];
 	extent = btrfs_item_ptr(leaf, path->slots[0],
@@ -1924,9 +1925,13 @@ static int read_one_chunk(struct btrfs_fs_info *fs_info, struct btrfs_key *key,
 
 	}
 	ret = insert_cache_extent(&map_tree->cache_tree, &map->ce);
-	BUG_ON(ret);
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to add chunk map start=%llu len=%llu: %d (%m)",
+		      map->ce.start, map->ce.size, ret);
+	}
 
-	return 0;
+	return ret;
 }
 
 static int fill_device_from_item(struct extent_buffer *leaf,
@@ -2158,13 +2163,15 @@ int btrfs_read_chunk_tree(struct btrfs_fs_info *fs_info)
 			dev_item = btrfs_item_ptr(leaf, slot,
 						  struct btrfs_dev_item);
 			ret = read_one_dev(fs_info, leaf, dev_item);
-			BUG_ON(ret);
+			if (ret < 0)
+				goto error;
 		} else if (found_key.type == BTRFS_CHUNK_ITEM_KEY) {
 			struct btrfs_chunk *chunk;
 			chunk = btrfs_item_ptr(leaf, slot, struct btrfs_chunk);
 			ret = read_one_chunk(fs_info, &found_key, leaf, chunk,
 					     slot);
-			BUG_ON(ret);
+			if (ret < 0)
+				goto error;
 		}
 		path->slots[0]++;
 	}
@@ -2442,8 +2449,8 @@ int btrfs_fix_device_size(struct btrfs_fs_info *fs_info,
 	trans = btrfs_start_transaction(chunk_root, 1);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		error("error starting transaction: %d (%s)",
-		      ret, strerror(-ret));
+		errno = -ret;
+		error("error starting transaction: %d (%m)", ret);
 		return ret;
 	}
 
@@ -2455,8 +2462,8 @@ int btrfs_fix_device_size(struct btrfs_fs_info *fs_info,
 		goto err;
 	}
 	if (ret < 0) {
-		error("failed to search chunk root: %d (%s)",
-			ret, strerror(-ret));
+		errno = -ret;
+		error("failed to search chunk root: %d (%m)", ret);
 		goto err;
 	}
 	di = btrfs_item_ptr(path.nodes[0], path.slots[0], struct btrfs_dev_item);
@@ -2464,8 +2471,8 @@ int btrfs_fix_device_size(struct btrfs_fs_info *fs_info,
 	btrfs_mark_buffer_dirty(path.nodes[0]);
 	ret = btrfs_commit_transaction(trans, chunk_root);
 	if (ret < 0) {
-		error("failed to commit current transaction: %d (%s)",
-			ret, strerror(-ret));
+		errno = -ret;
+		error("failed to commit current transaction: %d (%m)", ret);
 		btrfs_release_path(&path);
 		return ret;
 	}
@@ -2518,14 +2525,14 @@ int btrfs_fix_super_size(struct btrfs_fs_info *fs_info)
 	trans = btrfs_start_transaction(fs_info->tree_root, 1);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		error("error starting transaction:  %d (%s)",
-		      ret, strerror(-ret));
+		errno = -ret;
+		error("error starting transaction: %d (%m)", ret);
 		return ret;
 	}
 	ret = btrfs_commit_transaction(trans, fs_info->tree_root);
 	if (ret < 0) {
-		error("failed to commit current transaction: %d (%s)",
-			ret, strerror(-ret));
+		errno = -ret;
+		error("failed to commit current transaction: %d (%m)", ret);
 		return ret;
 	}
 	printf("Fixed super total bytes, old size: %llu new size: %llu\n",

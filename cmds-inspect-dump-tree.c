@@ -221,6 +221,7 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 	int uuid_tree_only = 0;
 	int roots_only = 0;
 	int root_backups = 0;
+	int traverse = BTRFS_PRINT_TREE_DEFAULT;
 	unsigned open_ctree_flags;
 	u64 block_only = 0;
 	struct btrfs_root *tree_root_scan;
@@ -235,9 +236,11 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 	 * tree blocks as possible.
 	 */
 	open_ctree_flags = OPEN_CTREE_PARTIAL | OPEN_CTREE_NO_BLOCK_GROUPS;
+	optind = 0;
 	while (1) {
 		int c;
-		enum { GETOPT_VAL_FOLLOW = 256 };
+		enum { GETOPT_VAL_FOLLOW = 256, GETOPT_VAL_DFS,
+		       GETOPT_VAL_BFS };
 		static const struct option long_options[] = {
 			{ "extents", no_argument, NULL, 'e'},
 			{ "device", no_argument, NULL, 'd'},
@@ -247,6 +250,8 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 			{ "block", required_argument, NULL, 'b'},
 			{ "tree", required_argument, NULL, 't'},
 			{ "follow", no_argument, NULL, GETOPT_VAL_FOLLOW },
+			{ "bfs", no_argument, NULL, GETOPT_VAL_BFS },
+			{ "dfs", no_argument, NULL, GETOPT_VAL_DFS },
 			{ NULL, 0, NULL, 0 }
 		};
 
@@ -302,6 +307,12 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 		case GETOPT_VAL_FOLLOW:
 			follow = true;
 			break;
+		case GETOPT_VAL_DFS:
+			traverse = BTRFS_PRINT_TREE_DFS;
+			break;
+		case GETOPT_VAL_BFS:
+			traverse = BTRFS_PRINT_TREE_BFS;
+			break;
 		default:
 			usage(cmd_inspect_dump_tree_usage);
 		}
@@ -312,7 +323,13 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 
 	ret = check_arg_type(argv[optind]);
 	if (ret != BTRFS_ARG_BLKDEV && ret != BTRFS_ARG_REG) {
-		error("not a block device or regular file: %s", argv[optind]);
+		if (ret < 0) {
+			errno = -ret;
+			error("invalid argument %s: %m", argv[optind]);
+		} else {
+			error("not a block device or regular file: %s",
+			      argv[optind]);
+		}
 		goto out;
 	}
 
@@ -340,7 +357,7 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 				(unsigned long long)block_only);
 			goto close_root;
 		}
-		btrfs_print_tree(leaf, follow);
+		btrfs_print_tree(leaf, follow, BTRFS_PRINT_TREE_DEFAULT);
 		free_extent_buffer(leaf);
 		goto close_root;
 	}
@@ -367,17 +384,20 @@ int cmd_inspect_dump_tree(int argc, char **argv)
 		} else {
 			if (info->tree_root->node) {
 				printf("root tree\n");
-				btrfs_print_tree(info->tree_root->node, 1);
+				btrfs_print_tree(info->tree_root->node, true,
+						 traverse);
 			}
 
 			if (info->chunk_root->node) {
 				printf("chunk tree\n");
-				btrfs_print_tree(info->chunk_root->node, 1);
+				btrfs_print_tree(info->chunk_root->node, true,
+						 traverse);
 			}
 
 			if (info->log_root_tree) {
 				printf("log root tree\n");
-				btrfs_print_tree(info->log_root_tree->node, 1);
+				btrfs_print_tree(info->log_root_tree->node,
+						 true, traverse);
 			}
 		}
 	}
@@ -397,7 +417,7 @@ again:
 			goto close_root;
 		}
 		printf("root tree\n");
-		btrfs_print_tree(info->tree_root->node, 1);
+		btrfs_print_tree(info->tree_root->node, true, traverse);
 		goto close_root;
 	}
 
@@ -407,7 +427,7 @@ again:
 			goto close_root;
 		}
 		printf("chunk tree\n");
-		btrfs_print_tree(info->chunk_root->node, 1);
+		btrfs_print_tree(info->chunk_root->node, true, traverse);
 		goto close_root;
 	}
 
@@ -417,7 +437,7 @@ again:
 			goto close_root;
 		}
 		printf("log root tree\n");
-		btrfs_print_tree(info->log_root_tree->node, 1);
+		btrfs_print_tree(info->log_root_tree->node, true, traverse);
 		goto close_root;
 	}
 
@@ -426,9 +446,9 @@ again:
 	key.type = BTRFS_ROOT_ITEM_KEY;
 	ret = btrfs_search_slot(NULL, tree_root_scan, &key, &path, 0, 0);
 	if (ret < 0) {
-		error("cannot read ROOT_ITEM from tree %llu: %s",
-			(unsigned long long)tree_root_scan->root_key.objectid,
-			strerror(-ret));
+		errno = -ret;
+		error("cannot read ROOT_ITEM from tree %llu: %m",
+			(unsigned long long)tree_root_scan->root_key.objectid);
 		goto close_root;
 	}
 	while (1) {
@@ -563,7 +583,7 @@ again:
 					       btrfs_header_level(buf));
 				} else {
 					printf(" \n");
-					btrfs_print_tree(buf, 1);
+					btrfs_print_tree(buf, true, traverse);
 				}
 			}
 			free_extent_buffer(buf);

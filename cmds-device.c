@@ -57,6 +57,7 @@ static int cmd_device_add(int argc, char **argv)
 	int force = 0;
 	int last_dev;
 
+	optind = 0;
 	while (1) {
 		int c;
 		static const struct option long_options[] = {
@@ -267,6 +268,7 @@ static int cmd_device_scan(int argc, char **argv)
 	int all = 0;
 	int ret = 0;
 
+	optind = 0;
 	while (1) {
 		int c;
 		static const struct option long_options[] = {
@@ -403,6 +405,7 @@ static int cmd_device_stats(int argc, char **argv)
 	__u64 flags = 0;
 	DIR *dirstream = NULL;
 
+	optind = 0;
 	while (1) {
 		int c;
 		static const struct option long_options[] = {
@@ -439,8 +442,8 @@ static int cmd_device_stats(int argc, char **argv)
 
 	ret = get_fs_info(dev_path, &fi_args, &di_args);
 	if (ret) {
-		error("getting device info for %s failed: %s", dev_path,
-			strerror(-ret));
+		errno = -ret;
+		error("getting device info for %s failed: %m", dev_path);
 		err = 1;
 		goto out;
 	}
@@ -526,7 +529,7 @@ static const char * const cmd_device_usage_usage[] = {
 	NULL
 };
 
-static int _cmd_device_usage(int fd, char *path, unsigned unit_mode)
+static int _cmd_device_usage(int fd, const char *path, unsigned unit_mode)
 {
 	int i;
 	int ret = 0;

@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <uuid/uuid.h>
+#include <time.h>
 #include "ctree.h"
 #include "volumes.h"
 #include "repair.h"
@@ -47,20 +48,6 @@
 #include "check/mode-original.h"
 #include "check/mode-lowmem.h"
 
-enum task_position {
-	TASK_EXTENTS,
-	TASK_FREE_SPACE,
-	TASK_FS_ROOTS,
-	TASK_NOTHING, /* have to be the last element */
-};
-
-struct task_ctx {
-	int progress_enabled;
-	enum task_position tp;
-
-	struct task_info *info;
-};
-
 u64 bytes_used = 0;
 u64 total_csum_bytes = 0;
 u64 total_btree_bytes = 0;
@@ -72,6 +59,7 @@ u64 data_bytes_referenced = 0;
 LIST_HEAD(duplicate_extents);
 LIST_HEAD(delete_items);
 int no_holes = 0;
+static int is_free_space_tree = 0;
 int init_extent_tree = 0;
 int check_data_csum = 0;
 struct btrfs_fs_info *global_info;
@@ -173,28 +161,55 @@ static int compare_extent_backref(struct rb_node *node1, struct rb_node *node2)
 		return compare_tree_backref(node1, node2);
 }
 
+static void print_status_check_line(void *p)
+{
+	struct task_ctx *priv = p;
+	const char *task_position_string[] = {
+		"[1/7] checking root items                     ",
+		"[2/7] checking extents                        ",
+		is_free_space_tree ?
+		"[3/7] checking free space tree                " :
+		"[3/7] checking free space cache               ",
+		"[4/7] checking fs roots                       ",
+		check_data_csum ?
+		"[5/7] checking csums against data             " :
+		"[5/7] checking csums (without verifying data) ",
+		"[6/7] checking root refs                      ",
+		"[7/7] checking quota groups                   ",
+	};
+	time_t elapsed;
+	int hours;
+	int minutes;
+	int seconds;
+
+	elapsed = time(NULL) - priv->start_time;
+	hours   = elapsed  / 3600;
+	elapsed -= hours   * 3600;
+	minutes = elapsed  / 60;
+	elapsed -= minutes * 60;
+	seconds = elapsed;
+
+	printf("%s (%d:%02d:%02d elapsed", task_position_string[priv->tp],
+			hours, minutes, seconds);
+	if (priv->item_count > 0)
+		printf(", %llu items checked)\r", priv->item_count);
+	else
+		printf(")\r");
+	fflush(stdout);
+}
 
 static void *print_status_check(void *p)
 {
 	struct task_ctx *priv = p;
-	const char work_indicator[] = { '.', 'o', 'O', 'o' };
-	uint32_t count = 0;
-	static char *task_position_string[] = {
-		"checking extents",
-		"checking free space cache",
-		"checking fs roots",
-	};
 
-	task_period_start(priv->info, 1000 /* 1s */);
+	/* 1 second */
+	task_period_start(priv->info, 1000);
 
 	if (priv->tp == TASK_NOTHING)
 		return NULL;
 
 	while (1) {
-		printf("%s [%c]\r", task_position_string[priv->tp],
-				work_indicator[count % 4]);
-		count++;
-		fflush(stdout);
+		print_status_check_line(p);
 		task_period_wait(priv->info);
 	}
 	return NULL;
@@ -202,6 +217,7 @@ static void *print_status_check(void *p)
 
 static int print_status_return(void *p)
 {
+	print_status_check_line(p);
 	printf("\n");
 	fflush(stdout);
 
@@ -578,6 +594,8 @@ static void print_inode_error(struct btrfs_root *root, struct inode_record *rec)
 		fprintf(stderr, ", orphan file extent");
 	if (errors & I_ERR_ODD_INODE_FLAGS)
 		fprintf(stderr, ", odd inode flags");
+	if (errors & I_ERR_INLINE_RAM_BYTES_WRONG)
+		fprintf(stderr, ", invalid inline ram bytes");
 	fprintf(stderr, "\n");
 	/* Print the orphan extents if needed */
 	if (errors & I_ERR_FILE_EXTENT_ORPHAN)
@@ -1472,7 +1490,7 @@ static int process_file_extent(struct btrfs_root *root,
 		u8 compression = btrfs_file_extent_compression(eb, fi);
 		struct btrfs_item *item = btrfs_item_nr(slot);
 
-		num_bytes = btrfs_file_extent_inline_len(eb, slot, fi);
+		num_bytes = btrfs_file_extent_ram_bytes(eb, fi);
 		if (num_bytes == 0)
 			rec->errors |= I_ERR_BAD_FILE_EXTENT;
 		if (compression) {
@@ -1483,6 +1501,9 @@ static int process_file_extent(struct btrfs_root *root,
 		} else {
 			if (num_bytes > max_inline_size)
 				rec->errors |= I_ERR_FILE_EXTENT_TOO_LARGE;
+			if (btrfs_file_extent_inline_item_len(eb, item) !=
+			    num_bytes)
+				rec->errors |= I_ERR_INLINE_RAM_BYTES_WRONG;
 		}
 		rec->found_size += num_bytes;
 		num_bytes = (num_bytes + mask) & ~mask;
@@ -2270,9 +2291,9 @@ static int repair_inode_nlinks(struct btrfs_trans_handle *trans,
 
 	ret = reset_nlink(trans, root, path, rec);
 	if (ret < 0) {
+		errno = -ret;
 		fprintf(stderr,
-			"Failed to reset nlink for inode %llu: %s\n",
-			rec->ino, strerror(-ret));
+			"Failed to reset nlink for inode %llu: %m\n", rec->ino);
 		goto out;
 	}
 
@@ -2534,6 +2555,41 @@ out:
 	return ret;
 }
 
+static int repair_inline_ram_bytes(struct btrfs_trans_handle *trans,
+				   struct btrfs_root *root,
+				   struct btrfs_path *path,
+				   struct inode_record *rec)
+{
+	struct btrfs_key key;
+	struct btrfs_file_extent_item *fi;
+	struct btrfs_item *i;
+	u64 on_disk_item_len;
+	int ret;
+
+	key.objectid = rec->ino;
+	key.offset = 0;
+	key.type = BTRFS_EXTENT_DATA_KEY;
+
+	ret = btrfs_search_slot(trans, root, &key, path, 0, 1);
+	if (ret > 0)
+		ret = -ENOENT;
+	if (ret < 0)
+		goto out;
+
+	i = btrfs_item_nr(path->slots[0]);
+	on_disk_item_len = btrfs_file_extent_inline_item_len(path->nodes[0], i);
+	fi = btrfs_item_ptr(path->nodes[0], path->slots[0],
+			    struct btrfs_file_extent_item);
+	btrfs_set_file_extent_ram_bytes(path->nodes[0], fi, on_disk_item_len);
+	btrfs_mark_buffer_dirty(path->nodes[0]);
+	printf("Repaired inline ram_bytes for root %llu ino %llu\n",
+		root->objectid, rec->ino);
+	rec->errors &= ~I_ERR_INLINE_RAM_BYTES_WRONG;
+out:
+	btrfs_release_path(path);
+	return ret;
+}
+
 static int try_repair_inode(struct btrfs_root *root, struct inode_record *rec)
 {
 	struct btrfs_trans_handle *trans;
@@ -2545,8 +2601,9 @@ static int try_repair_inode(struct btrfs_root *root, struct inode_record *rec)
 			     I_ERR_LINK_COUNT_WRONG |
 			     I_ERR_NO_INODE_ITEM |
 			     I_ERR_FILE_EXTENT_ORPHAN |
-			     I_ERR_FILE_EXTENT_DISCOUNT|
-			     I_ERR_FILE_NBYTES_WRONG)))
+			     I_ERR_FILE_EXTENT_DISCOUNT |
+			     I_ERR_FILE_NBYTES_WRONG |
+			     I_ERR_INLINE_RAM_BYTES_WRONG)))
 		return rec->errors;
 
 	/*
@@ -2575,6 +2632,8 @@ static int try_repair_inode(struct btrfs_root *root, struct inode_record *rec)
 		ret = repair_inode_nlinks(trans, root, &path, rec);
 	if (!ret && rec->errors & I_ERR_FILE_NBYTES_WRONG)
 		ret = repair_inode_nbytes(trans, root, &path, rec);
+	if (!ret && rec->errors & I_ERR_INLINE_RAM_BYTES_WRONG)
+		ret = repair_inline_ram_bytes(trans, root, &path, rec);
 	btrfs_commit_transaction(trans, root);
 	btrfs_release_path(&path);
 	return ret;
@@ -2676,7 +2735,10 @@ static int check_inode_recs(struct btrfs_root *root,
 				(unsigned long long)root->objectid);
 
 			ret = btrfs_make_root_dir(trans, root, root_dirid);
-			BUG_ON(ret);
+			if (ret < 0) {
+				btrfs_abort_transaction(trans, ret);
+				return ret;
+			}
 
 			btrfs_commit_transaction(trans, root);
 			return -EAGAIN;
@@ -2721,7 +2783,6 @@ static int check_inode_recs(struct btrfs_root *root,
 				free_inode_rec(rec);
 				continue;
 			}
-			ret = 0;
 		}
 
 		if (!(repair && ret == 0))
@@ -2942,6 +3003,7 @@ static int check_root_refs(struct btrfs_root *root,
 		loop = 0;
 		cache = search_cache_extent(root_cache, 0);
 		while (1) {
+			ctx.item_count++;
 			if (!cache)
 				break;
 			rec = container_of(cache, struct root_record, cache);
@@ -3108,8 +3170,8 @@ static int repair_btree(struct btrfs_root *root,
 	trans = btrfs_start_transaction(root, 1);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		fprintf(stderr, "Error starting transaction: %s\n",
-			strerror(-ret));
+		errno = -ret;
+		fprintf(stderr, "Error starting transaction: %m\n");
 		return ret;
 	}
 	btrfs_init_path(&path);
@@ -3263,6 +3325,7 @@ static int check_fs_root(struct btrfs_root *root,
 	}
 
 	while (1) {
+		ctx.item_count++;
 		wret = walk_down_tree(root, &path, wc, &level, &nrefs);
 		if (wret < 0)
 			ret = wret;
@@ -3300,8 +3363,8 @@ skip_walking:
 			       root->root_key.objectid);
 			ret = repair_btree(root, &corrupt_blocks);
 			if (ret < 0)
-				fprintf(stderr, "Failed to repair btree: %s\n",
-					strerror(-ret));
+				errno = -ret;
+				fprintf(stderr, "Failed to repair btree: %m\n");
 			if (!ret)
 				printf("Btree for root %llu is fixed\n",
 				       root->root_key.objectid);
@@ -3337,13 +3400,9 @@ static int check_fs_roots(struct btrfs_fs_info *fs_info,
 	struct extent_buffer *leaf, *tree_node;
 	struct btrfs_root *tmp_root;
 	struct btrfs_root *tree_root = fs_info->tree_root;
+	u64 skip_root = 0;
 	int ret;
 	int err = 0;
-
-	if (ctx.progress_enabled) {
-		ctx.tp = TASK_FS_ROOTS;
-		task_start(ctx.info);
-	}
 
 	/*
 	 * Just in case we made any changes to the extent tree that weren't
@@ -3357,7 +3416,10 @@ static int check_fs_roots(struct btrfs_fs_info *fs_info,
 
 again:
 	key.offset = 0;
-	key.objectid = 0;
+	if (skip_root)
+		key.objectid = skip_root + 1;
+	else
+		key.objectid = 0;
 	key.type = BTRFS_ROOT_ITEM_KEY;
 	ret = btrfs_search_slot(NULL, tree_root, &key, &path, 0, 0);
 	if (ret < 0) {
@@ -3366,6 +3428,7 @@ again:
 	}
 	tree_node = tree_root->node;
 	while (1) {
+
 		if (tree_node != tree_root->node) {
 			free_root_recs_tree(root_cache);
 			btrfs_release_path(&path);
@@ -3402,8 +3465,18 @@ again:
 				btrfs_release_path(&path);
 				goto again;
 			}
-			if (ret)
+			if (ret) {
 				err = 1;
+
+				/*
+				 * We failed to repair this root but modified
+				 * tree root, after again: label we will still
+				 * hit this root and fail to repair, so we must
+				 * skip it to avoid infinite loop.
+				 */
+				if (repair)
+					skip_root = key.objectid;
+			}
 			if (key.objectid == BTRFS_TREE_RELOC_OBJECTID)
 				btrfs_free_fs_root(tmp_root);
 		} else if (key.type == BTRFS_ROOT_REF_KEY ||
@@ -3420,8 +3493,6 @@ out:
 		free_extent_cache_tree(&wc.shared);
 	if (!cache_tree_empty(&wc.shared))
 		fprintf(stderr, "warning line %d\n", __LINE__);
-
-	task_stop(ctx.info);
 
 	return err;
 }
@@ -3491,8 +3562,6 @@ static int do_check_fs_roots(struct btrfs_fs_info *fs_info,
 {
 	int ret;
 
-	if (!ctx.progress_enabled)
-		fprintf(stderr, "checking fs roots\n");
 	if (check_mode == CHECK_MODE_LOWMEM)
 		ret = check_fs_roots_lowmem(fs_info);
 	else
@@ -3681,7 +3750,12 @@ static int check_owner_ref(struct btrfs_root *root,
 		if (btrfs_header_owner(buf) == back->root)
 			return 0;
 	}
-	BUG_ON(rec->is_root);
+	/*
+	 * Some unexpected root item referring to this one, return 1 to
+	 * indicate owner not found
+	 */
+	if (rec->is_root)
+		return 1;
 
 	/* try to find the block by search corresponding fs tree */
 	key.objectid = btrfs_header_owner(buf);
@@ -3977,6 +4051,11 @@ static int try_to_fix_bad_block(struct btrfs_root *root,
 
 	btrfs_init_path(&path);
 	ULIST_ITER_INIT(&iter);
+	/*
+	 * If we found no roots referencing to this tree block, there is no
+	 * chance to fix. So our default ret is -EIO.
+	 */
+	ret = -EIO;
 	while ((node = ulist_next(roots, &iter))) {
 		root_key.objectid = node->val;
 		root_key.type = BTRFS_ROOT_ITEM_KEY;
@@ -4964,7 +5043,7 @@ btrfs_new_device_extent_record(struct extent_buffer *leaf,
 	rec->offset = key->offset;
 
 	ptr = btrfs_item_ptr(leaf, slot, struct btrfs_dev_extent);
-	rec->chunk_objecteid =
+	rec->chunk_objectid =
 		btrfs_dev_extent_chunk_objectid(leaf, ptr);
 	rec->chunk_offset =
 		btrfs_dev_extent_chunk_offset(leaf, ptr);
@@ -5098,18 +5177,20 @@ static int process_extent_item(struct btrfs_root *root,
 		case BTRFS_TREE_BLOCK_REF_KEY:
 			ret = add_tree_backref(extent_cache, key.objectid,
 					0, offset, 0);
-			if (ret < 0)
+			if (ret < 0) {
+				errno = -ret;
 				error(
-			"add_tree_backref failed (extent items tree block): %s",
-				      strerror(-ret));
+			"add_tree_backref failed (extent items tree block): %m");
+			}
 			break;
 		case BTRFS_SHARED_BLOCK_REF_KEY:
 			ret = add_tree_backref(extent_cache, key.objectid,
 					offset, 0, 0);
-			if (ret < 0)
+			if (ret < 0) {
+				errno = -ret;
 				error(
-			"add_tree_backref failed (extent items shared block): %s",
-				      strerror(-ret));
+		"add_tree_backref failed (extent items shared block): %m");
+			}
 			break;
 		case BTRFS_EXTENT_DATA_REF_KEY:
 			dref = (struct btrfs_extent_data_ref *)(&iref->offset);
@@ -5321,20 +5402,8 @@ static int check_space_cache(struct btrfs_root *root)
 	int ret;
 	int error = 0;
 
-	if (btrfs_super_cache_generation(root->fs_info->super_copy) != -1ULL &&
-	    btrfs_super_generation(root->fs_info->super_copy) !=
-	    btrfs_super_cache_generation(root->fs_info->super_copy)) {
-		printf("cache and super generation don't match, space cache "
-		       "will be invalidated\n");
-		return 0;
-	}
-
-	if (ctx.progress_enabled) {
-		ctx.tp = TASK_FREE_SPACE;
-		task_start(ctx.info);
-	}
-
 	while (1) {
+		ctx.item_count++;
 		cache = btrfs_lookup_first_block_group(root->fs_info, start);
 		if (!cache)
 			break;
@@ -5353,16 +5422,18 @@ static int check_space_cache(struct btrfs_root *root)
 		if (btrfs_fs_compat_ro(root->fs_info, FREE_SPACE_TREE)) {
 			ret = exclude_super_stripes(root, cache);
 			if (ret) {
-				fprintf(stderr, "could not exclude super stripes: %s\n",
-					strerror(-ret));
+				errno = -ret;
+				fprintf(stderr,
+					"could not exclude super stripes: %m\n");
 				error++;
 				continue;
 			}
 			ret = load_free_space_tree(root->fs_info, cache);
 			free_excluded_extents(root, cache);
 			if (ret < 0) {
-				fprintf(stderr, "could not load free space tree: %s\n",
-					strerror(-ret));
+				errno = -ret;
+				fprintf(stderr,
+					"could not load free space tree: %m\n");
 				error++;
 				continue;
 			}
@@ -5382,8 +5453,6 @@ static int check_space_cache(struct btrfs_root *root)
 			error++;
 		}
 	}
-
-	task_stop(ctx.info);
 
 	return error ? -EINVAL : 0;
 }
@@ -5654,6 +5723,7 @@ static int check_csums(struct btrfs_root *root)
 	}
 
 	while (1) {
+		ctx.item_count++;
 		if (path.slots[0] >= btrfs_header_nritems(path.nodes[0])) {
 			ret = btrfs_next_leaf(root, &path);
 			if (ret < 0) {
@@ -6056,19 +6126,21 @@ static int run_next_block(struct btrfs_root *root,
 			if (key.type == BTRFS_TREE_BLOCK_REF_KEY) {
 				ret = add_tree_backref(extent_cache,
 						key.objectid, 0, key.offset, 0);
-				if (ret < 0)
+				if (ret < 0) {
+					errno = -ret;
 					error(
-				"add_tree_backref failed (leaf tree block): %s",
-					      strerror(-ret));
+				"add_tree_backref failed (leaf tree block): %m");
+				}
 				continue;
 			}
 			if (key.type == BTRFS_SHARED_BLOCK_REF_KEY) {
 				ret = add_tree_backref(extent_cache,
 						key.objectid, key.offset, 0, 0);
-				if (ret < 0)
+				if (ret < 0) {
+					errno = -ret;
 					error(
-				"add_tree_backref failed (leaf shared block): %s",
-					      strerror(-ret));
+			"add_tree_backref failed (leaf shared block): %m");
+				}
 				continue;
 			}
 			if (key.type == BTRFS_EXTENT_DATA_REF_KEY) {
@@ -6170,9 +6242,9 @@ static int run_next_block(struct btrfs_root *root,
 			ret = add_tree_backref(extent_cache, ptr, parent,
 					owner, 1);
 			if (ret < 0) {
+				errno = -ret;
 				error(
-				"add_tree_backref failed (non-leaf block): %s",
-				      strerror(-ret));
+				"add_tree_backref failed (non-leaf block): %m");
 				continue;
 			}
 
@@ -6232,8 +6304,7 @@ static int add_root_to_pending(struct extent_buffer *buf,
  * we're tracking for repair.  This hook makes sure we
  * remove any backrefs for blocks as we are fixing them.
  */
-static int free_extent_hook(struct btrfs_trans_handle *trans,
-			    struct btrfs_root *root,
+static int free_extent_hook(struct btrfs_fs_info *fs_info,
 			    u64 bytenr, u64 num_bytes, u64 parent,
 			    u64 root_objectid, u64 owner, u64 offset,
 			    int refs_to_drop)
@@ -6241,7 +6312,7 @@ static int free_extent_hook(struct btrfs_trans_handle *trans,
 	struct extent_record *rec;
 	struct cache_extent *cache;
 	int is_data;
-	struct cache_tree *extent_cache = root->fs_info->fsck_extent_cache;
+	struct cache_tree *extent_cache = fs_info->fsck_extent_cache;
 
 	is_data = owner >= BTRFS_FIRST_FREE_OBJECTID;
 	cache = lookup_cache_extent(extent_cache, bytenr, num_bytes);
@@ -6800,7 +6871,7 @@ static int verify_backrefs(struct btrfs_fs_info *info, struct btrfs_path *path,
 		goto out;
 
 	fprintf(stderr,
-		"attempting to repair backref discrepency for bytenr %llu\n",
+		"attempting to repair backref discrepancy for bytenr %llu\n",
 		rec->start);
 
 	/*
@@ -7780,7 +7851,7 @@ static int check_chunk_refs(struct chunk_record *chunk_rec,
 			    dev_extent_rec->length != length) {
 				if (!silent)
 					fprintf(stderr,
-						"Chunk[%llu, %u, %llu] stripe[%llu, %llu] dismatch dev extent[%llu, %llu, %llu]\n",
+"Chunk[%llu, %u, %llu] stripe[%llu, %llu] mismatch dev extent[%llu, %llu, %llu]\n",
 						chunk_rec->objectid,
 						chunk_rec->type,
 						chunk_rec->offset,
@@ -8047,6 +8118,7 @@ static int deal_root_from_list(struct list_head *list,
 		 * can maximize readahead.
 		 */
 		while (1) {
+			ctx.item_count++;
 			ret = run_next_block(root, bits, bits_nr, &last,
 					     pending, seen, reada, nodes,
 					     extent_cache, chunk_cache,
@@ -8075,6 +8147,89 @@ static int deal_root_from_list(struct list_head *list,
 	return ret;
 }
 
+/**
+ * parse_tree_roots - Go over all roots in the tree root and add each one to
+ *		      a list.
+ *
+ * @fs_info        - pointer to fs_info struct of the file system.
+ *
+ * @normal_trees   - list to contains all roots which don't have a drop
+ *		     operation in progress
+ *
+ * @dropping_trees - list containing all roots which have a drop operation
+ *		     pending
+ *
+ * Returns 0 on success or a negative value indicating an error.
+ */
+static int parse_tree_roots(struct btrfs_fs_info *fs_info,
+			   struct list_head *normal_trees,
+			   struct list_head *dropping_trees)
+{
+	struct btrfs_path path;
+	struct btrfs_key key;
+	struct btrfs_key found_key;
+	struct btrfs_root_item ri;
+	struct extent_buffer *leaf;
+	int slot;
+	int ret = 0;
+
+	btrfs_init_path(&path);
+	key.offset = 0;
+	key.objectid = 0;
+	key.type = BTRFS_ROOT_ITEM_KEY;
+	ret = btrfs_search_slot(NULL, fs_info->tree_root, &key, &path, 0, 0);
+	if (ret < 0)
+		goto out;
+	while (1) {
+		leaf = path.nodes[0];
+		slot = path.slots[0];
+		if (slot >= btrfs_header_nritems(path.nodes[0])) {
+			ret = btrfs_next_leaf(fs_info->tree_root, &path);
+			if (ret != 0)
+				break;
+			leaf = path.nodes[0];
+			slot = path.slots[0];
+		}
+		btrfs_item_key_to_cpu(leaf, &found_key, path.slots[0]);
+		if (found_key.type == BTRFS_ROOT_ITEM_KEY) {
+			unsigned long offset;
+			u64 last_snapshot;
+			u8 level;
+
+			offset = btrfs_item_ptr_offset(leaf, path.slots[0]);
+			read_extent_buffer(leaf, &ri, offset, sizeof(ri));
+			last_snapshot = btrfs_root_last_snapshot(&ri);
+			level = btrfs_root_level(&ri);
+			if (btrfs_disk_key_objectid(&ri.drop_progress) == 0) {
+				ret = add_root_item_to_list(normal_trees,
+						found_key.objectid,
+						btrfs_root_bytenr(&ri),
+						last_snapshot, level,
+						0, NULL);
+				if (ret < 0)
+					break;
+			} else {
+				u64 objectid = found_key.objectid;
+
+				btrfs_disk_key_to_cpu(&found_key,
+						      &ri.drop_progress);
+				ret = add_root_item_to_list(dropping_trees,
+						objectid,
+						btrfs_root_bytenr(&ri),
+						last_snapshot, level,
+						ri.drop_level, &found_key);
+				if (ret < 0)
+					break;
+			}
+		}
+		path.slots[0]++;
+	}
+
+out:
+	btrfs_release_path(&path);
+	return ret;
+}
+
 static int check_chunks_and_extents(struct btrfs_fs_info *fs_info)
 {
 	struct rb_root dev_cache;
@@ -8088,20 +8243,13 @@ static int check_chunks_and_extents(struct btrfs_fs_info *fs_info)
 	struct cache_tree nodes;
 	struct extent_io_tree excluded_extents;
 	struct cache_tree corrupt_blocks;
-	struct btrfs_path path;
-	struct btrfs_key key;
-	struct btrfs_key found_key;
 	int ret, err = 0;
 	struct block_info *bits;
 	int bits_nr;
-	struct extent_buffer *leaf;
-	int slot;
-	struct btrfs_root_item ri;
 	struct list_head dropping_trees;
 	struct list_head normal_trees;
 	struct btrfs_root *root1;
 	struct btrfs_root *root;
-	u64 objectid;
 	u8 level;
 
 	root = fs_info->fs_root;
@@ -8134,11 +8282,6 @@ static int check_chunks_and_extents(struct btrfs_fs_info *fs_info)
 		exit(1);
 	}
 
-	if (ctx.progress_enabled) {
-		ctx.tp = TASK_EXTENTS;
-		task_start(ctx.info);
-	}
-
 again:
 	root1 = fs_info->tree_root;
 	level = btrfs_header_level(root1->node);
@@ -8152,57 +8295,10 @@ again:
 				    root1->node->start, 0, level, 0, NULL);
 	if (ret < 0)
 		goto out;
-	btrfs_init_path(&path);
-	key.offset = 0;
-	key.objectid = 0;
-	key.type = BTRFS_ROOT_ITEM_KEY;
-	ret = btrfs_search_slot(NULL, fs_info->tree_root, &key, &path, 0, 0);
+
+	ret = parse_tree_roots(fs_info, &normal_trees, &dropping_trees);
 	if (ret < 0)
 		goto out;
-	while (1) {
-		leaf = path.nodes[0];
-		slot = path.slots[0];
-		if (slot >= btrfs_header_nritems(path.nodes[0])) {
-			ret = btrfs_next_leaf(root, &path);
-			if (ret != 0)
-				break;
-			leaf = path.nodes[0];
-			slot = path.slots[0];
-		}
-		btrfs_item_key_to_cpu(leaf, &found_key, path.slots[0]);
-		if (found_key.type == BTRFS_ROOT_ITEM_KEY) {
-			unsigned long offset;
-			u64 last_snapshot;
-
-			offset = btrfs_item_ptr_offset(leaf, path.slots[0]);
-			read_extent_buffer(leaf, &ri, offset, sizeof(ri));
-			last_snapshot = btrfs_root_last_snapshot(&ri);
-			if (btrfs_disk_key_objectid(&ri.drop_progress) == 0) {
-				level = btrfs_root_level(&ri);
-				ret = add_root_item_to_list(&normal_trees,
-						found_key.objectid,
-						btrfs_root_bytenr(&ri),
-						last_snapshot, level,
-						0, NULL);
-				if (ret < 0)
-					goto out;
-			} else {
-				level = btrfs_root_level(&ri);
-				objectid = found_key.objectid;
-				btrfs_disk_key_to_cpu(&found_key,
-						      &ri.drop_progress);
-				ret = add_root_item_to_list(&dropping_trees,
-						objectid,
-						btrfs_root_bytenr(&ri),
-						last_snapshot, level,
-						ri.drop_level, &found_key);
-				if (ret < 0)
-					goto out;
-			}
-		}
-		path.slots[0]++;
-	}
-	btrfs_release_path(&path);
 
 	/*
 	 * check_block can return -EAGAIN if it fixes something, please keep
@@ -8248,7 +8344,6 @@ again:
 		ret = err;
 
 out:
-	task_stop(ctx.info);
 	if (repair) {
 		free_corrupt_blocks_tree(fs_info->corrupt_blocks);
 		extent_io_tree_cleanup(&excluded_extents);
@@ -8290,8 +8385,6 @@ static int do_check_chunks_and_extents(struct btrfs_fs_info *fs_info)
 {
 	int ret;
 
-	if (!ctx.progress_enabled)
-		fprintf(stderr, "checking extents\n");
 	if (check_mode == CHECK_MODE_LOWMEM)
 		ret = check_chunks_and_extents_lowmem(fs_info);
 	else
@@ -8307,7 +8400,7 @@ static int do_check_chunks_and_extents(struct btrfs_fs_info *fs_info)
 }
 
 static int btrfs_fsck_reinit_root(struct btrfs_trans_handle *trans,
-			   struct btrfs_root *root, int overwrite)
+				  struct btrfs_root *root)
 {
 	struct extent_buffer *c;
 	struct extent_buffer *old = root->node;
@@ -8317,21 +8410,13 @@ static int btrfs_fsck_reinit_root(struct btrfs_trans_handle *trans,
 
 	level = 0;
 
-	if (overwrite) {
-		c = old;
-		extent_buffer_get(c);
-		goto init;
-	}
 	c = btrfs_alloc_free_block(trans, root,
 				   root->fs_info->nodesize,
 				   root->root_key.objectid,
 				   &disk_key, level, 0, 0);
-	if (IS_ERR(c)) {
-		c = old;
-		extent_buffer_get(c);
-		overwrite = 1;
-	}
-init:
+	if (IS_ERR(c))
+		return PTR_ERR(c);
+
 	memset_extent_buffer(c, 0, 0, sizeof(struct btrfs_header));
 	btrfs_set_header_level(c, level);
 	btrfs_set_header_bytenr(c, c->start);
@@ -8350,9 +8435,7 @@ init:
 	/*
 	 * this case can happen in the following case:
 	 *
-	 * 1.overwrite previous root.
-	 *
-	 * 2.reinit reloc data root, this is because we skip pin
+	 * reinit reloc data root, this is because we skip pin
 	 * down reloc data tree before which means we can allocate
 	 * same block bytenr here.
 	 */
@@ -8537,7 +8620,7 @@ reinit_data_reloc:
 		goto out;
 	}
 	record_root_in_trans(trans, root);
-	ret = btrfs_fsck_reinit_root(trans, root, 0);
+	ret = btrfs_fsck_reinit_root(trans, root);
 	if (ret)
 		goto out;
 	ret = btrfs_make_root_dir(trans, root, BTRFS_FIRST_FREE_OBJECTID);
@@ -8571,7 +8654,7 @@ static int reinit_extent_tree(struct btrfs_trans_handle *trans,
 	 * first we need to walk all of the trees except the extent tree and pin
 	 * down/exclude the bytes that are in use so we don't overwrite any
 	 * existing metadata.
-	 * If pinnned, unpin will be done in the end of transaction.
+	 * If pinned, unpin will be done in the end of transaction.
 	 * If excluded, cleanup will be done in check_chunks_and_extents_lowmem.
 	 */
 again:
@@ -8603,7 +8686,7 @@ again:
 	}
 
 	/* Ok we can allocate now, reinit the extent root */
-	ret = btrfs_fsck_reinit_root(trans, fs_info->extent_root, 0);
+	ret = btrfs_fsck_reinit_root(trans, fs_info->extent_root);
 	if (ret) {
 		fprintf(stderr, "extent root initialization failed\n");
 		/*
@@ -8633,7 +8716,7 @@ again:
 			fprintf(stderr, "Error adding block group\n");
 			return ret;
 		}
-		btrfs_extent_post_op(trans);
+		btrfs_run_delayed_refs(trans, -1);
 	}
 
 	ret = reset_balance(trans, fs_info);
@@ -9021,6 +9104,7 @@ static int build_roots_info_cache(struct btrfs_fs_info *info)
 		struct cache_extent *entry;
 		struct root_item_info *rii;
 
+		ctx.item_count++;
 		if (slot >= btrfs_header_nritems(leaf)) {
 			ret = btrfs_next_leaf(info->extent_root, &path);
 			if (ret < 0) {
@@ -9062,7 +9146,7 @@ static int build_roots_info_cache(struct btrfs_fs_info *info)
 		 * It's a valid extent/metadata item that has no inline ref,
 		 * but SHARED_BLOCK_REF or other shared references.
 		 * So we need to do extra check to avoid reading beyond leaf
-		 * boudnary.
+		 * boundary.
 		 */
 		if ((unsigned long)iref >= item_end)
 			goto next;
@@ -9339,7 +9423,6 @@ static int do_clear_free_space_cache(struct btrfs_fs_info *fs_info,
 			ret = 1;
 			goto close_out;
 		}
-		printf("Clearing free space cache\n");
 		ret = clear_free_space_cache(fs_info);
 		if (ret) {
 			error("failed to clear free space cache");
@@ -9366,35 +9449,69 @@ close_out:
 	return ret;
 }
 
+static int validate_free_space_cache(struct btrfs_root *root)
+{
+	int ret;
+
+	if (btrfs_super_cache_generation(root->fs_info->super_copy) != -1ULL &&
+	    btrfs_super_generation(root->fs_info->super_copy) !=
+	    btrfs_super_cache_generation(root->fs_info->super_copy)) {
+		printf(
+"cache and super generation don't match, space cache will be invalidated\n");
+		return 0;
+	}
+
+	ret = check_space_cache(root);
+	if (ret && btrfs_fs_compat_ro(global_info, FREE_SPACE_TREE) &&
+	    repair) {
+		ret = do_clear_free_space_cache(global_info, 2);
+		if (ret)
+			goto out;
+
+		ret = btrfs_create_free_space_tree(global_info);
+		if (ret)
+			error("couldn't repair freespace tree");
+	}
+
+out:
+	return ret ? -EINVAL : 0;
+}
+
 const char * const cmd_check_usage[] = {
 	"btrfs check [options] <device>",
 	"Check structural integrity of a filesystem (unmounted).",
 	"Check structural integrity of an unmounted filesystem. Verify internal",
 	"trees' consistency and item connectivity. In the repair mode try to",
 	"fix the problems found. ",
-	"WARNING: the repair mode is considered dangerous",
+	"WARNING: the repair mode is considered dangerous and should not be used",
+	"         without prior analysis of problems found on the filesystem."
 	"",
-	"-s|--super <superblock>     use this superblock copy",
-	"-b|--backup                 use the first valid backup root copy",
-	"--force                     skip mount checks, repair is not possible",
-	"--repair                    try to repair the filesystem",
-	"--readonly                  run in read-only mode (default)",
-	"--init-csum-tree            create a new CRC tree",
-	"--init-extent-tree          create a new extent tree",
-	"--mode <MODE>               allows choice of memory/IO trade-offs",
-	"                            where MODE is one of:",
-	"                            original - read inodes and extents to memory (requires",
-	"                                       more memory, does less IO)",
-	"                            lowmem   - try to use less memory but read blocks again",
-	"                                       when needed",
-	"--check-data-csum           verify checksums of data blocks",
-	"-Q|--qgroup-report          print a report on qgroup consistency",
-	"-E|--subvol-extents <subvolid>",
-	"                            print subvolume extents and sharing state",
-	"-r|--tree-root <bytenr>     use the given bytenr for the tree root",
-	"--chunk-root <bytenr>       use the given bytenr for the chunk tree root",
-	"-p|--progress               indicate progress",
-	"--clear-space-cache v1|v2   clear space cache for v1 or v2",
+	"Options:",
+	"  starting point selection:",
+	"       -s|--super <superblock>     use this superblock copy",
+	"       -b|--backup                 use the first valid backup root copy",
+	"       -r|--tree-root <bytenr>     use the given bytenr for the tree root",
+	"       --chunk-root <bytenr>       use the given bytenr for the chunk tree root",
+	"  operation modes:",
+	"       --readonly                  run in read-only mode (default)",
+	"       --repair                    try to repair the filesystem",
+	"       --force                     skip mount checks, repair is not possible",
+	"       --mode <MODE>               allows choice of memory/IO trade-offs",
+	"                                   where MODE is one of:",
+	"                                   original - read inodes and extents to memory (requires",
+	"                                              more memory, does less IO)",
+	"                                   lowmem   - try to use less memory but read blocks again",
+	"                                              when needed (experimental)",
+	"  repair options:",
+	"       --init-csum-tree            create a new CRC tree",
+	"       --init-extent-tree          create a new extent tree",
+	"       --clear-space-cache v1|v2   clear space cache for v1 or v2",
+	"  check and reporting options:",
+	"       --check-data-csum           verify checksums of data blocks",
+	"       -Q|--qgroup-report          print a report on qgroup consistency",
+	"       -E|--subvol-extents <subvolid>",
+	"                                   print subvolume extents and sharing state",
+	"       -p|--progress               indicate progress",
 	NULL
 };
 
@@ -9559,14 +9676,16 @@ int cmd_check(int argc, char **argv)
 	if (repair && check_mode == CHECK_MODE_LOWMEM)
 		warning("low-memory mode repair support is only partial");
 
+	printf("Opening filesystem to check...\n");
+
 	radix_tree_init();
 	cache_tree_init(&root_cache);
 
 	ret = check_mounted(argv[optind]);
 	if (!force) {
 		if (ret < 0) {
-			error("could not check mount status: %s",
-					strerror(-ret));
+			errno = -ret;
+			error("could not check mount status: %m");
 			err |= !!ret;
 			goto err_out;
 		} else if (ret) {
@@ -9681,6 +9800,7 @@ int cmd_check(int argc, char **argv)
 			goto close_out;
 		}
 
+		trans->reinit_extent_tree = true;
 		if (init_extent_tree) {
 			printf("Creating a new extent tree\n");
 			ret = reinit_extent_tree(trans, info,
@@ -9692,7 +9812,7 @@ int cmd_check(int argc, char **argv)
 
 		if (init_csum_tree) {
 			printf("Reinitialize checksum tree\n");
-			ret = btrfs_fsck_reinit_root(trans, info->csum_root, 0);
+			ret = btrfs_fsck_reinit_root(trans, info->csum_root);
 			if (ret) {
 				error("checksum tree initialization failed: %d",
 						ret);
@@ -9732,10 +9852,18 @@ int cmd_check(int argc, char **argv)
 	}
 
 	if (!init_extent_tree) {
+		if (!ctx.progress_enabled) {
+			fprintf(stderr, "[1/7] checking root items\n");
+		} else {
+			ctx.tp = TASK_ROOT_ITEMS;
+			task_start(ctx.info, &ctx.start_time, &ctx.item_count);
+		}
 		ret = repair_root_items(info);
+		task_stop(ctx.info);
 		if (ret < 0) {
 			err = !!ret;
-			error("failed to repair root items: %s", strerror(-ret));
+			errno = -ret;
+			error("failed to repair root items: %m");
 			goto close_out;
 		}
 		if (repair) {
@@ -9751,9 +9879,18 @@ int cmd_check(int argc, char **argv)
 			err |= ret;
 			goto close_out;
 		}
+	} else {
+		fprintf(stderr, "[1/7] checking root items... skipped\n");
 	}
 
+	if (!ctx.progress_enabled) {
+		fprintf(stderr, "[2/7] checking extents\n");
+	} else {
+		ctx.tp = TASK_EXTENTS;
+		task_start(ctx.info, &ctx.start_time, &ctx.item_count);
+	}
 	ret = do_check_chunks_and_extents(info);
+	task_stop(ctx.info);
 	err |= !!ret;
 	if (ret)
 		error(
@@ -9762,21 +9899,21 @@ int cmd_check(int argc, char **argv)
 	/* Only re-check super size after we checked and repaired the fs */
 	err |= !is_super_size_valid(info);
 
+	is_free_space_tree = btrfs_fs_compat_ro(info, FREE_SPACE_TREE);
+
 	if (!ctx.progress_enabled) {
-		if (btrfs_fs_compat_ro(info, FREE_SPACE_TREE))
-			fprintf(stderr, "checking free space tree\n");
+		if (is_free_space_tree)
+			fprintf(stderr, "[3/7] checking free space tree\n");
 		else
-			fprintf(stderr, "checking free space cache\n");
+			fprintf(stderr, "[3/7] checking free space cache\n");
+	} else {
+		ctx.tp = TASK_FREE_SPACE;
+		task_start(ctx.info, &ctx.start_time, &ctx.item_count);
 	}
-	ret = check_space_cache(root);
+
+	ret = validate_free_space_cache(root);
+	task_stop(ctx.info);
 	err |= !!ret;
-	if (ret) {
-		if (btrfs_fs_compat_ro(info, FREE_SPACE_TREE))
-			error("errors found in free space tree");
-		else
-			error("errors found in free space cache");
-		goto out;
-	}
 
 	/*
 	 * We used to have to have these hole extents in between our real
@@ -9785,19 +9922,34 @@ int cmd_check(int argc, char **argv)
 	 * ignore it when this happens.
 	 */
 	no_holes = btrfs_fs_incompat(root->fs_info, NO_HOLES);
+	if (!ctx.progress_enabled) {
+		fprintf(stderr, "[4/7] checking fs roots\n");
+	} else {
+		ctx.tp = TASK_FS_ROOTS;
+		task_start(ctx.info, &ctx.start_time, &ctx.item_count);
+	}
+
 	ret = do_check_fs_roots(info, &root_cache);
+	task_stop(ctx.info);
 	err |= !!ret;
 	if (ret) {
 		error("errors found in fs roots");
 		goto out;
 	}
 
-	if (check_data_csum)
-		fprintf(stderr, "checking csums against data\n");
-	else
-		fprintf(stderr,
-			"checking only csum items (without verifying data)\n");
+	if (!ctx.progress_enabled) {
+		if (check_data_csum)
+			fprintf(stderr, "[5/7] checking csums against data\n");
+		else
+			fprintf(stderr,
+		"[5/7] checking only csums items (without verifying data)\n");
+	} else {
+		ctx.tp = TASK_CSUMS;
+		task_start(ctx.info, &ctx.start_time, &ctx.item_count);
+	}
+
 	ret = check_csums(root);
+	task_stop(ctx.info);
 	/*
 	 * Data csum error is not fatal, and it may indicate more serious
 	 * corruption, continue checking.
@@ -9806,15 +9958,25 @@ int cmd_check(int argc, char **argv)
 		error("errors found in csum tree");
 	err |= !!ret;
 
-	fprintf(stderr, "checking root refs\n");
 	/* For low memory mode, check_fs_roots_v2 handles root refs */
-	if (check_mode != CHECK_MODE_LOWMEM) {
+        if (check_mode != CHECK_MODE_LOWMEM) {
+		if (!ctx.progress_enabled) {
+			fprintf(stderr, "[6/7] checking root refs\n");
+		} else {
+			ctx.tp = TASK_ROOT_REFS;
+			task_start(ctx.info, &ctx.start_time, &ctx.item_count);
+		}
+
 		ret = check_root_refs(root, &root_cache);
+		task_stop(ctx.info);
 		err |= !!ret;
 		if (ret) {
 			error("errors found in root refs");
 			goto out;
 		}
+	} else {
+		fprintf(stderr,
+	"[6/7] checking root refs done with fs roots in lowmem mode, skipping\n");
 	}
 
 	while (repair && !list_empty(&root->fs_info->recow_ebs)) {
@@ -9844,8 +10006,15 @@ int cmd_check(int argc, char **argv)
 	}
 
 	if (info->quota_enabled) {
-		fprintf(stderr, "checking quota groups\n");
+		qgroup_set_item_count_ptr(&ctx.item_count);
+		if (!ctx.progress_enabled) {
+			fprintf(stderr, "[7/7] checking quota groups\n");
+		} else {
+			ctx.tp = TASK_QGROUPS;
+			task_start(ctx.info, &ctx.start_time, &ctx.item_count);
+		}
 		ret = qgroup_verify_all(info);
+		task_stop(ctx.info);
 		err |= !!ret;
 		if (ret) {
 			error("failed to check quota groups");
@@ -9860,6 +10029,9 @@ int cmd_check(int argc, char **argv)
 		if (qgroup_report_ret && (!qgroups_repaired || ret))
 			err |= qgroup_report_ret;
 		ret = 0;
+	} else {
+		fprintf(stderr,
+		"[7/7] checking quota groups skipped (not enabled on this FS)\n");
 	}
 
 	if (!list_empty(&root->fs_info->recow_ebs)) {

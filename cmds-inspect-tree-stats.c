@@ -434,6 +434,7 @@ int cmd_inspect_tree_stats(int argc, char **argv)
 	int opt;
 	int ret = 0;
 
+	optind = 0;
 	while ((opt = getopt(argc, argv, "vb")) != -1) {
 		switch (opt) {
 		case 'v':
@@ -453,8 +454,8 @@ int cmd_inspect_tree_stats(int argc, char **argv)
 
 	ret = check_mounted(argv[optind]);
 	if (ret < 0) {
-		warning("unable to check mount status of: %s",
-				strerror(-ret));
+		errno = -ret;
+		warning("unable to check mount status of: %m");
 	} else if (ret) {
 		warning("%s already mounted, results may be inaccurate",
 				argv[optind]);

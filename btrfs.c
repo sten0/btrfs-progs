@@ -169,7 +169,7 @@ static int cmd_version(int argc, char **argv)
  * Parse global options, between binary name and first non-option argument
  * after processing all valid options (including those with arguments).
  *
- * Returns index to argv where parsting stopped, optind is reset to 1
+ * Returns index to argv where parsing stopped, optind is reset to 1
  */
 static int handle_global_options(int argc, char **argv)
 {
@@ -210,7 +210,7 @@ static int handle_global_options(int argc, char **argv)
 	return shift;
 }
 
-void handle_special_globals(int shift, int argc, char **argv)
+static void handle_special_globals(int shift, int argc, char **argv)
 {
 	int has_help = 0;
 	int has_full = 0;

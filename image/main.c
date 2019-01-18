@@ -499,7 +499,8 @@ static int write_buffers(struct metadump_struct *md, u64 *next)
 	}
 
 	if (err) {
-		error("one of the threads failed: %s", strerror(-err));
+		errno = -err;
+		error("one of the threads failed: %m");
 		goto out;
 	}
 
@@ -690,10 +691,12 @@ static int flush_pending(struct metadump_struct *md, int done)
 	}
 	if (md->num_items >= ITEMS_PER_CLUSTER || done) {
 		ret = write_buffers(md, &start);
-		if (ret)
-			error("unable to write buffers: %s", strerror(-ret));
-		else
+		if (ret) {
+			errno = -ret;
+			error("unable to write buffers: %m");
+		} else {
 			meta_cluster_init(md, start);
+		}
 	}
 	pthread_mutex_unlock(&md->mutex);
 	return ret;
@@ -2093,6 +2096,10 @@ static int fixup_devices(struct btrfs_fs_info *fs_info,
 	u64 devid, cur_devid;
 	int ret;
 
+	if (btrfs_super_log_root(fs_info->super_copy)) {
+		warning(
+		"log tree detected, its generation will not match superblock");
+	}
 	trans = btrfs_start_transaction(fs_info->tree_root, 1);
 	if (IS_ERR(trans)) {
 		error("cannot starting transaction %ld", PTR_ERR(trans));
@@ -2373,10 +2380,12 @@ static int update_disk_super_on_device(struct btrfs_fs_info *info,
 
 	ret = pwrite64(fp, buf, BTRFS_SUPER_INFO_SIZE, BTRFS_SUPER_INFO_OFFSET);
 	if (ret != BTRFS_SUPER_INFO_SIZE) {
-		if (ret < 0)
-			error("cannot write superblock: %s", strerror(ret));
-		else
+		if (ret < 0) {
+			errno = ret;
+			error("cannot write superblock: %m");
+		} else {
 			error("cannot write superblock");
+		}
 		ret = -EIO;
 		goto out;
 	}
@@ -2487,7 +2496,7 @@ int main(int argc, char *argv[])
 	} else {
 		if (walk_trees || sanitize != SANITIZE_NONE || compress_level) {
 			error(
-			"useing -w, -s, -c options for restore makes no sense");
+			"using -w, -s, -c options for restore makes no sense");
 			usage_error++;
 		}
 		if (multi_devices && dev_cnt < 2) {
@@ -2531,8 +2540,8 @@ int main(int argc, char *argv[])
 	if (create) {
 		ret = check_mounted(source);
 		if (ret < 0) {
-			warning("unable to check mount status of: %s",
-					strerror(-ret));
+			errno = -ret;
+			warning("unable to check mount status of: %m");
 		} else if (ret) {
 			warning("%s already mounted, results may be inaccurate",
 					source);

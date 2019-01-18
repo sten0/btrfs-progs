@@ -267,7 +267,7 @@ static void print_single_qgroup_table(struct btrfs_qgroup *qgroup)
 			continue;
 		print_qgroup_column(qgroup, i);
 
-		if (i != BTRFS_QGROUP_CHILD)
+		if (i != BTRFS_QGROUP_ALL - 1)
 			printf(" ");
 	}
 	printf("\n");
@@ -610,8 +610,9 @@ static struct btrfs_qgroup *get_or_add_qgroup(
 
 	ret = qgroup_tree_insert(qgroup_lookup, bq);
 	if (ret) {
-		error("failed to insert %llu into tree: %s",
-		       (unsigned long long)bq->qgroupid, strerror(-ret));
+		errno = -ret;
+		error("failed to insert %llu into tree: %m",
+		       (unsigned long long)bq->qgroupid);
 		free(bq);
 		return ERR_PTR(ret);
 	}
@@ -1072,8 +1073,7 @@ static int __qgroups_search(int fd, struct qgroup_lookup *qgroup_lookup)
 				error("can't list qgroups: quotas not enabled");
 				ret = -ENOTTY;
 			} else {
-				error("can't list qgroups: %s",
-				       strerror(errno));
+				error("can't list qgroups: %m");
 				ret = -errno;
 			}
 

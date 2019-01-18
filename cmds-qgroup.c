@@ -40,12 +40,13 @@ static int _cmd_qgroup_assign(int assign, int argc, char **argv,
 {
 	int ret = 0;
 	int fd;
-	int rescan = 0;
+	bool rescan = true;
 	char *path;
 	struct btrfs_ioctl_qgroup_assign_args args;
 	DIR *dirstream = NULL;
 
 	if (assign) {
+		optind = 0;
 		while (1) {
 			enum { GETOPT_VAL_RESCAN = 256, GETOPT_VAL_NO_RESCAN };
 			static const struct option long_options[] = {
@@ -61,10 +62,10 @@ static int _cmd_qgroup_assign(int assign, int argc, char **argv,
 				break;
 			switch (c) {
 			case GETOPT_VAL_RESCAN:
-				rescan = 1;
+				rescan = true;
 				break;
 			case GETOPT_VAL_NO_RESCAN:
-				rescan = 0;
+				rescan = false;
 				break;
 			default:
 				/* Usage printed by the caller */
@@ -122,6 +123,7 @@ static int _cmd_qgroup_assign(int assign, int argc, char **argv,
 				error("quota rescan failed: %m");
 		} else {
 			warning("quotas may be inconsistent, rescan needed");
+			ret = 0;
 		}
 	}
 	close_file_or_dir(fd, dirstream);
@@ -310,6 +312,7 @@ static int cmd_qgroup_show(int argc, char **argv)
 
 	unit_mode = get_unit_mode_from_arg(&argc, argv, 0);
 
+	optind = 0;
 	while (1) {
 		int c;
 		enum {
@@ -377,15 +380,14 @@ static int cmd_qgroup_show(int argc, char **argv)
 	if (sync) {
 		err = btrfs_util_sync_fd(fd);
 		if (err)
-			warning("sync ioctl failed on '%s': %s", path,
-				strerror(errno));
+			warning("sync ioctl failed on '%s': %m", path);
 	}
 
 	if (filter_flag) {
 		ret = lookup_path_rootid(fd, &qgroupid);
 		if (ret < 0) {
-			error("cannot resolve rootid for %s: %s",
-					path, strerror(-ret));
+			errno = -ret;
+			error("cannot resolve rootid for %s: %m", path);
 			close_file_or_dir(fd, dirstream);
 			goto out;
 		}
@@ -429,6 +431,7 @@ static int cmd_qgroup_limit(int argc, char **argv)
 	DIR *dirstream = NULL;
 	enum btrfs_util_error err;
 
+	optind = 0;
 	while (1) {
 		int c = getopt(argc, argv, "ce");
 		if (c < 0)

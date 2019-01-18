@@ -14,7 +14,10 @@ This repository hosts following utilities:
 * **btrfs** &mdash; the main administration tool ([manual page](https://btrfs.wiki.kernel.org/index.php/Manpage/btrfs))
 * **mkfs.btrfs** &mdash; utility to create the filesystem ([manual page](https://btrfs.wiki.kernel.org/index.php/Manpage/mkfs.btrfs))
 
-See INSTALL for build instructions and [tests/README.md](tests/README.md) for
+The C and python 3 bindings are provided by a LGPL library **libbtrfsutil** see
+[libbtrfsutil/README.md](libbtrfsutil/README.md) for more.
+
+See [INSTALL](INSTALL) for build instructions and [tests/README.md](tests/README.md) for
 testing information.
 
 Release cycle
@@ -82,7 +85,7 @@ Documentation updates
 ---------------------
 
 Documentation fixes or updates do not need much explanation so sticking to the
-code rules in the previous section is not necessary. Github pull requests are
+code rules in the previous section is not necessary. GitHub pull requests are
 OK, patches could be sent to me directly and not required to be also in the
 mailinglist. Pointing out typos via IRC also works, although might get
 accidentally lost in the noise.

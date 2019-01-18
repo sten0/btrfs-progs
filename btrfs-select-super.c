@@ -34,7 +34,7 @@
 static void print_usage(void)
 {
 	printf("usage: btrfs-select-super -s number dev\n");
-	printf("\t-s super   copy of superbloc to overwrite the primary one (values: 1, 2)\n");
+	printf("\t-s super   copy of superblock to overwrite the primary one (values: 1, 2)\n");
 	exit(1);
 }
 
@@ -77,7 +77,8 @@ int main(int argc, char **argv)
 	radix_tree_init();
 
 	if((ret = check_mounted(argv[optind])) < 0) {
-		error("cannot check mount status: %s", strerror(-ret));
+		errno = -ret;
+		error("cannot check mount status: %m");
 		return ret;
 	} else if(ret) {
 		error("%s is currently mounted, aborting", argv[optind]);

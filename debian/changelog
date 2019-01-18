@@ -1,3 +1,16 @@
+btrfs-progs (4.19.1-2) unstable; urgency=medium
+
+  * Rebuild with libzstd support on.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Fri, 11 Jan 2019 11:26:50 +0000
+
+btrfs-progs (4.19.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Add btrfs-tools provides, too many things still the universal name.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 11 Dec 2018 10:31:04 +1100
+
 btrfs-progs (4.17-1~bpo9+2) UNRELEASED; urgency=medium
 
   * Dummy entry

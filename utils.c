@@ -60,7 +60,7 @@
 
 static int btrfs_scan_done = 0;
 
-static int rand_seed_initlized = 0;
+static int rand_seed_initialized = 0;
 static unsigned short rand_seed[3];
 
 struct btrfs_config bconf;
@@ -357,7 +357,8 @@ int btrfs_prepare_device(int fd, const char *file, u64 *block_count_ret,
 				       ZERO_DEV_BYTES, block_count);
 
 	if (ret < 0) {
-		error("failed to zero device '%s': %s", file, strerror(-ret));
+		errno = -ret;
+		error("failed to zero device '%s': %m", file);
 		return 1;
 	}
 
@@ -502,6 +503,8 @@ int check_arg_type(const char *input)
 			return BTRFS_ARG_REG;
 
 		return BTRFS_ARG_UNKNOWN;
+	} else {
+		return -errno;
 	}
 
 	if (strlen(input) == (BTRFS_UUID_UNPARSED_SIZE - 1) &&
@@ -528,7 +531,8 @@ int get_btrfs_mount(const char *dev, char *mp, size_t mp_size)
 			error("not a block device: %s", dev);
 			ret = -EINVAL;
 		} else {
-			error("cannot check %s: %s", dev, strerror(-ret));
+			errno = -ret;
+			error("cannot check %s: %m", dev);
 		}
 		goto out;
 	}
@@ -540,7 +544,7 @@ int get_btrfs_mount(const char *dev, char *mp, size_t mp_size)
 		goto out;
 	}
 
-	ret = check_mounted_where(fd, dev, mp, mp_size, NULL);
+	ret = check_mounted_where(fd, dev, mp, mp_size, NULL, SBREAD_DEFAULT);
 	if (!ret) {
 		ret = -EINVAL;
 	} else { /* mounted, all good */
@@ -831,7 +835,7 @@ static int blk_file_in_dev_list(struct btrfs_fs_devices* fs_devices,
 /*
  * Resolve a pathname to a device mapper node to /dev/mapper/<name>
  * Returns NULL on invalid input or malloc failure; Other failures
- * will be handled by the caller using the input pathame.
+ * will be handled by the caller using the input pathname.
  */
 char *canonicalize_dm_name(const char *ptname)
 {
@@ -862,7 +866,7 @@ char *canonicalize_dm_name(const char *ptname)
  * Resolve a pathname to a canonical device node, e.g. /dev/sda1 or
  * to a device mapper pathname.
  * Returns NULL on invalid input or malloc failure; Other failures
- * will be handled by the caller using the input pathame.
+ * will be handled by the caller using the input pathname.
  */
 char *canonicalize_path(const char *path)
 {
@@ -901,14 +905,14 @@ int check_mounted(const char* file)
 		return -errno;
 	}
 
-	ret =  check_mounted_where(fd, file, NULL, 0, NULL);
+	ret =  check_mounted_where(fd, file, NULL, 0, NULL, SBREAD_DEFAULT);
 	close(fd);
 
 	return ret;
 }
 
 int check_mounted_where(int fd, const char *file, char *where, int size,
-			struct btrfs_fs_devices **fs_dev_ret)
+			struct btrfs_fs_devices **fs_dev_ret, unsigned sbflags)
 {
 	int ret;
 	u64 total_devs = 1;
@@ -919,7 +923,7 @@ int check_mounted_where(int fd, const char *file, char *where, int size,
 
 	/* scan the initial device */
 	ret = btrfs_scan_one_device(fd, file, &fs_devices_mnt,
-		    &total_devs, BTRFS_SUPER_INFO_OFFSET, SBREAD_DEFAULT);
+		    &total_devs, BTRFS_SUPER_INFO_OFFSET, sbflags);
 	is_btrfs = (ret >= 0);
 
 	/* scan other devices */
@@ -1490,8 +1494,10 @@ path:
 	if (fd < 0)
 		goto err;
 	ret = lookup_path_rootid(fd, &id);
-	if (ret)
-		error("failed to lookup root id: %s", strerror(-ret));
+	if (ret) {
+		errno = -ret;
+		error("failed to lookup root id: %m");
+	}
 	close(fd);
 	if (ret < 0)
 		goto err;
@@ -1675,7 +1681,7 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 			goto out;
 		}
 		ret = check_mounted_where(fd, path, mp, sizeof(mp),
-					  &fs_devices_mnt);
+					  &fs_devices_mnt, SBREAD_DEFAULT);
 		if (!ret) {
 			ret = -EINVAL;
 			goto out;
@@ -1780,8 +1786,7 @@ int get_fsid(const char *path, u8 *fsid, int silent)
 	if (fd < 0) {
 		ret = -errno;
 		if (!silent)
-			error("failed to open %s: %s", path,
-				strerror(-ret));
+			error("failed to open %s: %m", path);
 		goto out;
 	}
 
@@ -1998,7 +2003,8 @@ int btrfs_scan_devices(void)
 				&num_devices, BTRFS_SUPER_INFO_OFFSET,
 				SBREAD_DEFAULT);
 		if (ret) {
-			error("cannot scan %s: %s", path, strerror(-ret));
+			errno = -ret;
+			error("cannot scan %s: %m", path);
 			close (fd);
 			continue;
 		}
@@ -2481,7 +2487,7 @@ void init_rand_seed(u64 seed)
 		rand_seed[i] = (unsigned short)(seed ^ (unsigned short)(-1));
 		seed >>= 16;
 	}
-	rand_seed_initlized = 1;
+	rand_seed_initialized = 1;
 }
 
 static void __init_seed(void)
@@ -2490,7 +2496,7 @@ static void __init_seed(void)
 	int ret;
 	int fd;
 
-	if(rand_seed_initlized)
+	if(rand_seed_initialized)
 		return;
 	/* Use urandom as primary seed source. */
 	fd = open("/dev/urandom", O_RDONLY);
@@ -2508,14 +2514,14 @@ fallback:
 		rand_seed[1] = getppid() ^ (tv.tv_usec & 0xFFFF);
 		rand_seed[2] = (tv.tv_sec ^ tv.tv_usec) >> 16;
 	}
-	rand_seed_initlized = 1;
+	rand_seed_initialized = 1;
 }
 
 u32 rand_u32(void)
 {
 	__init_seed();
 	/*
-	 * Don't use nrand48, its range is [0,2^31) The highest bit will alwasy
+	 * Don't use nrand48, its range is [0,2^31) The highest bit will always
 	 * be 0.  Use jrand48 to include the highest bit.
 	 */
 	return (u32)jrand48(rand_seed);

@@ -85,7 +85,7 @@ fi
 
 
 AC_ARG_ENABLE([documentation],
-	      AS_HELP_STRING([--disable-documentation], [do not build domumentation]),
+	      AS_HELP_STRING([--disable-documentation], [do not build documentation]),
   [], [enable_documentation=yes]
 )
 AS_IF([test "x$enable_documentation" = xyes], [DISABLE_DOCUMENTATION=0], [DISABLE_DOCUMENTATION=1])
@@ -99,7 +99,6 @@ if test "x$enable_documentation" = xyes; then
 		AC_MSG_ERROR([cannot find xmlto, cannot build documentation])
 	fi
 
-	AC_PATH_PROG([GZIP], [gzip], [gzip])
 	AC_PATH_PROG([MV], [mv], [mv])
 	AC_PROG_SED
 	AC_PATH_PROG([ASCIIDOC], [asciidoc])
@@ -118,9 +117,30 @@ if test "x$enable_documentation" = xyes; then
 fi
 AC_SUBST([ASCIIDOC_TOOL])
 
+AC_ARG_ENABLE([programs],
+	      AS_HELP_STRING([--disable-programs], [do not build utility programs]),
+	      [], [enable_programs=yes]
+)
+AS_IF([test "x$enable_programs" = xyes], [BUILD_PROGRAMS=1], [BUILD_PROGRAMS=0])
+AC_SUBST([BUILD_PROGRAMS])
+
+AC_ARG_ENABLE([shared],
+	      AS_HELP_STRING([--disable-shared], [do not build shared libraries]),
+	      [], [enable_shared=yes]
+)
+AS_IF([test "x$enable_shared" = xyes], [BUILD_SHARED_LIBRARIES=1], [BUILD_SHARED_LIBRARIES=0])
+AC_SUBST([BUILD_SHARED_LIBRARIES])
+
+AC_ARG_ENABLE([static],
+	      AS_HELP_STRING([--disable-static], [do not build static libraries]),
+	      [], [enable_static=yes]
+)
+AS_IF([test "x$enable_static" = xyes], [BUILD_STATIC_LIBRARIES=1], [BUILD_STATIC_LIBRARIES=0])
+AC_SUBST([BUILD_STATIC_LIBRARIES])
+
 AC_ARG_ENABLE([convert],
 	      AS_HELP_STRING([--disable-convert], [do not build btrfs-convert]),
-  [], [enable_convert=yes]
+  [], [enable_convert=$enable_programs]
 )
 
 AS_IF([test "x$enable_convert" = xyes], [DISABLE_BTRFSCONVERT=0], [DISABLE_BTRFSCONVERT=1])
@@ -215,7 +235,7 @@ AC_SUBST(BTRFSRESTORE_ZSTD)
 
 AC_ARG_ENABLE([python],
 	AS_HELP_STRING([--disable-python], [do not build libbtrfsutil Python bindings]),
-	[], [enable_python=yes]
+	[], [enable_python=$enable_shared]
 )
 
 if test "x$enable_python" = xyes; then
@@ -277,6 +297,9 @@ AC_MSG_RESULT([
 	cflags:             ${CFLAGS}
 	ldflags:            ${LDFLAGS}
 
+	programs:           ${enable_programs}
+	shared libraries:   ${enable_shared}
+	static libraries:   ${enable_static}
 	documentation:      ${enable_documentation}
 	doc generator:      ${ASCIIDOC_TOOL}
 	backtrace support:  ${enable_backtrace}

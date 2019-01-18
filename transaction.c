@@ -32,7 +32,7 @@ struct btrfs_trans_handle* btrfs_start_transaction(struct btrfs_root *root,
 	if (!h)
 		return ERR_PTR(-ENOMEM);
 	if (root->commit_root) {
-		error("commit_root aleady set when starting transaction");
+		error("commit_root already set when starting transaction");
 		kfree(h);
 		return ERR_PTR(-EINVAL);
 	}
@@ -46,6 +46,7 @@ struct btrfs_trans_handle* btrfs_start_transaction(struct btrfs_root *root,
 	fs_info->generation++;
 	h->transid = fs_info->generation;
 	h->blocks_reserved = num_blocks;
+	h->reinit_extent_tree = false;
 	root->last_trans = h->transid;
 	root->commit_root = root->node;
 	extent_buffer_get(root->node);
@@ -60,7 +61,6 @@ static int update_cowonly_root(struct btrfs_trans_handle *trans,
 	u64 old_root_bytenr;
 	struct btrfs_root *tree_root = root->fs_info->tree_root;
 
-	btrfs_write_dirty_block_groups(trans, root);
 	while(1) {
 		old_root_bytenr = btrfs_root_bytenr(&root->root_item);
 		if (old_root_bytenr == root->node->start)
@@ -73,8 +73,9 @@ static int update_cowonly_root(struct btrfs_trans_handle *trans,
 		ret = btrfs_update_root(trans, tree_root,
 					&root->root_key,
 					&root->root_item);
-		BUG_ON(ret);
-		btrfs_write_dirty_block_groups(trans, root);
+		if (ret < 0)
+			return ret;
+		btrfs_write_dirty_block_groups(trans);
 	}
 	return 0;
 }
@@ -97,13 +98,26 @@ int commit_tree_roots(struct btrfs_trans_handle *trans,
 	if (ret)
 		return ret;
 
+	/*
+	 * If the above CoW is the first one to dirty the current tree_root,
+	 * delayed refs for it won't be run until after this function has
+	 * finished executing, meaning we won't process the extent tree root,
+	 * which will have been added to ->dirty_cowonly_roots.  So run
+	 * delayed refs here as well.
+	 */
+	ret = btrfs_run_delayed_refs(trans, -1);
+	if (ret)
+		return ret;
+
 	while(!list_empty(&fs_info->dirty_cowonly_roots)) {
 		next = fs_info->dirty_cowonly_roots.next;
 		list_del_init(next);
 		root = list_entry(next, struct btrfs_root, dirty_list);
-		update_cowonly_root(trans, root);
+		ret = update_cowonly_root(trans, root);
 		free_extent_buffer(root->commit_root);
 		root->commit_root = NULL;
+		if (ret < 0)
+			return ret;
 	}
 
 	return 0;
@@ -146,6 +160,12 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans,
 
 	if (trans->fs_info->transaction_aborted)
 		return -EROFS;
+	/*
+	 * Flush all accumulated delayed refs so that root-tree updates are
+	 * consistent
+	 */
+	ret = btrfs_run_delayed_refs(trans, -1);
+	BUG_ON(ret);
 
 	if (root->commit_root == root->node)
 		goto commit_tree;
@@ -163,11 +183,20 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans,
 	ret = btrfs_update_root(trans, root->fs_info->tree_root,
 				&root->root_key, &root->root_item);
 	BUG_ON(ret);
+
 commit_tree:
 	ret = commit_tree_roots(trans, fs_info);
 	BUG_ON(ret);
-	ret = __commit_transaction(trans, root);
+	/*
+	 * Ensure that all committed roots are properly accounted in the
+	 * extent tree
+	 */
+	ret = btrfs_run_delayed_refs(trans, -1);
 	BUG_ON(ret);
+	btrfs_write_dirty_block_groups(trans);
+	__commit_transaction(trans, root);
+	if (ret < 0)
+		goto out;
 	write_ctree_super(trans);
 	btrfs_finish_extent_commit(trans, fs_info->extent_root,
 			           &fs_info->pinned_extents);
@@ -176,7 +205,8 @@ commit_tree:
 	root->commit_root = NULL;
 	fs_info->running_transaction = NULL;
 	fs_info->last_trans_committed = transid;
-	return 0;
+out:
+	return ret;
 }
 
 void btrfs_abort_transaction(struct btrfs_trans_handle *trans, int error)

@@ -284,7 +284,8 @@ static int modify_block_groups_cache(struct btrfs_fs_info *fs_info, u64 flags,
 	btrfs_init_path(&path);
 	ret = btrfs_search_slot(NULL, root, &key, &path, 0, 0);
 	if (ret < 0) {
-		error("fail to search block groups due to %s", strerror(-ret));
+		errno = -ret;
+		error("fail to search block groups due to %m");
 		goto out;
 	}
 
@@ -341,19 +342,22 @@ static int create_chunk_and_block_group(struct btrfs_fs_info *fs_info,
 	trans = btrfs_start_transaction(root, 1);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		error("error starting transaction %s", strerror(-ret));
+		errno = -ret;
+		error("error starting transaction %m");
 		return ret;
 	}
 	ret = btrfs_alloc_chunk(trans, fs_info, start, nbytes, flags);
 	if (ret) {
-		error("fail to allocate new chunk %s", strerror(-ret));
+		errno = -ret;
+		error("fail to allocate new chunk %m");
 		goto out;
 	}
 	ret = btrfs_make_block_group(trans, fs_info, 0, flags, *start,
 				     *nbytes);
 	if (ret) {
-		error("fail to make block group for chunk %llu %llu %s",
-		      *start, *nbytes, strerror(-ret));
+		errno = -ret;
+		error("fail to make block group for chunk %llu %llu %m",
+		      *start, *nbytes);
 		goto out;
 	}
 out:
@@ -521,8 +525,10 @@ static int avoid_extents_overwrite(struct btrfs_fs_info *fs_info)
 	"Try to exclude all metadata blcoks and extents, it may be slow\n");
 	ret = exclude_metadata_blocks(fs_info);
 out:
-	if (ret)
-		error("failed to avoid extents overwrite %s", strerror(-ret));
+	if (ret) {
+		errno = -ret;
+		error("failed to avoid extents overwrite %m");
+	}
 	return ret;
 }
 
@@ -552,7 +558,8 @@ static int repair_block_accounting(struct btrfs_fs_info *fs_info)
 	trans = btrfs_start_transaction(root, 1);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		error("fail to start transaction %s", strerror(-ret));
+		errno = -ret;
+		error("fail to start transaction: %m");
 		return ret;
 	}
 
@@ -629,7 +636,8 @@ static int repair_tree_block_ref(struct btrfs_root *root,
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
 		trans = NULL;
-		error("fail to start transaction %s", strerror(-ret));
+		errno = -ret;
+		error("fail to start transaction: %m");
 		goto out;
 	}
 	/* insert an extent item */
@@ -701,9 +709,10 @@ out:
 		btrfs_commit_transaction(trans, extent_root);
 	btrfs_release_path(&path);
 	if (ret) {
+		errno = -ret;
 		error(
-	"failed to repair tree block ref start %llu root %llu due to %s",
-		      bytenr, root->objectid, strerror(-ret));
+	"failed to repair tree block ref start %llu root %llu due to %m",
+		      bytenr, root->objectid);
 	} else {
 		printf("Added one tree block ref start %llu %s %llu\n",
 		       bytenr, parent ? "parent" : "root",
@@ -944,7 +953,7 @@ out:
  * returns 0 means success.
  * returns not 0 means on error;
  */
-int repair_ternary_lowmem(struct btrfs_root *root, u64 dir_ino, u64 ino,
+static int repair_ternary_lowmem(struct btrfs_root *root, u64 dir_ino, u64 ino,
 			  u64 index, char *name, int name_len, u8 filetype,
 			  int err)
 {
@@ -1735,23 +1744,163 @@ static int punch_extent_hole(struct btrfs_root *root, u64 ino, u64 start,
 	return ret;
 }
 
+static int repair_inline_ram_bytes(struct btrfs_root *root,
+				   struct btrfs_path *path, u64 *ram_bytes_ret)
+{
+	struct btrfs_trans_handle *trans;
+	struct btrfs_key key;
+	struct btrfs_file_extent_item *fi;
+	struct btrfs_item *item;
+	u32 on_disk_data_len;
+	int ret;
+	int recover_ret;
+
+	trans = btrfs_start_transaction(root, 1);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		return ret;
+	}
+	btrfs_item_key_to_cpu(path->nodes[0], &key, path->slots[0]);
+	btrfs_release_path(path);
+	ret = btrfs_search_slot(trans, root, &key, path, 0, 1);
+	/* Not really possible */
+	if (ret > 0) {
+		ret = -ENOENT;
+		btrfs_release_path(path);
+		goto recover;
+	}
+	if (ret < 0)
+		goto recover;
+
+	item = btrfs_item_nr(path->slots[0]);
+	on_disk_data_len = btrfs_file_extent_inline_item_len(path->nodes[0],
+			item);
+
+	fi = btrfs_item_ptr(path->nodes[0], path->slots[0],
+			    struct btrfs_file_extent_item);
+	if (btrfs_file_extent_type(path->nodes[0], fi) !=
+			BTRFS_FILE_EXTENT_INLINE ||
+	    btrfs_file_extent_compression(path->nodes[0], fi) !=
+			BTRFS_COMPRESS_NONE)
+		return -EINVAL;
+	btrfs_set_file_extent_ram_bytes(path->nodes[0], fi, on_disk_data_len);
+	btrfs_mark_buffer_dirty(path->nodes[0]);
+
+	ret = btrfs_commit_transaction(trans, root);
+	if (!ret) {
+		printf(
+	"Successfully repaired inline ram_bytes for root %llu ino %llu\n",
+			root->objectid, key.objectid);
+		*ram_bytes_ret = on_disk_data_len;
+	}
+	return ret;
+
+recover:
+	/*
+	 * COW search failed, mostly due to the extra COW work (extent
+	 * allocation, etc).  Since we have a good path from before, readonly
+	 * search should still work, or later checks will fail due to empty
+	 * path.
+	 */
+	recover_ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
+
+	/* This really shouldn't happen, or we have a big problem */
+	ASSERT(recover_ret == 0);
+	return ret;
+}
+
+static int check_file_extent_inline(struct btrfs_root *root,
+				    struct btrfs_path *path, u64 *size,
+				    u64 *end)
+{
+	u32 max_inline_extent_size = min_t(u32, root->fs_info->sectorsize - 1,
+				BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info));
+	struct extent_buffer *node = path->nodes[0];
+	struct btrfs_item *e = btrfs_item_nr(path->slots[0]);
+	struct btrfs_file_extent_item *fi;
+	struct btrfs_key fkey;
+	u64 extent_num_bytes;
+	u32 item_inline_len;
+	int ret;
+	int compressed = 0;
+	int err = 0;
+
+	fi = btrfs_item_ptr(node, path->slots[0], struct btrfs_file_extent_item);
+	item_inline_len = btrfs_file_extent_inline_item_len(node, e);
+	extent_num_bytes = btrfs_file_extent_ram_bytes(node, fi);
+	compressed = btrfs_file_extent_compression(node, fi);
+	btrfs_item_key_to_cpu(node, &fkey, path->slots[0]);
+
+	if (extent_num_bytes == 0) {
+		error(
+"root %llu EXTENT_DATA[%llu %llu] has empty inline extent",
+				root->objectid, fkey.objectid, fkey.offset);
+		err |= FILE_EXTENT_ERROR;
+	}
+
+	if (compressed) {
+		if (extent_num_bytes > root->fs_info->sectorsize) {
+			error(
+"root %llu EXTENT_DATA[%llu %llu] too large inline extent ram size, have %llu, max: %u",
+				root->objectid, fkey.objectid, fkey.offset,
+				extent_num_bytes, root->fs_info->sectorsize - 1);
+			err |= FILE_EXTENT_ERROR;
+		}
+
+		if (item_inline_len > max_inline_extent_size) {
+			error(
+"root %llu EXTENT_DATA[%llu %llu] too large inline extent on-disk size, have %u, max: %u",
+				root->objectid, fkey.objectid, fkey.offset,
+				item_inline_len, max_inline_extent_size);
+			err |= FILE_EXTENT_ERROR;
+		}
+	} else {
+		if (extent_num_bytes > max_inline_extent_size) {
+			error(
+"root %llu EXTENT_DATA[%llu %llu] too large inline extent size, have %llu, max: %u",
+				root->objectid, fkey.objectid, fkey.offset,
+				extent_num_bytes, max_inline_extent_size);
+			err |= FILE_EXTENT_ERROR;
+		}
+
+		if (extent_num_bytes != item_inline_len) {
+			error(
+"root %llu EXTENT_DATA[%llu %llu] wrong inline size, have: %llu, expected: %u",
+				root->objectid, fkey.objectid, fkey.offset,
+				extent_num_bytes, item_inline_len);
+			if (repair) {
+				ret = repair_inline_ram_bytes(root, path,
+							      &extent_num_bytes);
+				if (ret)
+					err |= FILE_EXTENT_ERROR;
+			} else {
+				err |= FILE_EXTENT_ERROR;
+			}
+		}
+	}
+	*end += extent_num_bytes;
+	*size += extent_num_bytes;
+
+	return err;
+}
+
 /*
  * Check file extent datasum/hole, update the size of the file extents,
  * check and update the last offset of the file extent.
  *
  * @root:	the root of fs/file tree.
- * @fkey:	the key of the file extent.
  * @nodatasum:	INODE_NODATASUM feature.
  * @size:	the sum of all EXTENT_DATA items size for this inode.
  * @end:	the offset of the last extent.
  *
  * Return 0 if no error occurred.
  */
-static int check_file_extent(struct btrfs_root *root, struct btrfs_key *fkey,
-			     struct extent_buffer *node, int slot,
+static int check_file_extent(struct btrfs_root *root, struct btrfs_path *path,
 			     unsigned int nodatasum, u64 *size, u64 *end)
 {
 	struct btrfs_file_extent_item *fi;
+	struct btrfs_key fkey;
+	struct extent_buffer *node = path->nodes[0];
 	u64 disk_bytenr;
 	u64 disk_num_bytes;
 	u64 extent_num_bytes;
@@ -1759,77 +1908,30 @@ static int check_file_extent(struct btrfs_root *root, struct btrfs_key *fkey,
 	u64 csum_found;		/* In byte size, sectorsize aligned */
 	u64 search_start;	/* Logical range start we search for csum */
 	u64 search_len;		/* Logical range len we search for csum */
-	u32 max_inline_extent_size = min_t(u32, root->fs_info->sectorsize - 1,
-				BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info));
 	unsigned int extent_type;
 	unsigned int is_hole;
+	int slot = path->slots[0];
 	int compressed = 0;
 	int ret;
 	int err = 0;
 
+	btrfs_item_key_to_cpu(node, &fkey, slot);
 	fi = btrfs_item_ptr(node, slot, struct btrfs_file_extent_item);
-
-	/* Check inline extent */
 	extent_type = btrfs_file_extent_type(node, fi);
-	if (extent_type == BTRFS_FILE_EXTENT_INLINE) {
-		struct btrfs_item *e = btrfs_item_nr(slot);
-		u32 item_inline_len;
-
-		item_inline_len = btrfs_file_extent_inline_item_len(node, e);
-		extent_num_bytes = btrfs_file_extent_inline_len(node, slot, fi);
-		compressed = btrfs_file_extent_compression(node, fi);
-		if (extent_num_bytes == 0) {
-			error(
-		"root %llu EXTENT_DATA[%llu %llu] has empty inline extent",
-				root->objectid, fkey->objectid, fkey->offset);
-			err |= FILE_EXTENT_ERROR;
-		}
-		if (compressed) {
-			if (extent_num_bytes > root->fs_info->sectorsize) {
-				error(
-"root %llu EXTENT_DATA[%llu %llu] too large inline extent ram size, have %llu, max: %u",
-					root->objectid, fkey->objectid,
-					fkey->offset, extent_num_bytes,
-					root->fs_info->sectorsize - 1);
-				err |= FILE_EXTENT_ERROR;
-			}
-			if (item_inline_len > max_inline_extent_size) {
-				error(
-"root %llu EXTENT_DATA[%llu %llu] too large inline extent on-disk size, have %u, max: %u",
-					root->objectid, fkey->objectid,
-					fkey->offset, item_inline_len,
-					max_inline_extent_size);
-				err |= FILE_EXTENT_ERROR;
-			}
-		} else {
-			if (extent_num_bytes > max_inline_extent_size) {
- 			error(
- "root %llu EXTENT_DATA[%llu %llu] too large inline extent size, have %llu, max: %u",
- 				root->objectid, fkey->objectid, fkey->offset,
- 				extent_num_bytes, max_inline_extent_size);
-				err |= FILE_EXTENT_ERROR;
-			}
-		}
-		if (!compressed && extent_num_bytes != item_inline_len) {
-			error(
-		"root %llu EXTENT_DATA[%llu %llu] wrong inline size, have: %llu, expected: %u",
-				root->objectid, fkey->objectid, fkey->offset,
-				extent_num_bytes, item_inline_len);
-			err |= FILE_EXTENT_ERROR;
-		}
-		*end += extent_num_bytes;
-		*size += extent_num_bytes;
-		return err;
-	}
 
 	/* Check extent type */
 	if (extent_type != BTRFS_FILE_EXTENT_REG &&
-			extent_type != BTRFS_FILE_EXTENT_PREALLOC) {
+	    extent_type != BTRFS_FILE_EXTENT_PREALLOC &&
+	    extent_type != BTRFS_FILE_EXTENT_INLINE) {
 		err |= FILE_EXTENT_ERROR;
 		error("root %llu EXTENT_DATA[%llu %llu] type bad",
-		      root->objectid, fkey->objectid, fkey->offset);
+		      root->objectid, fkey.objectid, fkey.offset);
 		return err;
 	}
+
+	/* Check inline extent */
+	if (extent_type == BTRFS_FILE_EXTENT_INLINE)
+		return check_file_extent_inline(root, path, size, end);
 
 	/* Check REG_EXTENT/PREALLOC_EXTENT */
 	disk_bytenr = btrfs_file_extent_disk_bytenr(node, fi);
@@ -1864,12 +1966,12 @@ static int check_file_extent(struct btrfs_root *root, struct btrfs_key *fkey,
 	if (csum_found > 0 && nodatasum) {
 		err |= ODD_CSUM_ITEM;
 		error("root %llu EXTENT_DATA[%llu %llu] nodatasum shouldn't have datasum",
-		      root->objectid, fkey->objectid, fkey->offset);
+		      root->objectid, fkey.objectid, fkey.offset);
 	} else if (extent_type == BTRFS_FILE_EXTENT_REG && !nodatasum &&
 		   !is_hole && (ret < 0 || csum_found < search_len)) {
 		err |= CSUM_ITEM_MISSING;
 		error("root %llu EXTENT_DATA[%llu %llu] csum missing, have: %llu, expected: %llu",
-		      root->objectid, fkey->objectid, fkey->offset,
+		      root->objectid, fkey.objectid, fkey.offset,
 		      csum_found, search_len);
 	} else if (extent_type == BTRFS_FILE_EXTENT_PREALLOC &&
 		   csum_found > 0) {
@@ -1881,22 +1983,22 @@ static int check_file_extent(struct btrfs_root *root, struct btrfs_key *fkey,
 			err |= ODD_CSUM_ITEM;
 			error(
 "root %llu EXTENT_DATA[%llu %llu] prealloc shouldn't have csum, but has: %llu",
-			      root->objectid, fkey->objectid, fkey->offset,
+			      root->objectid, fkey.objectid, fkey.offset,
 			      csum_found);
 		}
 	}
 
 	/* Check EXTENT_DATA hole */
-	if (!no_holes && *end != fkey->offset) {
+	if (!no_holes && *end != fkey.offset) {
 		if (repair)
-			ret = punch_extent_hole(root, fkey->objectid,
-						*end, fkey->offset - *end);
+			ret = punch_extent_hole(root, fkey.objectid,
+						*end, fkey.offset - *end);
 		if (!repair || ret) {
 			err |= FILE_EXTENT_ERROR;
 			error(
 "root %llu EXTENT_DATA[%llu %llu] gap exists, expected: EXTENT_DATA[%llu %llu]",
-				root->objectid, fkey->objectid, fkey->offset,
-				fkey->objectid, *end);
+				root->objectid, fkey.objectid, fkey.offset,
+				fkey.objectid, *end);
 		}
 	}
 
@@ -2374,9 +2476,8 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 					root->objectid, inode_id, key.objectid,
 					key.offset);
 			}
-			ret = check_file_extent(root, &key, node, slot,
-						nodatasum, &extent_size,
-						&extent_end);
+			ret = check_file_extent(root, path, nodatasum,
+						&extent_size, &extent_end);
 			err |= ret;
 			break;
 		case BTRFS_XATTR_ITEM_KEY:
@@ -2535,7 +2636,7 @@ again:
 	if (err & LAST_ITEM)
 		goto out;
 
-	/* still have inode items in thie leaf */
+	/* still have inode items in this leaf */
 	if (cur->start == cur_bytenr)
 		goto again;
 
@@ -2573,7 +2674,7 @@ out:
 
 /*
  * @level           if @level == -1 means extent data item
- *                  else normal treeblocl.
+ *                  else normal treeblock.
  */
 static int should_check_extent_strictly(struct btrfs_root *root,
 					struct node_refs *nrefs, int level)
@@ -2914,7 +3015,8 @@ static int repair_extent_data_item(struct btrfs_root *root,
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
 		trans = NULL;
-		error("fail to start transaction %s", strerror(-ret));
+		errno = -ret;
+		error("fail to start transaction: %m");
 		goto out;
 	}
 	/* insert an extent item */
@@ -3604,6 +3706,18 @@ static int check_extent_data_backref(struct btrfs_fs_info *fs_info,
 		if (slot >= btrfs_header_nritems(leaf) ||
 		    btrfs_header_owner(leaf) != root_id)
 			goto next;
+		/*
+		 * For tree blocks have been relocated, data backref are
+		 * shared instead of keyed. Do not account it.
+		 */
+		if (btrfs_header_flag(leaf, BTRFS_HEADER_FLAG_RELOC)) {
+			/*
+			 * skip the leaf to speed up.
+			 */
+			slot = btrfs_header_nritems(leaf);
+			goto next;
+		}
+
 		btrfs_item_key_to_cpu(leaf, &key, slot);
 		if (key.objectid != objectid ||
 		    key.type != BTRFS_EXTENT_DATA_KEY)
@@ -3716,7 +3830,8 @@ static int repair_extent_item(struct btrfs_root *root, struct btrfs_path *path,
 	trans = btrfs_start_transaction(extent_root, 1);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		error("fail to start transaction %s", strerror(-ret));
+		errno = -ret;
+		error("fail to start transaction: %m");
 		/* nothing happened */
 		ret = 0;
 		goto out;
@@ -4177,7 +4292,8 @@ static int repair_chunk_item(struct btrfs_root *chunk_root,
 	trans = btrfs_start_transaction(extent_root, 1);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		error("fail to start transaction %s", strerror(-ret));
+		errno = -ret;
+		error("fail to start transaction: %m");
 		return ret;
 	}
 
@@ -4212,7 +4328,8 @@ static int delete_extent_tree_item(struct btrfs_root *root,
 	trans = btrfs_start_transaction(root, 1);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		error("fail to start transaction %s", strerror(-ret));
+		errno = -ret;
+		error("fail to start transaction: %m");
 		goto out;
 	}
 	btrfs_item_key_to_cpu(path->nodes[0], &key, path->slots[0]);
@@ -4719,6 +4836,7 @@ static int check_btrfs_root(struct btrfs_root *root, int check_all)
 	}
 
 	while (1) {
+		ctx.item_count++;
 		ret = walk_down_tree(root, &path, &level, &nrefs, check_all);
 
 		if (ret > 0)
