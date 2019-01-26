@@ -23,17 +23,19 @@
 #include "transaction.h"
 #include "disk-io.h"
 #include "print-tree.h"
+#include "utils.h"
 
-
-static void btrfs_uuid_to_key(const u8 *uuid, u64 *key_objectid,
-			      u64 *key_offset)
+void btrfs_uuid_to_key(const u8 *uuid, u64 *key_objectid, u64 *key_offset)
 {
 	*key_objectid = get_unaligned_le64(uuid);
 	*key_offset = get_unaligned_le64(uuid + sizeof(u64));
 }
 
-
-/* return -ENOENT for !found, < 0 for errors, or 0 if an item was found */
+/*
+ * Search uuid tree - mounted
+ *
+ * return -ENOENT for !found, < 0 for errors, or 0 if an item was found
+ */
 static int btrfs_uuid_tree_lookup_any(int fd, const u8 *uuid, u8 type,
 				      u64 *subid)
 {

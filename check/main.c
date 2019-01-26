@@ -462,6 +462,8 @@ static struct inode_record *clone_inode_rec(struct inode_record *orig_rec)
 	struct inode_backref *tmp;
 	struct orphan_data_extent *src_orphan;
 	struct orphan_data_extent *dst_orphan;
+	struct mismatch_dir_hash_record *hash_record;
+	struct mismatch_dir_hash_record *new_record;
 	struct rb_node *rb;
 	size_t size;
 	int ret;
@@ -473,6 +475,7 @@ static struct inode_record *clone_inode_rec(struct inode_record *orig_rec)
 	rec->refs = 1;
 	INIT_LIST_HEAD(&rec->backrefs);
 	INIT_LIST_HEAD(&rec->orphan_extents);
+	INIT_LIST_HEAD(&rec->mismatch_dir_hash);
 	rec->holes = RB_ROOT;
 
 	list_for_each_entry(orig, &orig_rec->backrefs, list) {
@@ -493,6 +496,16 @@ static struct inode_record *clone_inode_rec(struct inode_record *orig_rec)
 		}
 		memcpy(dst_orphan, src_orphan, sizeof(*src_orphan));
 		list_add_tail(&dst_orphan->list, &rec->orphan_extents);
+	}
+	list_for_each_entry(hash_record, &orig_rec->mismatch_dir_hash, list) {
+		size = sizeof(*hash_record) + hash_record->namelen;
+		new_record = malloc(size);
+		if (!new_record) {
+			ret = -ENOMEM;
+			goto cleanup;
+		}
+		memcpy(&new_record, hash_record, size);
+		list_add_tail(&new_record->list, &rec->mismatch_dir_hash);
 	}
 	ret = copy_file_extent_holes(&rec->holes, &orig_rec->holes);
 	if (ret < 0)
@@ -522,6 +535,13 @@ cleanup:
 			list_del(&orig->list);
 			free(orig);
 		}
+	if (!list_empty(&rec->mismatch_dir_hash)) {
+		list_for_each_entry_safe(hash_record, new_record,
+				&rec->mismatch_dir_hash, list) {
+			list_del(&hash_record->list);
+			free(hash_record);
+		}
+	}
 
 	free(rec);
 
@@ -621,6 +641,25 @@ static void print_inode_error(struct btrfs_root *root, struct inode_record *rec)
 				round_up(rec->isize,
 					 root->fs_info->sectorsize));
 	}
+
+	/* Print dir item with mismatch hash */
+	if (errors & I_ERR_MISMATCH_DIR_HASH) {
+		struct mismatch_dir_hash_record *hash_record;
+
+		fprintf(stderr, "Dir items with mismatch hash:\n");
+		list_for_each_entry(hash_record, &rec->mismatch_dir_hash,
+				list) {
+			char *namebuf = (char *)(hash_record + 1);
+			u32 crc;
+
+			crc = btrfs_name_hash(namebuf, hash_record->namelen);
+			fprintf(stderr,
+			"\tname: %.*s namelen: %u wanted 0x%08x has 0x%08llx\n",
+				hash_record->namelen, namebuf,
+				hash_record->namelen, crc,
+				hash_record->key.offset);
+		}
+	}
 }
 
 static void print_ref_error(int errors)
@@ -682,6 +721,7 @@ static struct inode_record *get_inode_rec(struct cache_tree *inode_cache,
 		rec->refs = 1;
 		INIT_LIST_HEAD(&rec->backrefs);
 		INIT_LIST_HEAD(&rec->orphan_extents);
+		INIT_LIST_HEAD(&rec->mismatch_dir_hash);
 		rec->holes = RB_ROOT;
 
 		node = malloc(sizeof(*node));
@@ -718,6 +758,8 @@ static void free_orphan_data_extents(struct list_head *orphan_extents)
 static void free_inode_rec(struct inode_record *rec)
 {
 	struct inode_backref *backref;
+	struct mismatch_dir_hash_record *hash;
+	struct mismatch_dir_hash_record *next;
 
 	if (--rec->refs > 0)
 		return;
@@ -727,6 +769,8 @@ static void free_inode_rec(struct inode_record *rec)
 		list_del(&backref->list);
 		free(backref);
 	}
+	list_for_each_entry_safe(hash, next, &rec->mismatch_dir_hash, list)
+		free(hash);
 	free_orphan_data_extents(&rec->orphan_extents);
 	free_file_extent_holes(&rec->holes);
 	free(rec);
@@ -1273,6 +1317,25 @@ out:
 	return has_parent ? 0 : 2;
 }
 
+static int add_mismatch_dir_hash(struct inode_record *dir_rec,
+				 struct btrfs_key *key, const char *namebuf,
+				 int namelen)
+{
+	struct mismatch_dir_hash_record *hash_record;
+
+	hash_record = malloc(sizeof(*hash_record) + namelen);
+	if (!hash_record) {
+		error("failed to allocate memory for mismatch dir hash rec");
+		return -ENOMEM;
+	}
+	memcpy(&hash_record->key, key, sizeof(*key));
+	memcpy(hash_record + 1, namebuf, namelen);
+	hash_record->namelen = namelen;
+
+	list_add(&hash_record->list, &dir_rec->mismatch_dir_hash);
+	return 0;
+}
+
 static int process_dir_item(struct extent_buffer *eb,
 			    int slot, struct btrfs_key *key,
 			    struct shared_node *active_node)
@@ -1300,6 +1363,8 @@ static int process_dir_item(struct extent_buffer *eb,
 	di = btrfs_item_ptr(eb, slot, struct btrfs_dir_item);
 	total = btrfs_item_size_nr(eb, slot);
 	while (cur < total) {
+		int ret;
+
 		nritems++;
 		btrfs_dir_item_key_to_cpu(eb, di, &location);
 		name_len = btrfs_dir_name_len(eb, di);
@@ -1324,10 +1389,12 @@ static int process_dir_item(struct extent_buffer *eb,
 
 		if (key->type == BTRFS_DIR_ITEM_KEY &&
 		    key->offset != btrfs_name_hash(namebuf, len)) {
-			rec->errors |= I_ERR_ODD_DIR_ITEM;
-			error("DIR_ITEM[%llu %llu] name %s namelen %u filetype %u mismatch with its hash, wanted %llu have %llu",
-			key->objectid, key->offset, namebuf, len, filetype,
-			key->offset, btrfs_name_hash(namebuf, len));
+			rec->errors |= I_ERR_MISMATCH_DIR_HASH;
+			ret = add_mismatch_dir_hash(rec, key, namebuf, len);
+			/* Fatal error, ENOMEM */
+			if (ret < 0)
+				return ret;
+			goto next;
 		}
 
 		if (location.type == BTRFS_INODE_ITEM_KEY) {
@@ -1348,6 +1415,7 @@ static int process_dir_item(struct extent_buffer *eb,
 					  len, filetype, key->type, error);
 		}
 
+next:
 		len = sizeof(*di) + name_len + data_len;
 		di = (struct btrfs_dir_item *)((char *)di + len);
 		cur += len;
@@ -2590,6 +2658,41 @@ out:
 	return ret;
 }
 
+static int repair_mismatch_dir_hash(struct btrfs_trans_handle *trans,
+				    struct btrfs_root *root,
+				    struct inode_record *rec)
+{
+	struct mismatch_dir_hash_record *hash;
+	int ret;
+
+	printf(
+	"Deleting bad dir items with invalid hash for root %llu ino %llu\n",
+		root->root_key.objectid, rec->ino);
+	while (!list_empty(&rec->mismatch_dir_hash)) {
+		char *namebuf;
+
+		hash = list_entry(rec->mismatch_dir_hash.next,
+				struct mismatch_dir_hash_record, list);
+		namebuf = (char *)(hash + 1);
+
+		ret = delete_corrupted_dir_item(trans, root, &hash->key,
+						namebuf, hash->namelen);
+		if (ret < 0)
+			break;
+
+		/* Also reduce dir isize */
+		rec->found_size -= hash->namelen;
+		list_del(&hash->list);
+		free(hash);
+	}
+	if (!ret) {
+		rec->errors &= ~I_ERR_MISMATCH_DIR_HASH;
+		/* We rely on later dir isize repair to reset dir isize */
+		rec->errors |= I_ERR_DIR_ISIZE_WRONG;
+	}
+	return ret;
+}
+
 static int try_repair_inode(struct btrfs_root *root, struct inode_record *rec)
 {
 	struct btrfs_trans_handle *trans;
@@ -2603,7 +2706,8 @@ static int try_repair_inode(struct btrfs_root *root, struct inode_record *rec)
 			     I_ERR_FILE_EXTENT_ORPHAN |
 			     I_ERR_FILE_EXTENT_DISCOUNT |
 			     I_ERR_FILE_NBYTES_WRONG |
-			     I_ERR_INLINE_RAM_BYTES_WRONG)))
+			     I_ERR_INLINE_RAM_BYTES_WRONG |
+			     I_ERR_MISMATCH_DIR_HASH)))
 		return rec->errors;
 
 	/*
@@ -2618,6 +2722,8 @@ static int try_repair_inode(struct btrfs_root *root, struct inode_record *rec)
 		return PTR_ERR(trans);
 
 	btrfs_init_path(&path);
+	if (!ret && rec->errors & I_ERR_MISMATCH_DIR_HASH)
+		ret = repair_mismatch_dir_hash(trans, root, rec);
 	if (rec->errors & I_ERR_NO_INODE_ITEM)
 		ret = repair_inode_no_item(trans, root, &path, rec);
 	if (!ret && rec->errors & I_ERR_FILE_EXTENT_ORPHAN)
@@ -2712,6 +2818,11 @@ static int check_inode_recs(struct btrfs_root *root,
 	rec = get_inode_rec(inode_cache, root_dirid, 0);
 	BUG_ON(IS_ERR(rec));
 	if (rec) {
+		if (repair) {
+			ret = try_repair_inode(root, rec);
+			if (ret < 0)
+				error++;
+		}
 		ret = check_root_dir(rec);
 		if (ret) {
 			fprintf(stderr, "root %llu root dir %llu error\n",
@@ -3362,9 +3473,10 @@ skip_walking:
 			printf("Try to repair the btree for root %llu\n",
 			       root->root_key.objectid);
 			ret = repair_btree(root, &corrupt_blocks);
-			if (ret < 0)
+			if (ret < 0) {
 				errno = -ret;
 				fprintf(stderr, "Failed to repair btree: %m\n");
+			}
 			if (!ret)
 				printf("Btree for root %llu is fixed\n",
 				       root->root_key.objectid);
@@ -7944,6 +8056,13 @@ static int check_device_used(struct device_record *dev_rec,
 	struct device_extent_record *dev_extent_rec;
 	u64 total_byte = 0;
 
+	if (dev_rec->byte_used > dev_rec->total_byte) {
+		error(
+		"device %llu has incorrect used bytes %llu > total bytes %llu",
+		      dev_rec->devid, dev_rec->byte_used, dev_rec->total_byte);
+		return -EUCLEAN;
+	}
+
 	cache = search_cache_extent2(&dext_cache->tree, dev_rec->devid, 0);
 	while (cache) {
 		dev_extent_rec = container_of(cache,
@@ -8230,6 +8349,102 @@ out:
 	return ret;
 }
 
+/*
+ * Check if all dev extents are valid (not overlapping nor beyond device
+ * boundary).
+ *
+ * Dev extents <-> chunk cross checking is already done in check_chunks().
+ */
+static int check_dev_extents(struct btrfs_fs_info *fs_info)
+{
+	struct btrfs_path path;
+	struct btrfs_key key;
+	struct btrfs_root *dev_root = fs_info->dev_root;
+	int ret;
+	u64 prev_devid = 0;
+	u64 prev_dev_ext_end = 0;
+
+	btrfs_init_path(&path);
+
+	key.objectid = 1;
+	key.type = BTRFS_DEV_EXTENT_KEY;
+	key.offset = 0;
+
+	ret = btrfs_search_slot(NULL, dev_root, &key, &path, 0, 0);
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to search device tree: %m");
+		goto out;
+	}
+	if (path.slots[0] >= btrfs_header_nritems(path.nodes[0])) {
+		ret = btrfs_next_leaf(dev_root, &path);
+		if (ret < 0) {
+			errno = -ret;
+			error("failed to find next leaf: %m");
+			goto out;
+		}
+		if (ret > 0) {
+			ret = 0;
+			goto out;
+		}
+	}
+
+	while (1) {
+		struct btrfs_dev_extent *dev_ext;
+		struct btrfs_device *dev;
+		u64 devid;
+		u64 physical_offset;
+		u64 physical_len;
+
+		btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
+		if (key.type != BTRFS_DEV_EXTENT_KEY)
+			break;
+		dev_ext = btrfs_item_ptr(path.nodes[0], path.slots[0],
+					 struct btrfs_dev_extent);
+		devid = key.objectid;
+		physical_offset = key.offset;
+		physical_len = btrfs_dev_extent_length(path.nodes[0], dev_ext);
+
+		dev = btrfs_find_device(fs_info, devid, NULL, NULL);
+		if (!dev) {
+			error("failed to find device with devid %llu", devid);
+			ret = -EUCLEAN;
+			goto out;
+		}
+		if (prev_devid == devid && prev_dev_ext_end > physical_offset) {
+			error(
+"dev extent devid %llu physical offset %llu overlap with previous dev extent end %llu",
+			      devid, physical_offset, prev_dev_ext_end);
+			ret = -EUCLEAN;
+			goto out;
+		}
+		if (physical_offset + physical_len > dev->total_bytes) {
+			error(
+"dev extent devid %llu physical offset %llu len %llu is beyond device boudnary %llu",
+			      devid, physical_offset, physical_len,
+			      dev->total_bytes);
+			ret = -EUCLEAN;
+			goto out;
+		}
+		prev_devid = devid;
+		prev_dev_ext_end = physical_offset + physical_len;
+
+		ret = btrfs_next_item(dev_root, &path);
+		if (ret < 0) {
+			errno = -ret;
+			error("failed to find next leaf: %m");
+			goto out;
+		}
+		if (ret > 0) {
+			ret = 0;
+			break;
+		}
+	}
+out:
+	btrfs_release_path(&path);
+	return ret;
+}
+
 static int check_chunks_and_extents(struct btrfs_fs_info *fs_info)
 {
 	struct rb_root dev_cache;
@@ -8321,6 +8536,12 @@ again:
 	if (ret < 0) {
 		if (ret == -EAGAIN)
 			goto loop;
+		goto out;
+	}
+
+	ret = check_dev_extents(fs_info);
+	if (ret < 0) {
+		err = ret;
 		goto out;
 	}
 
@@ -8424,7 +8645,7 @@ static int btrfs_fsck_reinit_root(struct btrfs_trans_handle *trans,
 	btrfs_set_header_backref_rev(c, BTRFS_MIXED_BACKREF_REV);
 	btrfs_set_header_owner(c, root->root_key.objectid);
 
-	write_extent_buffer(c, root->fs_info->fsid,
+	write_extent_buffer(c, root->fs_info->fs_devices->metadata_uuid,
 			    btrfs_header_fsid(), BTRFS_FSID_SIZE);
 
 	write_extent_buffer(c, root->fs_info->chunk_tree_uuid,

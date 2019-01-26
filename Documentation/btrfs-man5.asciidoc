@@ -16,9 +16,11 @@ tools.  Currently covers:
 
 3. filesystem limits
 
-4. file attributes
+4. bootloader support
 
-5. control device
+5. file attributes
+
+6. control device
 
 
 MOUNT OPTIONS
@@ -585,6 +587,13 @@ increased hardlink limit per file in a directory to 65536, older kernels
 supported a varying number of hardlinks depending on the sum of all file name
 sizes that can be stored into one metadata block
 
+*metadata_uuid*::
+(since: 5.0)
++
+the main filesystem UUID is the metadata_uuid, which stores the new UUID only
+in the superblock while all metadata blocks still have the UUID set at mkfs
+time, see `btrfstune`(8) for more
+
 *mixed_backref*::
 (since: 2.6.31)
 +
@@ -624,6 +633,47 @@ ordinary directory. Note that this feature only depends on the kernel version.
 +
 reduced-size metadata for extent references, saves a few percent of metadata
 
+SWAPFILE SUPPORT
+~~~~~~~~~~~~~~~~
+
+The swapfile is supported since kernel 5.0. Use `swapon`(8) to activate the
+swapfile. There are some limitations of the implementation in btrfs and linux
+swap subystem:
++
+* filesystem - must be only single device
+* swapfile - the containing subvolume cannot be snapshotted
+* swapfile - must be preallocated
+* swapfile - must be nodatacow (ie. also nodatasum)
+* swapfile - must not be compressed
++
+The limitations come namely from the COW-based design and mapping layer of
+blocks that allows the advanced features like relocation and multi-device
+filesystems. However, the swap subsystem expects simpler mapping and no
+background changes of the file blocks once they've been attached to swap.
++
+With active swapfiles, the following whole-filesystem operations will skip
+swapfile extents or may fail:
+* balance - block groups with swapfile extents are skipped and reported, the rest will be processed normally
+* resize grow - unaffected
+* resize shrink - works as long as the extents are outside of the shrunk range
+* device add - a new device does not interfere with existing swapfile and this operation will work, though no new swapfile can be activated afterwards
+* device delete - if the device has been added as above, it can be also deleted
+* device replace - dtto
++
+When there are no active swapfiles and a whole-filesystem exclusive operation
+is running (ie. balance, device delete, shrink), the swapfiles cannot be
+temporarily activated. The operation must finish first.
++
+--------------------
+# truncate -s 0 swapfile
+# chattr +C swapfile
+# fallocate -l 2G swapfile
+# chmod 0600 swapfile
+# mkswap swapfile
+# swapon swapfile
+--------------------
+
+
 FILESYSTEM LIMITS
 -----------------
 
@@ -632,10 +682,11 @@ maximum file name length::
 
 maximum symlink target length::
 depends on the 'nodesize' value, for 4k it's 3949 bytes, for larger nodesize
-it's 4095
+it's 4095 due to the system limit PATH_MAX
 +
-The symlink target may not be a valid path, ie the path name components
-can exceed the limits, there's no content validation at `symlink`(3) creation.
+The symlink target may not be a valid path, ie. the path name components
+can exceed the limits (NAME_MAX), there's no content validation at `symlink`(3)
+creation.
 
 maximum number of inodes::
 2^64^ but depends on the available metadata space as the inodes are created
@@ -648,13 +699,23 @@ maximum file length::
 inherent limit of btrfs is 2^64^ (16 EiB) but the linux VFS limit is 2^63^ (8 EiB)
 
 maximum number of subvolumes::
-2^64^ but depends on the available metadata space, the space consumed by all
-subvolume metadata includes bookkeeping of the shared extents can be large (MiB,
-GiB)
+the subvolume ids can go up to 2^64^ but the number of actual subvolumes
+depends on the available metadata space, the space consumed by all subvolume
+metadata includes bookkeeping of shared extents can be large (MiB, GiB)
 
 maximum number of hardlinks of a file in a directory::
 65536 when the `extref` feature is turned on during mkfs (default), roughly
 100 otherwise
+
+
+BOOTLOADER SUPPORT
+------------------
+
+GRUB2 (https://www.gnu.org/software/grub) has the most advanced support of
+booting from BTRFS with respect to features.
+
+EXTLINUX (from the https://syslinux.org project) can boot but does not support
+all features. Please check the upstream documentation before you use it.
 
 
 FILE ATTRIBUTES
@@ -708,6 +769,7 @@ When set on a directory, all newly created files will inherit this attribute.
 No other attributes are supported.  For the complete list please refer to the
 `chattr`(1) manual page.
 
+
 CONTROL DEVICE
 --------------
 
@@ -739,6 +801,7 @@ The control device is not strictly required but the device scanning will not
 work and a workaround would need to be used to mount a multi-device filesystem.
 The mount option 'device' can trigger the device scanning during mount.
 
+
 SEE ALSO
 --------
 `acl`(5),
@@ -747,4 +810,5 @@ SEE ALSO
 `fstrim`(8),
 `ioctl`(2),
 `mkfs.btrfs`(8),
-`mount`(8)
+`mount`(8),
+`swapon`(8)

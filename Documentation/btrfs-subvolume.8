@@ -2,12 +2,12 @@
 .\"     Title: btrfs-subvolume
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 12/05/2018
+.\"      Date: 01/23/2019
 .\"    Manual: Btrfs Manual
-.\"    Source: Btrfs v4.19.1
+.\"    Source: Btrfs v4.20.1
 .\"  Language: English
 .\"
-.TH "BTRFS\-SUBVOLUME" "8" "12/05/2018" "Btrfs v4\&.19\&.1" "Btrfs Manual"
+.TH "BTRFS\-SUBVOLUME" "8" "01/23/2019" "Btrfs v4\&.20\&.1" "Btrfs Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -308,25 +308,44 @@ or
 \fBbtrfs inspect\-internal rootid\fR\&.
 .RE
 .PP
-\fBshow\fR [options] \fI<path>\fR|\fI<mnt>\fR
+\fBshow\fR [options] \fI<path>\fR
 .RS 4
-Show information of a given subvolume in the
-\fI<path>\fR\&.
+Show more information about subvolume
+\fI<path>\fR
+regarding UUIDs, times, generations, flags and related snapshots\&.
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+/mnt/btrfs/subvolume
+        Name:                   subvolume
+        UUID:                   5e076a14\-4e42\-254d\-ac8e\-55bebea982d1
+        Parent UUID:            \-
+        Received UUID:          \-
+        Creation time:          2018\-01\-01 12:34:56 +0000
+        Subvolume ID:           79
+        Generation:             2844
+        Gen at creation:        2844
+        Parent ID:              5
+        Top level ID:           5
+        Flags:                  \-
+        Snapshot(s):
+.fi
+.if n \{\
+.RE
+.\}
 .sp
 \fBOptions\fR
 .PP
 \-r|\-\-rootid
 .RS 4
 rootid of the subvolume\&.
+.RE
 .PP
 \-u|\-\-uuid
 .RS 4
 UUID of the subvolume\&.
-.RE
-.sp
-If no option is specified, subvolume information of
-\fI<path>\fR
-is shown, otherwise the subvolume information of rootid or UUID in the filesystem is shown\&.
 .RE
 .RE
 .PP
