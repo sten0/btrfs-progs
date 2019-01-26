@@ -24,6 +24,7 @@ libbtrfs.so.0 libbtrfs0 #MINVER#
  btrfs_lookup_uuid_subvol_item@Base 4.16.1
  btrfs_read_and_process_send_stream@Base 4.16.1
  btrfs_subvolid_resolve@Base 4.16.1
+ btrfs_uuid_to_key@Base 4.20.1
  crc32c_le@Base 4.16.1
  crc32c_optimization_init@Base 4.16.1
  lookup_path_rootid@Base 4.16.1
