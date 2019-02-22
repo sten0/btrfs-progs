@@ -1474,16 +1474,52 @@ out:
 }
 
 /*
+ * A wrapper for delete_corrupted_dir_item(), with support part like
+ * start/commit transaction.
+ */
+static int lowmem_delete_corrupted_dir_item(struct btrfs_root *root,
+					    struct btrfs_key *di_key,
+					    char *namebuf, u32 name_len)
+{
+	struct btrfs_trans_handle *trans;
+	int ret;
+
+	trans = btrfs_start_transaction(root, 1);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		error("failed to start transaction: %d", ret);
+		return ret;
+	}
+
+	ret = delete_corrupted_dir_item(trans, root, di_key, namebuf, name_len);
+	if (ret < 0) {
+		btrfs_abort_transaction(trans, ret);
+	} else {
+		ret = btrfs_commit_transaction(trans, root);
+		if (ret < 0)
+			error("failed to commit transaction: %d", ret);
+	}
+	return ret;
+}
+
+/*
  * Call repair_inode_item_missing and repair_ternary_lowmem to repair
  *
  * Returns error after repair
  */
-static int repair_dir_item(struct btrfs_root *root, u64 dirid, u64 ino,
-			   u64 index, u8 filetype, char *namebuf, u32 name_len,
-			   int err)
+static int repair_dir_item(struct btrfs_root *root, struct btrfs_key *di_key,
+			   u64 ino, u64 index, u8 filetype, char *namebuf,
+			   u32 name_len, int err)
 {
+	u64 dirid = di_key->objectid;
 	int ret;
 
+	if (err & (DIR_ITEM_HASH_MISMATCH)) {
+		ret = lowmem_delete_corrupted_dir_item(root, di_key, namebuf,
+						       name_len);
+		if (!ret)
+			err &= ~(DIR_ITEM_HASH_MISMATCH);
+	}
 	if (err & INODE_ITEM_MISSING) {
 		ret = repair_inode_item_missing(root, ino, filetype);
 		if (!ret)
@@ -1631,11 +1667,12 @@ begin:
 
 		if (di_key->type == BTRFS_DIR_ITEM_KEY &&
 		    di_key->offset != btrfs_name_hash(namebuf, len)) {
-			err |= -EIO;
 			error("root %llu DIR_ITEM[%llu %llu] name %s namelen %u filetype %u mismatch with its hash, wanted %llu have %llu",
 			root->objectid, di_key->objectid, di_key->offset,
 			namebuf, len, filetype, di_key->offset,
 			btrfs_name_hash(namebuf, len));
+			tmp_err |= DIR_ITEM_HASH_MISMATCH;
+			goto next;
 		}
 
 		btrfs_dir_item_key_to_cpu(node, di, &location);
@@ -1683,7 +1720,7 @@ begin:
 next:
 
 		if (tmp_err && repair) {
-			ret = repair_dir_item(root, di_key->objectid,
+			ret = repair_dir_item(root, di_key,
 					      location.objectid, index,
 					      imode_to_type(mode), namebuf,
 					      name_len, tmp_err);
@@ -2142,7 +2179,7 @@ out:
 		error("failed to set nbytes in inode %llu root %llu",
 		      ino, root->root_key.objectid);
 	else
-		printf("Set nbytes in inode item %llu root %llu\n to %llu", ino,
+		printf("Set nbytes in inode item %llu root %llu to %llu\n", ino,
 		       root->root_key.objectid, nbytes);
 
 	/* research path */
@@ -4095,6 +4132,8 @@ static int check_dev_item(struct btrfs_fs_info *fs_info,
 	u64 dev_id;
 	u64 used;
 	u64 total = 0;
+	u64 prev_devid = 0;
+	u64 prev_dev_ext_end = 0;
 	int ret;
 
 	dev_item = btrfs_item_ptr(eb, slot, struct btrfs_dev_item);
@@ -4102,6 +4141,12 @@ static int check_dev_item(struct btrfs_fs_info *fs_info,
 	used = btrfs_device_bytes_used(eb, dev_item);
 	total_bytes = btrfs_device_total_bytes(eb, dev_item);
 
+	if (used > total_bytes) {
+		error(
+		"device %llu has incorrect used bytes %llu > total bytes %llu",
+			dev_id, used, total_bytes);
+		return ACCOUNTING_MISMATCH;
+	}
 	key.objectid = dev_id;
 	key.type = BTRFS_DEV_EXTENT_KEY;
 	key.offset = 0;
@@ -4116,8 +4161,16 @@ static int check_dev_item(struct btrfs_fs_info *fs_info,
 		return REFERENCER_MISSING;
 	}
 
-	/* Iterate dev_extents to calculate the used space of a device */
+	/*
+	 * Iterate dev_extents to calculate the used space of a device
+	 *
+	 * Also make sure no dev extents overlap and end beyond device boundary
+	 */
 	while (1) {
+		u64 devid;
+		u64 physical_offset;
+		u64 physical_len;
+
 		if (path.slots[0] >= btrfs_header_nritems(path.nodes[0]))
 			goto next;
 
@@ -4129,7 +4182,27 @@ static int check_dev_item(struct btrfs_fs_info *fs_info,
 
 		ptr = btrfs_item_ptr(path.nodes[0], path.slots[0],
 				     struct btrfs_dev_extent);
-		total += btrfs_dev_extent_length(path.nodes[0], ptr);
+		devid = key.objectid;
+		physical_offset = key.offset;
+		physical_len = btrfs_dev_extent_length(path.nodes[0], ptr);
+
+		if (prev_devid == devid && physical_offset < prev_dev_ext_end) {
+			error(
+"dev extent devid %llu offset %llu len %llu overlap with previous dev extent end %llu",
+			      devid, physical_offset, physical_len,
+			      prev_dev_ext_end);
+			return ACCOUNTING_MISMATCH;
+		}
+		if (physical_offset + physical_len > total_bytes) {
+			error(
+"dev extent devid %llu offset %llu len %llu is beyond device boundary %llu",
+			      devid, physical_offset, physical_len,
+			      total_bytes);
+			return ACCOUNTING_MISMATCH;
+		}
+		prev_devid = devid;
+		prev_dev_ext_end = physical_offset + physical_len;
+		total += physical_len;
 next:
 		ret = btrfs_next_item(dev_root, &path);
 		if (ret)

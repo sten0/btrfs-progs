@@ -330,6 +330,7 @@ static inline unsigned long btrfs_chunk_item_size(int num_stripes)
 #define BTRFS_SUPER_FLAG_METADUMP		(1ULL << 33)
 #define BTRFS_SUPER_FLAG_METADUMP_V2		(1ULL << 34)
 #define BTRFS_SUPER_FLAG_CHANGING_FSID		(1ULL << 35)
+#define BTRFS_SUPER_FLAG_CHANGING_FSID_V2	(1ULL << 36)
 
 #define BTRFS_BACKREF_REV_MAX		256
 #define BTRFS_BACKREF_REV_SHIFT		56
@@ -454,8 +455,9 @@ struct btrfs_super_block {
 	__le64 cache_generation;
 	__le64 uuid_tree_generation;
 
+	u8 metadata_uuid[BTRFS_FSID_SIZE];
 	/* future expansion */
-	__le64 reserved[30];
+	__le64 reserved[28];
 	u8 sys_chunk_array[BTRFS_SYSTEM_CHUNK_ARRAY_SIZE];
 	struct btrfs_root_backup super_roots[BTRFS_NUM_BACKUP_ROOTS];
 } __attribute__ ((__packed__));
@@ -489,6 +491,7 @@ struct btrfs_super_block {
 #define BTRFS_FEATURE_INCOMPAT_RAID56		(1ULL << 7)
 #define BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA	(1ULL << 8)
 #define BTRFS_FEATURE_INCOMPAT_NO_HOLES		(1ULL << 9)
+#define BTRFS_FEATURE_INCOMPAT_METADATA_UUID    (1ULL << 10)
 
 #define BTRFS_FEATURE_COMPAT_SUPP		0ULL
 
@@ -511,7 +514,8 @@ struct btrfs_super_block {
 	 BTRFS_FEATURE_INCOMPAT_RAID56 |		\
 	 BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS |		\
 	 BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA |	\
-	 BTRFS_FEATURE_INCOMPAT_NO_HOLES)
+	 BTRFS_FEATURE_INCOMPAT_NO_HOLES |		\
+	 BTRFS_FEATURE_INCOMPAT_METADATA_UUID)
 
 /*
  * A leaf is full of items. offset and size tell us where to find
@@ -1089,8 +1093,6 @@ struct btrfs_block_group_cache {
 struct btrfs_device;
 struct btrfs_fs_devices;
 struct btrfs_fs_info {
-	u8 fsid[BTRFS_FSID_SIZE];
-	u8 *new_fsid;
 	u8 chunk_tree_uuid[BTRFS_UUID_SIZE];
 	u8 *new_chunk_tree_uuid;
 	struct btrfs_root *fs_root;
@@ -1101,6 +1103,7 @@ struct btrfs_fs_info {
 	struct btrfs_root *csum_root;
 	struct btrfs_root *quota_root;
 	struct btrfs_root *free_space_root;
+	struct btrfs_root *uuid_root;
 
 	struct rb_root fs_root_tree;
 
@@ -2720,6 +2723,10 @@ int btrfs_insert_xattr_item(struct btrfs_trans_handle *trans,
 			    struct btrfs_root *root, const char *name,
 			    u16 name_len, const void *data, u16 data_len,
 			    u64 dir);
+struct btrfs_dir_item *btrfs_match_dir_item_name(struct btrfs_root *root,
+			      struct btrfs_path *path,
+			      const char *name, int name_len);
+
 /* inode-map.c */
 int btrfs_find_free_objectid(struct btrfs_trans_handle *trans,
 			     struct btrfs_root *fs_root,
@@ -2774,10 +2781,14 @@ int btrfs_csum_truncate(struct btrfs_trans_handle *trans,
 			struct btrfs_root *root, struct btrfs_path *path,
 			u64 isize);
 
-/* uuid-tree.c */
+/* uuid-tree.c, interface for mounted mounted filesystem */
 int btrfs_lookup_uuid_subvol_item(int fd, const u8 *uuid, u64 *subvol_id);
 int btrfs_lookup_uuid_received_subvol_item(int fd, const u8 *uuid,
 					   u64 *subvol_id);
+
+/* uuid-tree.c, interface for unmounte filesystem */
+int btrfs_uuid_tree_add(struct btrfs_trans_handle *trans, u8 *uuid, u8 type,
+			u64 subvol_id_cpu);
 
 static inline int is_fstree(u64 rootid)
 {
@@ -2786,6 +2797,8 @@ static inline int is_fstree(u64 rootid)
 		return 1;
 	return 0;
 }
+
+void btrfs_uuid_to_key(const u8 *uuid, u64 *key_objectid, u64 *key_offset);
 
 /* inode.c */
 int check_dir_conflict(struct btrfs_root *root, char *name, int namelen,

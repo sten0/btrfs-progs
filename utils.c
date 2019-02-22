@@ -1134,15 +1134,25 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_size, unsigned unit_mod
 	num_divs = 0;
 	last_size = size;
 	switch (unit_mode & UNITS_MODE_MASK) {
-	case UNITS_TBYTES: base *= mult; num_divs++;
-	case UNITS_GBYTES: base *= mult; num_divs++;
-	case UNITS_MBYTES: base *= mult; num_divs++;
-	case UNITS_KBYTES: num_divs++;
-			   break;
+	case UNITS_TBYTES:
+		base *= mult;
+		num_divs++;
+		__attribute__ ((fallthrough));
+	case UNITS_GBYTES:
+		base *= mult;
+		num_divs++;
+		__attribute__ ((fallthrough));
+	case UNITS_MBYTES:
+		base *= mult;
+		num_divs++;
+		__attribute__ ((fallthrough));
+	case UNITS_KBYTES:
+		num_divs++;
+		break;
 	case UNITS_BYTES:
-			   base = 1;
-			   num_divs = 0;
-			   break;
+		base = 1;
+		num_divs = 0;
+		break;
 	default:
 		if (negative) {
 			s64 ssize = (s64)size;
@@ -1907,13 +1917,17 @@ int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 	default:
 	case 4:
 		allowed |= BTRFS_BLOCK_GROUP_RAID10;
+		__attribute__ ((fallthrough));
 	case 3:
 		allowed |= BTRFS_BLOCK_GROUP_RAID6;
+		__attribute__ ((fallthrough));
 	case 2:
 		allowed |= BTRFS_BLOCK_GROUP_RAID0 | BTRFS_BLOCK_GROUP_RAID1 |
 			BTRFS_BLOCK_GROUP_RAID5;
+		__attribute__ ((fallthrough));
 	case 1:
 		allowed |= BTRFS_BLOCK_GROUP_DUP;
+		__attribute__ ((fallthrough));
 	}
 
 	if (dev_cnt > 1 && profile & BTRFS_BLOCK_GROUP_DUP) {
@@ -2048,7 +2062,7 @@ int find_mount_root(const char *path, char **mount_root)
 	int fd;
 	struct mntent *ent;
 	int len;
-	int ret;
+	int ret = 0;
 	int not_btrfs = 1;
 	int longest_matchlen = 0;
 	char *longest_match = NULL;
@@ -2064,18 +2078,25 @@ int find_mount_root(const char *path, char **mount_root)
 
 	while ((ent = getmntent(mnttab))) {
 		len = strlen(ent->mnt_dir);
-		if (strncmp(ent->mnt_dir, path, len) == 0) {
+		if (strncmp(ent->mnt_dir, path, len) == 0 &&
+		    (path[len] == '/' || path[len] == '\0')) {
 			/* match found and use the latest match */
 			if (longest_matchlen <= len) {
 				free(longest_match);
 				longest_matchlen = len;
 				longest_match = strdup(ent->mnt_dir);
+				if (!longest_match) {
+					ret = -errno;
+					break;
+				}
 				not_btrfs = strcmp(ent->mnt_type, "btrfs");
 			}
 		}
 	}
 	endmntent(mnttab);
 
+	if (ret)
+		return ret;
 	if (!longest_match)
 		return -ENOENT;
 	if (not_btrfs) {
@@ -2250,29 +2271,6 @@ int btrfs_tree_search2_ioctl_supported(int fd)
 	else if (ret == 0)
 		return 1;
 	return ret;
-}
-
-int btrfs_check_nodesize(u32 nodesize, u32 sectorsize, u64 features)
-{
-	if (nodesize < sectorsize) {
-		error("illegal nodesize %u (smaller than %u)",
-				nodesize, sectorsize);
-		return -1;
-	} else if (nodesize > BTRFS_MAX_METADATA_BLOCKSIZE) {
-		error("illegal nodesize %u (larger than %u)",
-			nodesize, BTRFS_MAX_METADATA_BLOCKSIZE);
-		return -1;
-	} else if (nodesize & (sectorsize - 1)) {
-		error("illegal nodesize %u (not aligned to %u)",
-			nodesize, sectorsize);
-		return -1;
-	} else if (features & BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS &&
-		   nodesize != sectorsize) {
-		error("illegal nodesize %u (not equal to %u for mixed block group)",
-			nodesize, sectorsize);
-		return -1;
-	}
-	return 0;
 }
 
 /*

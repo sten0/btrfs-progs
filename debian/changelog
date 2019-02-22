@@ -1,3 +1,15 @@
+btrfs-progs (4.20.1-2) unstable; urgency=medium
+
+  * Fix btrfs send of snapshots stored in /. Closes: #920886.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Sat, 09 Feb 2019 13:43:54 +0000
+
+btrfs-progs (4.20.1-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Sat, 26 Jan 2019 00:34:29 +0000
+
 btrfs-progs (4.19.1-2) unstable; urgency=medium
 
   * Rebuild with libzstd support on.

@@ -3,11 +3,11 @@ Author: Dimitri John Ledkov <xnox@ubuntu.com>
 Forwarded: not-needed
 Last-Update: 2018-05-14
 
-Index: btrfs-progs/Makefile
+Index: btrfs-progs-4.20.1/Makefile
 ===================================================================
---- btrfs-progs.orig/Makefile
-+++ btrfs-progs/Makefile
-@@ -668,7 +668,7 @@ endif
+--- btrfs-progs-4.20.1.orig/Makefile
++++ btrfs-progs-4.20.1/Makefile
+@@ -680,7 +680,7 @@ endif
  ifeq ($(PYTHON_BINDINGS),1)
  install_python: libbtrfsutil_python
  	$(Q)cd libbtrfsutil/python; \

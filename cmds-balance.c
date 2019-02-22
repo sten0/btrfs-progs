@@ -481,11 +481,12 @@ static int do_balance(const char *path, struct btrfs_ioctl_balance_args *args,
 			"There may be more info in syslog - try dmesg | tail\n");
 			ret = 1;
 		}
+	} else if (ret > 0) {
+		error("balance: %s", btrfs_err_str(ret));
 	} else {
 		printf("Done, had to relocate %llu out of %llu chunks\n",
 		       (unsigned long long)args->stat.completed,
 		       (unsigned long long)args->stat.considered);
-		ret = 0;
 	}
 
 out:
@@ -508,7 +509,7 @@ static const char * const cmd_balance_start_usage[] = {
 	"-m[filters]    act on metadata chunks",
 	"-s[filters]    act on system chunks (only under -f)",
 	"-v             be verbose",
-	"-f             force reducing of metadata integrity",
+	"-f             force a reduction of metadata integrity",
 	"--full-balance do not print warning and do not delay start",
 	"--background|--bg",
 	"               run the balance as a background process",

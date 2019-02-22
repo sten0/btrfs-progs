@@ -23,6 +23,7 @@
 #include "internal.h"
 #include "sizes.h"
 #include "messages.h"
+#include "volumes.h"
 
 static int split_node(struct btrfs_trans_handle *trans, struct btrfs_root
 		      *root, struct btrfs_path *path, int level);
@@ -134,7 +135,7 @@ int btrfs_copy_root(struct btrfs_trans_handle *trans,
 	else
 		btrfs_set_header_owner(cow, new_root_objectid);
 
-	write_extent_buffer(cow, root->fs_info->fsid,
+	write_extent_buffer(cow, root->fs_info->fs_devices->metadata_uuid,
 			    btrfs_header_fsid(), BTRFS_FSID_SIZE);
 
 	WARN_ON(btrfs_header_generation(buf) > trans->transid);
@@ -308,7 +309,7 @@ int __btrfs_cow_block(struct btrfs_trans_handle *trans,
 	else
 		btrfs_set_header_owner(cow, root->root_key.objectid);
 
-	write_extent_buffer(cow, root->fs_info->fsid,
+	write_extent_buffer(cow, root->fs_info->fs_devices->metadata_uuid,
 			    btrfs_header_fsid(), BTRFS_FSID_SIZE);
 
 	WARN_ON(!(buf->flags & EXTENT_BAD_TRANSID) &&
@@ -1532,7 +1533,7 @@ static int noinline insert_new_root(struct btrfs_trans_handle *trans,
 		btrfs_node_key(lower, &lower_key, 0);
 
 	c = btrfs_alloc_free_block(trans, root, root->fs_info->nodesize,
-				   root->root_key.objectid, &lower_key, 
+				   root->root_key.objectid, &lower_key,
 				   level, root->node->start, 0);
 
 	if (IS_ERR(c))
@@ -1548,7 +1549,7 @@ static int noinline insert_new_root(struct btrfs_trans_handle *trans,
 
 	root_add_used(root, root->fs_info->nodesize);
 
-	write_extent_buffer(c, root->fs_info->fsid,
+	write_extent_buffer(c, root->fs_info->fs_devices->metadata_uuid,
 			    btrfs_header_fsid(), BTRFS_FSID_SIZE);
 
 	write_extent_buffer(c, root->fs_info->chunk_tree_uuid,
@@ -1669,7 +1670,7 @@ static int split_node(struct btrfs_trans_handle *trans, struct btrfs_root
 	btrfs_set_header_generation(split, trans->transid);
 	btrfs_set_header_backref_rev(split, BTRFS_MIXED_BACKREF_REV);
 	btrfs_set_header_owner(split, root->root_key.objectid);
-	write_extent_buffer(split, root->fs_info->fsid,
+	write_extent_buffer(split, root->fs_info->fs_devices->metadata_uuid,
 			    btrfs_header_fsid(), BTRFS_FSID_SIZE);
 	write_extent_buffer(split, root->fs_info->chunk_tree_uuid,
 			    btrfs_header_chunk_tree_uuid(split),
@@ -2231,7 +2232,7 @@ again:
 			}
 		}
 	}
-	
+
 	if (split == 0)
 		btrfs_cpu_key_to_disk(&disk_key, ins_key);
 	else
@@ -2251,7 +2252,7 @@ again:
 	btrfs_set_header_backref_rev(right, BTRFS_MIXED_BACKREF_REV);
 	btrfs_set_header_owner(right, root->root_key.objectid);
 	btrfs_set_header_level(right, 0);
-	write_extent_buffer(right, root->fs_info->fsid,
+	write_extent_buffer(right, root->fs_info->fs_devices->metadata_uuid,
 			    btrfs_header_fsid(), BTRFS_FSID_SIZE);
 
 	write_extent_buffer(right, root->fs_info->chunk_tree_uuid,
@@ -2966,7 +2967,7 @@ int btrfs_next_sibling_tree_block(struct btrfs_fs_info *fs_info,
 	struct extent_buffer *next = NULL;
 
 	BUG_ON(path->lowest_level + 1 >= BTRFS_MAX_LEVEL);
-	while(level < BTRFS_MAX_LEVEL) {
+	do {
 		if (!path->nodes[level])
 			return 1;
 
@@ -2986,7 +2987,7 @@ int btrfs_next_sibling_tree_block(struct btrfs_fs_info *fs_info,
 		if (!extent_buffer_uptodate(next))
 			return -EIO;
 		break;
-	}
+	} while (level < BTRFS_MAX_LEVEL);
 	path->slots[level] = slot;
 	while(1) {
 		level--;
@@ -3105,4 +3106,135 @@ int btrfs_next_extent_item(struct btrfs_root *root,
 		    found_key.type == BTRFS_METADATA_ITEM_KEY)
 		return 0;
 	}
+}
+
+/*
+ * Search uuid tree - unmounted
+ *
+ * return -ENOENT for !found, < 0 for errors, or 0 if an item was found
+ */
+static int btrfs_uuid_tree_lookup(struct btrfs_root *uuid_root, u8 *uuid,
+				  u8 type, u64 subid)
+{
+	int ret;
+	struct btrfs_path *path = NULL;
+	struct extent_buffer *eb;
+	int slot;
+	u32 item_size;
+	unsigned long offset;
+	struct btrfs_key key;
+
+	if (!uuid_root) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	path = btrfs_alloc_path();
+	if (!path) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	btrfs_uuid_to_key(uuid, &key.objectid, &key.offset);
+	key.type = type;
+	ret = btrfs_search_slot(NULL, uuid_root, &key, path, 0, 0);
+	if (ret < 0) {
+		goto out;
+	} else if (ret > 0) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	eb = path->nodes[0];
+	slot = path->slots[0];
+	item_size = btrfs_item_size_nr(eb, slot);
+	offset = btrfs_item_ptr_offset(eb, slot);
+	ret = -ENOENT;
+
+	if (!IS_ALIGNED(item_size, sizeof(u64))) {
+		warning("uuid item with invalid size %lu!",
+			(unsigned long)item_size);
+		goto out;
+	}
+	while (item_size) {
+		__le64 data;
+
+		read_extent_buffer(eb, &data, offset, sizeof(data));
+		if (le64_to_cpu(data) == subid) {
+			ret = 0;
+			break;
+		}
+		offset += sizeof(data);
+		item_size -= sizeof(data);
+	}
+
+out:
+	btrfs_free_path(path);
+	return ret;
+}
+
+int btrfs_uuid_tree_add(struct btrfs_trans_handle *trans, u8 *uuid, u8 type,
+			u64 subvol_id_cpu)
+{
+	struct btrfs_fs_info *fs_info = trans->fs_info;
+	struct btrfs_root *uuid_root = fs_info->uuid_root;
+	int ret;
+	struct btrfs_path *path = NULL;
+	struct btrfs_key key;
+	struct extent_buffer *eb;
+	int slot;
+	unsigned long offset;
+	__le64 subvol_id_le;
+
+	if (!uuid_root) {
+		warning("%s: uuid root is not initialized", __func__);
+		return -EINVAL;
+	}
+
+	ret = btrfs_uuid_tree_lookup(uuid_root, uuid, type, subvol_id_cpu);
+	if (ret != -ENOENT)
+		return ret;
+
+	key.type = type;
+	btrfs_uuid_to_key(uuid, &key.objectid, &key.offset);
+
+	path = btrfs_alloc_path();
+	if (!path) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = btrfs_insert_empty_item(trans, uuid_root, path, &key,
+				      sizeof(subvol_id_le));
+	if (ret >= 0) {
+		/* Add an item for the type for the first time */
+		eb = path->nodes[0];
+		slot = path->slots[0];
+		offset = btrfs_item_ptr_offset(eb, slot);
+	} else if (ret == -EEXIST) {
+		/*
+		 * An item with that type already exists.
+		 * Extend the item and store the new subvol_id at the end.
+		 */
+		btrfs_extend_item(uuid_root, path, sizeof(subvol_id_le));
+		eb = path->nodes[0];
+		slot = path->slots[0];
+		offset = btrfs_item_ptr_offset(eb, slot);
+		offset += btrfs_item_size_nr(eb, slot) - sizeof(subvol_id_le);
+	} else if (ret < 0) {
+		warning(
+		"inserting uuid item failed (0x%016llx, 0x%016llx) type %u: %d",
+			(unsigned long long)key.objectid,
+			(unsigned long long)key.offset, type, ret);
+		goto out;
+	}
+
+	ret = 0;
+	subvol_id_le = cpu_to_le64(subvol_id_cpu);
+	write_extent_buffer(eb, &subvol_id_le, offset, sizeof(subvol_id_le));
+	btrfs_mark_buffer_dirty(eb);
+
+out:
+	btrfs_free_path(path);
+	return ret;
 }

@@ -44,6 +44,7 @@ $(error Makefile.inc not generated, please configure first)
 endif
 
 TAGS_CMD := ctags
+ETAGS_CMD := etags
 CSCOPE_CMD := cscope -u -b -c -q
 
 include Makefile.extrawarn
@@ -62,6 +63,10 @@ DEBUG_LDFLAGS :=
 ABSTOPDIR = $(shell pwd)
 TOPDIR := .
 
+# Disable certain GCC 8 + glibc 2.28 warning for snprintf()
+# where string truncation for snprintf() is expected.
+DISABLE_WARNING_FLAGS := $(call cc-disable-warning, format-truncation)
+
 # Common build flags
 CFLAGS = $(SUBST_CFLAGS) \
 	 $(CSTD) \
@@ -73,6 +78,7 @@ CFLAGS = $(SUBST_CFLAGS) \
 	 -I$(TOPDIR) \
 	 -I$(TOPDIR)/kernel-lib \
 	 -I$(TOPDIR)/libbtrfsutil \
+	 $(DISABLE_WARNING_FLAGS) \
 	 $(EXTRAWARN_CFLAGS) \
 	 $(DEBUG_CFLAGS_INTERNAL) \
 	 $(EXTRA_CFLAGS)
@@ -597,6 +603,12 @@ tags: FORCE
 		check/*.[ch] kernel-lib/*.[ch] kernel-shared/*.[ch] \
 		libbtrfsutil/*.[ch]
 
+etags: FORCE
+	@echo "    [ETAGS]   $(ETAGS_CMD)"
+	$(Q)$(ETAGS_CMD) *.[ch] image/*.[ch] convert/*.[ch] mkfs/*.[ch] \
+		check/*.[ch] kernel-lib/*.[ch] kernel-shared/*.[ch] \
+		libbtrfsutil/*.[ch]
+
 cscope: FORCE
 	@echo "    [CSCOPE] $(CSCOPE_CMD)"
 	$(Q)ls -1 *.[ch] image/*.[ch] convert/*.[ch] mkfs/*.[ch] check/*.[ch] \
@@ -633,7 +645,7 @@ clean-gen:
 	@echo "Cleaning Generated Files"
 	$(Q)$(RM) -rf -- version.h config.status config.cache config.log \
 		configure.lineno config.status.lineno Makefile.inc \
-		Documentation/Makefile tags \
+		Documentation/Makefile tags TAGS \
 		cscope.files cscope.out cscope.in.out cscope.po.out \
 		config.log config.h config.h.in~ aclocal.m4 \
 		configure autom4te.cache/ config/

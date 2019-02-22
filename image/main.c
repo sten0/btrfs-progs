@@ -1404,7 +1404,7 @@ static void *restore_worker(void *data)
 		list_del_init(&async->list);
 
 		if (mdres->compress_method == COMPRESS_ZLIB) {
-			size = compress_size; 
+			size = compress_size;
 			pthread_mutex_unlock(&mdres->mutex);
 			ret = uncompress(buffer, (unsigned long *)&size,
 					 async->buffer, async->bufsize);
@@ -1596,9 +1596,12 @@ static int fill_mdres_info(struct mdrestore_struct *mdres,
 
 	super = (struct btrfs_super_block *)outbuf;
 	mdres->nodesize = btrfs_super_nodesize(super);
-	memcpy(mdres->fsid, super->fsid, BTRFS_FSID_SIZE);
-	memcpy(mdres->uuid, super->dev_item.uuid,
-		       BTRFS_UUID_SIZE);
+	if (btrfs_super_incompat_flags(super) &
+	    BTRFS_FEATURE_INCOMPAT_METADATA_UUID)
+		memcpy(mdres->fsid, super->metadata_uuid, BTRFS_FSID_SIZE);
+	else
+		memcpy(mdres->fsid, super->fsid, BTRFS_FSID_SIZE);
+	memcpy(mdres->uuid, super->dev_item.uuid, BTRFS_UUID_SIZE);
 	mdres->devid = le64_to_cpu(super->dev_item.devid);
 	free(buffer);
 	return 0;
@@ -1725,7 +1728,7 @@ static int read_chunk_block(struct mdrestore_struct *mdres, u8 *buffer,
 
 	if (memcmp(mdres->fsid, eb->data + offsetof(struct btrfs_header, fsid),
 		   BTRFS_FSID_SIZE)) {
-		error("filesystem UUID of eb %llu does not match",
+		error("filesystem metadata UUID of eb %llu does not match",
 				(unsigned long long)bytenr);
 		ret = -EIO;
 		goto out;
@@ -2039,9 +2042,13 @@ static int build_chunk_tree(struct mdrestore_struct *mdres,
 	super = (struct btrfs_super_block *)buffer;
 	chunk_root_bytenr = btrfs_super_chunk_root(super);
 	mdres->nodesize = btrfs_super_nodesize(super);
-	memcpy(mdres->fsid, super->fsid, BTRFS_FSID_SIZE);
-	memcpy(mdres->uuid, super->dev_item.uuid,
-		       BTRFS_UUID_SIZE);
+	if (btrfs_super_incompat_flags(super) &
+	    BTRFS_FEATURE_INCOMPAT_METADATA_UUID)
+		memcpy(mdres->fsid, super->metadata_uuid, BTRFS_FSID_SIZE);
+	else
+		memcpy(mdres->fsid, super->fsid, BTRFS_FSID_SIZE);
+
+	memcpy(mdres->uuid, super->dev_item.uuid, BTRFS_UUID_SIZE);
 	mdres->devid = le64_to_cpu(super->dev_item.devid);
 	free(buffer);
 	pthread_mutex_unlock(&mdres->mutex);
@@ -2084,46 +2091,86 @@ static void remap_overlapping_chunks(struct mdrestore_struct *mdres)
 	}
 }
 
-static int fixup_devices(struct btrfs_fs_info *fs_info,
-			 struct mdrestore_struct *mdres, off_t dev_size)
+static int fixup_device_size(struct btrfs_trans_handle *trans,
+			     struct mdrestore_struct *mdres, int out_fd)
 {
-	struct btrfs_trans_handle *trans;
+	struct btrfs_fs_info *fs_info = trans->fs_info;
 	struct btrfs_dev_item *dev_item;
+	struct btrfs_dev_extent *dev_ext;
 	struct btrfs_path path;
 	struct extent_buffer *leaf;
 	struct btrfs_root *root = fs_info->chunk_root;
 	struct btrfs_key key;
+	struct stat buf;
 	u64 devid, cur_devid;
+	u64 dev_size; /* Get from last dev extents */
 	int ret;
-
-	if (btrfs_super_log_root(fs_info->super_copy)) {
-		warning(
-		"log tree detected, its generation will not match superblock");
-	}
-	trans = btrfs_start_transaction(fs_info->tree_root, 1);
-	if (IS_ERR(trans)) {
-		error("cannot starting transaction %ld", PTR_ERR(trans));
-		return PTR_ERR(trans);
-	}
 
 	dev_item = &fs_info->super_copy->dev_item;
 
+	btrfs_init_path(&path);
 	devid = btrfs_stack_device_id(dev_item);
+
+	key.objectid = devid;
+	key.type = BTRFS_DEV_EXTENT_KEY;
+	key.offset = (u64)-1;
+
+	ret = btrfs_search_slot(NULL, fs_info->dev_root, &key, &path, 0, 0);
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to locate last dev extent of devid %llu: %m",
+			devid);
+		btrfs_release_path(&path);
+		return ret;
+	}
+	if (ret == 0) {
+		error("found invalid dev extent devid %llu offset -1", devid);
+		btrfs_release_path(&path);
+		return -EUCLEAN;
+	}
+	ret = btrfs_previous_item(fs_info->dev_root, &path, devid,
+				  BTRFS_DEV_EXTENT_KEY);
+	if (ret > 0)
+		ret = -ENOENT;
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to locate last dev extent of devid %llu: %m",
+			devid);
+		btrfs_release_path(&path);
+		return ret;
+	}
+
+	btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
+	dev_ext = btrfs_item_ptr(path.nodes[0], path.slots[0],
+				 struct btrfs_dev_extent);
+	dev_size = key.offset + btrfs_dev_extent_length(path.nodes[0], dev_ext);
+	btrfs_release_path(&path);
 
 	btrfs_set_stack_device_total_bytes(dev_item, dev_size);
 	btrfs_set_stack_device_bytes_used(dev_item, mdres->alloced_chunks);
+	ret = fstat(out_fd, &buf);
+	if (ret < 0) {
+		error("failed to stat result image: %m");
+		return -errno;
+	}
+	if (S_ISREG(buf.st_mode)) {
+		/* Don't forget to enlarge the real file */
+		ret = ftruncate64(out_fd, dev_size);
+		if (ret < 0) {
+			error("failed to enlarge result image: %m");
+			return -errno;
+		}
+	}
 
 	key.objectid = BTRFS_DEV_ITEMS_OBJECTID;
 	key.type = BTRFS_DEV_ITEM_KEY;
 	key.offset = 0;
 
-	btrfs_init_path(&path);
-
 again:
 	ret = btrfs_search_slot(trans, root, &key, &path, -1, 1);
 	if (ret < 0) {
 		error("search failed: %d", ret);
-		exit(1);
+		return ret;
 	}
 
 	while (1) {
@@ -2170,12 +2217,192 @@ again:
 	}
 
 	btrfs_release_path(&path);
+	return 0;
+}
+
+static void fixup_block_groups(struct btrfs_fs_info *fs_info)
+{
+	struct btrfs_block_group_cache *bg;
+	struct btrfs_mapping_tree *map_tree = &fs_info->mapping_tree;
+	struct cache_extent *ce;
+	struct map_lookup *map;
+	u64 extra_flags;
+
+	for (ce = search_cache_extent(&map_tree->cache_tree, 0); ce;
+	     ce = next_cache_extent(ce)) {
+		map = container_of(ce, struct map_lookup, ce);
+
+		bg = btrfs_lookup_block_group(fs_info, ce->start);
+		if (!bg) {
+			warning(
+		"cannot find block group %llu, filesystem may not be mountable",
+				ce->start);
+			continue;
+		}
+		extra_flags = map->type & BTRFS_BLOCK_GROUP_PROFILE_MASK;
+
+		if (bg->flags == map->type)
+			continue;
+
+		/* Update the block group item and mark the bg dirty */
+		bg->flags = map->type;
+		btrfs_set_block_group_flags(&bg->item, bg->flags);
+		set_extent_bits(&fs_info->block_group_cache, ce->start,
+				ce->start + ce->size - 1, BLOCK_GROUP_DIRTY);
+
+		/*
+		 * Chunk and bg flags can be different, changing bg flags
+		 * without update avail_data/meta_alloc_bits will lead to
+		 * ENOSPC.
+		 * So here we set avail_*_alloc_bits to match chunk types.
+		 */
+		if (map->type & BTRFS_BLOCK_GROUP_DATA)
+			fs_info->avail_data_alloc_bits = extra_flags;
+		if (map->type & BTRFS_BLOCK_GROUP_METADATA)
+			fs_info->avail_metadata_alloc_bits = extra_flags;
+		if (map->type & BTRFS_BLOCK_GROUP_SYSTEM)
+			fs_info->avail_system_alloc_bits = extra_flags;
+	}
+}
+
+static int remove_all_dev_extents(struct btrfs_trans_handle *trans)
+{
+	struct btrfs_fs_info *fs_info = trans->fs_info;
+	struct btrfs_root *root = fs_info->dev_root;
+	struct btrfs_path path;
+	struct btrfs_key key;
+	struct extent_buffer *leaf;
+	int slot;
+	int ret;
+
+	key.objectid = 1;
+	key.type = BTRFS_DEV_EXTENT_KEY;
+	key.offset = 0;
+	btrfs_init_path(&path);
+
+	ret = btrfs_search_slot(trans, root, &key, &path, -1, 1);
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to search dev tree: %m");
+		return ret;
+	}
+
+	while (1) {
+		slot = path.slots[0];
+		leaf = path.nodes[0];
+		if (slot >= btrfs_header_nritems(leaf)) {
+			ret = btrfs_next_leaf(root, &path);
+			if (ret < 0) {
+				errno = -ret;
+				error("failed to search dev tree: %m");
+				goto out;
+			}
+			if (ret > 0) {
+				ret = 0;
+				goto out;
+			}
+		}
+
+		btrfs_item_key_to_cpu(leaf, &key, slot);
+		if (key.type != BTRFS_DEV_EXTENT_KEY)
+			break;
+		ret = btrfs_del_item(trans, root, &path);
+		if (ret < 0) {
+			errno = -ret;
+			error("failed to delete dev extent %llu, %llu: %m",
+				key.objectid, key.offset);
+			goto out;
+		}
+	}
+out:
+	btrfs_release_path(&path);
+	return ret;
+}
+
+static int fixup_dev_extents(struct btrfs_trans_handle *trans)
+{
+	struct btrfs_fs_info *fs_info = trans->fs_info;
+	struct btrfs_mapping_tree *map_tree = &fs_info->mapping_tree;
+	struct btrfs_device *dev;
+	struct cache_extent *ce;
+	struct map_lookup *map;
+	u64 devid = btrfs_stack_device_id(&fs_info->super_copy->dev_item);
+	int i;
+	int ret;
+
+	ret = remove_all_dev_extents(trans);
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to remove all existing dev extents: %m");
+	}
+
+	dev = btrfs_find_device(fs_info, devid, NULL, NULL);
+	if (!dev) {
+		error("faild to find devid %llu", devid);
+		return -ENODEV;
+	}
+
+	/* Rebuild all dev extents using chunk maps */
+	for (ce = search_cache_extent(&map_tree->cache_tree, 0); ce;
+	     ce = next_cache_extent(ce)) {
+		u64 stripe_len;
+
+		map = container_of(ce, struct map_lookup, ce);
+		stripe_len = calc_stripe_length(map->type, ce->size,
+						map->num_stripes);
+		for (i = 0; i < map->num_stripes; i++) {
+			ret = btrfs_insert_dev_extent(trans, dev, ce->start,
+					stripe_len, map->stripes[i].physical);
+			if (ret < 0) {
+				errno = -ret;
+				error(
+				"failed to insert dev extent %llu %llu: %m",
+					devid, map->stripes[i].physical);
+				goto out;
+			}
+		}
+	}
+out:
+	return ret;
+}
+
+static int fixup_chunks_and_devices(struct btrfs_fs_info *fs_info,
+			 struct mdrestore_struct *mdres, int out_fd)
+{
+	struct btrfs_trans_handle *trans;
+	int ret;
+
+	if (btrfs_super_log_root(fs_info->super_copy)) {
+		warning(
+		"log tree detected, its generation will not match superblock");
+	}
+	trans = btrfs_start_transaction(fs_info->tree_root, 1);
+	if (IS_ERR(trans)) {
+		error("cannot start transaction %ld", PTR_ERR(trans));
+		return PTR_ERR(trans);
+	}
+
+	fixup_block_groups(fs_info);
+	ret = fixup_dev_extents(trans);
+	if (ret < 0)
+		goto error;
+
+	ret = fixup_device_size(trans, mdres, out_fd);
+	if (ret < 0)
+		goto error;
+
 	ret = btrfs_commit_transaction(trans, fs_info->tree_root);
 	if (ret) {
 		error("unable to commit transaction: %d", ret);
 		return ret;
 	}
 	return 0;
+error:
+	errno = -ret;
+	error(
+"failed to fix chunks and devices mapping, the fs may not be mountable: %m");
+	btrfs_abort_transaction(trans, ret);
+	return ret;
 }
 
 static int restore_metadump(const char *input, FILE *out, int old_restore,
@@ -2282,7 +2509,7 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 			return 1;
 		}
 
-		ret = fixup_devices(info, &mdrestore, st.st_size);
+		ret = fixup_chunks_and_devices(info, &mdrestore, fileno(out));
 		close_ctree(info->chunk_root);
 		if (ret)
 			goto out;
@@ -2321,7 +2548,7 @@ static int update_disk_super_on_device(struct btrfs_fs_info *info,
 	key.offset = cur_devid;
 
 	btrfs_init_path(&path);
-	ret = btrfs_search_slot(NULL, info->chunk_root, &key, &path, 0, 0); 
+	ret = btrfs_search_slot(NULL, info->chunk_root, &key, &path, 0, 0);
 	if (ret) {
 		error("search key failed: %d", ret);
 		ret = -EIO;

@@ -2,12 +2,12 @@
 .\"     Title: btrfs-scrub
 .\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 12/05/2018
+.\"      Date: 01/23/2019
 .\"    Manual: Btrfs Manual
-.\"    Source: Btrfs v4.19.1
+.\"    Source: Btrfs v4.20.1
 .\"  Language: English
 .\"
-.TH "BTRFS\-SCRUB" "8" "12/05/2018" "Btrfs v4\&.19\&.1" "Btrfs Manual"
+.TH "BTRFS\-SCRUB" "8" "01/23/2019" "Btrfs v4\&.20\&.1" "Btrfs Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -48,7 +48,7 @@ btrfs-scrub \- scrub btrfs filesystem, verify block checksums
 .ps -1
 .br
 .sp
-Scrub is not a filesystem checker (fsck) and does not verify nor repair structural damage in the filesystem\&.
+Scrub is not a filesystem checker (fsck) and does not verify nor repair structural damage in the filesystem\&. It really only checks checksums of of data and tree blocks, it doesn\(cqt ensure the content of tree blocks is valid and consistent\&. There\(cqs some validation performed when metadata blocks are read from disk but it\(cqs not extensive and cannot substitute full \fIbtrfs check\fR run\&.
 .sp .5v
 .RE
 .sp
