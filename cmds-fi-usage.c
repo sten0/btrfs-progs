@@ -227,7 +227,7 @@ static int cmp_btrfs_ioctl_space_info(const void *a, const void *b)
 /*
  * This function load all the information about the space usage
  */
-static struct btrfs_ioctl_space_args *load_space_info(int fd, char *path)
+static struct btrfs_ioctl_space_args *load_space_info(int fd, const char *path)
 {
 	struct btrfs_ioctl_space_args *sargs = NULL, *sargs_orig = NULL;
 	int ret, count;
@@ -305,7 +305,7 @@ static void get_raid56_used(struct chunk_info *chunks, int chunkcount,
 #define	MIN_UNALOCATED_THRESH	SZ_16M
 static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		int chunkcount, struct device_info *devinfo, int devcount,
-		char *path, unsigned unit_mode)
+		const char *path, unsigned unit_mode)
 {
 	struct btrfs_ioctl_space_args *sargs = NULL;
 	int i;
@@ -629,7 +629,7 @@ int load_chunk_and_device_info(int fd, struct chunk_info **chunkinfo,
 	ret = load_chunk_info(fd, chunkinfo, chunkcount);
 	if (ret == -EPERM) {
 		warning(
-"cannot read detailed chunk info, RAID5/6 numbers will be incorrect, run as root");
+"cannot read detailed chunk info, per-device usage will not be shown, run as root");
 	} else if (ret) {
 		return ret;
 	}
@@ -660,7 +660,7 @@ static u64 calc_chunk_size(struct chunk_info *ci)
 	else if (ci->type & BTRFS_BLOCK_GROUP_RAID6)
 		return ci->size / (ci->num_stripes -2);
 	else if (ci->type & BTRFS_BLOCK_GROUP_RAID10)
-		return ci->size / ci->num_stripes;
+		return ci->size / (ci->num_stripes / 2);
 	return ci->size;
 }
 
@@ -923,21 +923,20 @@ static void _cmd_filesystem_usage_linear(unsigned unit_mode,
 		printf("\n");
 	}
 
-	printf("Unallocated:\n");
-	print_unused(info_ptr, info_count, device_info_ptr, device_info_count,
-			unit_mode | UNITS_NEGATIVE);
+	if (info_count) {
+		printf("Unallocated:\n");
+		print_unused(info_ptr, info_count, device_info_ptr,
+				device_info_count, unit_mode | UNITS_NEGATIVE);
+	}
 }
 
 static int print_filesystem_usage_by_chunk(int fd,
 		struct chunk_info *chunkinfo, int chunkcount,
 		struct device_info *devinfo, int devcount,
-		char *path, unsigned unit_mode, int tabular)
+		const char *path, unsigned unit_mode, int tabular)
 {
 	struct btrfs_ioctl_space_args *sargs;
 	int ret = 0;
-
-	if (!chunkinfo)
-		return 0;
 
 	sargs = load_space_info(fd, path);
 	if (!sargs) {
@@ -975,6 +974,7 @@ int cmd_filesystem_usage(int argc, char **argv)
 
 	unit_mode = get_unit_mode_from_arg(&argc, argv, 1);
 
+	optind = 0;
 	while (1) {
 		int c;
 

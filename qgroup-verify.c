@@ -34,6 +34,13 @@
 
 #include "qgroup-verify.h"
 
+static u64 *qgroup_item_count;
+
+void qgroup_set_item_count_ptr(u64 *item_count_ptr)
+{
+	qgroup_item_count = item_count_ptr;
+}
+
 /*#define QGROUP_VERIFY_DEBUG*/
 static unsigned long tot_extents_scanned = 0;
 
@@ -77,6 +84,7 @@ static struct counts_tree {
 	unsigned int		num_groups;
 	unsigned int		rescan_running:1;
 	unsigned int		qgroup_inconsist:1;
+	u64			scan_progress;
 } counts = { .root = RB_ROOT };
 
 static LIST_HEAD(bad_qgroups);
@@ -622,7 +630,7 @@ static void free_tree_blocks(void)
 	ULIST_ITER_INIT(&uiter);
 	while ((unode = ulist_next(tree_blocks, &uiter)))
 		free(unode_tree_block(unode));
-	ulist_free(tree_blocks);	
+	ulist_free(tree_blocks);
 	tree_blocks = NULL;
 }
 
@@ -735,6 +743,7 @@ static int travel_tree(struct btrfs_fs_info *info, struct btrfs_root *root,
 	 */
 	nr = btrfs_header_nritems(eb);
 	for (i = 0; i < nr; i++) {
+		(*qgroup_item_count)++;
 		new_bytenr = btrfs_node_blockptr(eb, i);
 		new_num_bytes = info->nodesize;
 
@@ -914,6 +923,7 @@ static void read_qgroup_status(struct extent_buffer *eb, int slot,
 	counts->qgroup_inconsist = !!(flags &
 			BTRFS_QGROUP_STATUS_FLAG_INCONSISTENT);
 	counts->rescan_running = !!(flags & BTRFS_QGROUP_STATUS_FLAG_RESCAN);
+	counts->scan_progress = btrfs_qgroup_status_rescan(eb, status_item);
 }
 
 static int load_quota_info(struct btrfs_fs_info *info)
@@ -1160,7 +1170,7 @@ static int scan_extents(struct btrfs_fs_info *info,
 		fprintf(stderr, "ERROR: Couldn't search slot: %d\n", ret);
 		goto out;
 	}
-	path.reada = 1;
+	path.reada = READA_BACK;
 
 	while (1) {
 		leaf = path.nodes[0];
@@ -1298,10 +1308,20 @@ static int report_qgroup_difference(struct qgroup_count *count, int verbose)
 	return is_different;
 }
 
-void report_qgroups(int all)
+/*
+ * Report qgroups errors
+ * Return 0 if nothing wrong.
+ * Return <0 if any qgroup is inconsistent.
+ *
+ * @all:	if set, all qgroup will be checked and reported even already
+ * 		inconsistent or under rescan.
+ */
+int report_qgroups(int all)
 {
 	struct rb_node *node;
 	struct qgroup_count *c;
+	bool found_err = false;
+	bool skip_err = false;
 
 	if (!repair && counts.rescan_running) {
 		if (all) {
@@ -1310,8 +1330,17 @@ void report_qgroups(int all)
 		} else {
 			printf(
 	"Qgroup rescan is running, qgroups will not be printed.\n");
-			return;
+			return 0;
 		}
+	}
+	/*
+	 * It's possible that rescan hasn't been initialized yet.
+	 */
+	if (counts.qgroup_inconsist && !counts.rescan_running &&
+	    counts.rescan_running == 0) {
+		printf(
+"Rescan hasn't been initialized, a difference in qgroup accounting is expected\n");
+		skip_err = true;
 	}
 	if (counts.qgroup_inconsist && !counts.rescan_running)
 		fprintf(stderr, "Qgroup are marked as inconsistent.\n");
@@ -1319,11 +1348,16 @@ void report_qgroups(int all)
 	while (node) {
 		c = rb_entry(node, struct qgroup_count, rb_node);
 
-		if (report_qgroup_difference(c, all))
+		if (report_qgroup_difference(c, all)) {
 			list_add_tail(&c->bad_list, &bad_qgroups);
+			found_err = true;
+		}
 
 		node = rb_next(node);
 	}
+	if (found_err && !skip_err)
+		return -EUCLEAN;
+	return 0;
 }
 
 void free_qgroup_counts(void)

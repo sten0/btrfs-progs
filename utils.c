@@ -40,6 +40,8 @@
 #include <linux/magic.h>
 #include <getopt.h>
 
+#include <btrfsutil.h>
+
 #include "kerncompat.h"
 #include "radix-tree.h"
 #include "ctree.h"
@@ -58,7 +60,7 @@
 
 static int btrfs_scan_done = 0;
 
-static int rand_seed_initlized = 0;
+static int rand_seed_initialized = 0;
 static unsigned short rand_seed[3];
 
 struct btrfs_config bconf;
@@ -355,7 +357,8 @@ int btrfs_prepare_device(int fd, const char *file, u64 *block_count_ret,
 				       ZERO_DEV_BYTES, block_count);
 
 	if (ret < 0) {
-		error("failed to zero device '%s': %s", file, strerror(-ret));
+		errno = -ret;
+		error("failed to zero device '%s': %m", file);
 		return 1;
 	}
 
@@ -500,6 +503,8 @@ int check_arg_type(const char *input)
 			return BTRFS_ARG_REG;
 
 		return BTRFS_ARG_UNKNOWN;
+	} else {
+		return -errno;
 	}
 
 	if (strlen(input) == (BTRFS_UUID_UNPARSED_SIZE - 1) &&
@@ -526,7 +531,8 @@ int get_btrfs_mount(const char *dev, char *mp, size_t mp_size)
 			error("not a block device: %s", dev);
 			ret = -EINVAL;
 		} else {
-			error("cannot check %s: %s", dev, strerror(-ret));
+			errno = -ret;
+			error("cannot check %s: %m", dev);
 		}
 		goto out;
 	}
@@ -538,7 +544,7 @@ int get_btrfs_mount(const char *dev, char *mp, size_t mp_size)
 		goto out;
 	}
 
-	ret = check_mounted_where(fd, dev, mp, mp_size, NULL);
+	ret = check_mounted_where(fd, dev, mp, mp_size, NULL, SBREAD_DEFAULT);
 	if (!ret) {
 		ret = -EINVAL;
 	} else { /* mounted, all good */
@@ -829,7 +835,7 @@ static int blk_file_in_dev_list(struct btrfs_fs_devices* fs_devices,
 /*
  * Resolve a pathname to a device mapper node to /dev/mapper/<name>
  * Returns NULL on invalid input or malloc failure; Other failures
- * will be handled by the caller using the input pathame.
+ * will be handled by the caller using the input pathname.
  */
 char *canonicalize_dm_name(const char *ptname)
 {
@@ -860,7 +866,7 @@ char *canonicalize_dm_name(const char *ptname)
  * Resolve a pathname to a canonical device node, e.g. /dev/sda1 or
  * to a device mapper pathname.
  * Returns NULL on invalid input or malloc failure; Other failures
- * will be handled by the caller using the input pathame.
+ * will be handled by the caller using the input pathname.
  */
 char *canonicalize_path(const char *path)
 {
@@ -899,14 +905,14 @@ int check_mounted(const char* file)
 		return -errno;
 	}
 
-	ret =  check_mounted_where(fd, file, NULL, 0, NULL);
+	ret =  check_mounted_where(fd, file, NULL, 0, NULL, SBREAD_DEFAULT);
 	close(fd);
 
 	return ret;
 }
 
 int check_mounted_where(int fd, const char *file, char *where, int size,
-			struct btrfs_fs_devices **fs_dev_ret)
+			struct btrfs_fs_devices **fs_dev_ret, unsigned sbflags)
 {
 	int ret;
 	u64 total_devs = 1;
@@ -917,7 +923,7 @@ int check_mounted_where(int fd, const char *file, char *where, int size,
 
 	/* scan the initial device */
 	ret = btrfs_scan_one_device(fd, file, &fs_devices_mnt,
-		    &total_devs, BTRFS_SUPER_INFO_OFFSET, SBREAD_DEFAULT);
+		    &total_devs, BTRFS_SUPER_INFO_OFFSET, sbflags);
 	is_btrfs = (ret >= 0);
 
 	/* scan other devices */
@@ -1048,7 +1054,7 @@ int btrfs_device_already_in_root(struct btrfs_root *root, int fd,
 	 * structures.
 	 */
 	if (btrfs_super_magic(disk_super) != BTRFS_MAGIC &&
-			btrfs_super_magic(disk_super) != BTRFS_MAGIC_PARTIAL)
+			btrfs_super_magic(disk_super) != BTRFS_MAGIC_TEMPORARY)
 		goto brelse;
 
 	if (!memcmp(disk_super->fsid, root->fs_info->super_copy->fsid,
@@ -1128,15 +1134,25 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_size, unsigned unit_mod
 	num_divs = 0;
 	last_size = size;
 	switch (unit_mode & UNITS_MODE_MASK) {
-	case UNITS_TBYTES: base *= mult; num_divs++;
-	case UNITS_GBYTES: base *= mult; num_divs++;
-	case UNITS_MBYTES: base *= mult; num_divs++;
-	case UNITS_KBYTES: num_divs++;
-			   break;
+	case UNITS_TBYTES:
+		base *= mult;
+		num_divs++;
+		__attribute__ ((fallthrough));
+	case UNITS_GBYTES:
+		base *= mult;
+		num_divs++;
+		__attribute__ ((fallthrough));
+	case UNITS_MBYTES:
+		base *= mult;
+		num_divs++;
+		__attribute__ ((fallthrough));
+	case UNITS_KBYTES:
+		num_divs++;
+		break;
 	case UNITS_BYTES:
-			   base = 1;
-			   num_divs = 0;
-			   break;
+		base = 1;
+		num_divs = 0;
+		break;
 	default:
 		if (negative) {
 			s64 ssize = (s64)size;
@@ -1453,6 +1469,7 @@ u64 parse_qgroupid(const char *p)
 	char *s = strchr(p, '/');
 	const char *ptr_src_end = p + strlen(p);
 	char *ptr_parse_end = NULL;
+	enum btrfs_util_error err;
 	u64 level;
 	u64 id;
 	int fd;
@@ -1480,15 +1497,17 @@ u64 parse_qgroupid(const char *p)
 
 path:
 	/* Path format like subv at 'my_subvol' is the fallback case */
-	ret = test_issubvolume(p);
-	if (ret < 0 || !ret)
+	err = btrfs_util_is_subvolume(p);
+	if (err)
 		goto err;
 	fd = open(p, O_RDONLY);
 	if (fd < 0)
 		goto err;
 	ret = lookup_path_rootid(fd, &id);
-	if (ret)
-		error("failed to lookup root id: %s", strerror(-ret));
+	if (ret) {
+		errno = -ret;
+		error("failed to lookup root id: %m");
+	}
 	close(fd);
 	if (ret < 0)
 		goto err;
@@ -1672,7 +1691,7 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 			goto out;
 		}
 		ret = check_mounted_where(fd, path, mp, sizeof(mp),
-					  &fs_devices_mnt);
+					  &fs_devices_mnt, SBREAD_DEFAULT);
 		if (!ret) {
 			ret = -EINVAL;
 			goto out;
@@ -1777,8 +1796,7 @@ int get_fsid(const char *path, u8 *fsid, int silent)
 	if (fd < 0) {
 		ret = -errno;
 		if (!silent)
-			error("failed to open %s: %s", path,
-				strerror(-ret));
+			error("failed to open %s: %m", path);
 		goto out;
 	}
 
@@ -1899,13 +1917,17 @@ int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 	default:
 	case 4:
 		allowed |= BTRFS_BLOCK_GROUP_RAID10;
+		__attribute__ ((fallthrough));
 	case 3:
 		allowed |= BTRFS_BLOCK_GROUP_RAID6;
+		__attribute__ ((fallthrough));
 	case 2:
 		allowed |= BTRFS_BLOCK_GROUP_RAID0 | BTRFS_BLOCK_GROUP_RAID1 |
 			BTRFS_BLOCK_GROUP_RAID5;
+		__attribute__ ((fallthrough));
 	case 1:
 		allowed |= BTRFS_BLOCK_GROUP_DUP;
+		__attribute__ ((fallthrough));
 	}
 
 	if (dev_cnt > 1 && profile & BTRFS_BLOCK_GROUP_DUP) {
@@ -1995,7 +2017,8 @@ int btrfs_scan_devices(void)
 				&num_devices, BTRFS_SUPER_INFO_OFFSET,
 				SBREAD_DEFAULT);
 		if (ret) {
-			error("cannot scan %s: %s", path, strerror(-ret));
+			errno = -ret;
+			error("cannot scan %s: %m", path);
 			close (fd);
 			continue;
 		}
@@ -2039,7 +2062,7 @@ int find_mount_root(const char *path, char **mount_root)
 	int fd;
 	struct mntent *ent;
 	int len;
-	int ret;
+	int ret = 0;
 	int not_btrfs = 1;
 	int longest_matchlen = 0;
 	char *longest_match = NULL;
@@ -2055,18 +2078,25 @@ int find_mount_root(const char *path, char **mount_root)
 
 	while ((ent = getmntent(mnttab))) {
 		len = strlen(ent->mnt_dir);
-		if (strncmp(ent->mnt_dir, path, len) == 0) {
+		if (strncmp(ent->mnt_dir, path, len) == 0 &&
+		    (path[len] == '/' || path[len] == '\0')) {
 			/* match found and use the latest match */
 			if (longest_matchlen <= len) {
 				free(longest_match);
 				longest_matchlen = len;
 				longest_match = strdup(ent->mnt_dir);
+				if (!longest_match) {
+					ret = -errno;
+					break;
+				}
 				not_btrfs = strcmp(ent->mnt_type, "btrfs");
 			}
 		}
 	}
 	endmntent(mnttab);
 
+	if (ret)
+		return ret;
 	if (!longest_match)
 		return -ENOENT;
 	if (not_btrfs) {
@@ -2241,29 +2271,6 @@ int btrfs_tree_search2_ioctl_supported(int fd)
 	else if (ret == 0)
 		return 1;
 	return ret;
-}
-
-int btrfs_check_nodesize(u32 nodesize, u32 sectorsize, u64 features)
-{
-	if (nodesize < sectorsize) {
-		error("illegal nodesize %u (smaller than %u)",
-				nodesize, sectorsize);
-		return -1;
-	} else if (nodesize > BTRFS_MAX_METADATA_BLOCKSIZE) {
-		error("illegal nodesize %u (larger than %u)",
-			nodesize, BTRFS_MAX_METADATA_BLOCKSIZE);
-		return -1;
-	} else if (nodesize & (sectorsize - 1)) {
-		error("illegal nodesize %u (not aligned to %u)",
-			nodesize, sectorsize);
-		return -1;
-	} else if (features & BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS &&
-		   nodesize != sectorsize) {
-		error("illegal nodesize %u (not equal to %u for mixed block group)",
-			nodesize, sectorsize);
-		return -1;
-	}
-	return 0;
 }
 
 /*
@@ -2451,161 +2458,21 @@ int test_issubvolname(const char *name)
 		strcmp(name, ".") && strcmp(name, "..");
 }
 
-/*
- * Test if path is a subvolume
- * Returns:
- *   0 - path exists but it is not a subvolume
- *   1 - path exists and it is  a subvolume
- * < 0 - error
- */
-int test_issubvolume(const char *path)
-{
-	struct stat	st;
-	struct statfs stfs;
-	int		res;
-
-	res = stat(path, &st);
-	if (res < 0)
-		return -errno;
-
-	if (st.st_ino != BTRFS_FIRST_FREE_OBJECTID || !S_ISDIR(st.st_mode))
-		return 0;
-
-	res = statfs(path, &stfs);
-	if (res < 0)
-		return -errno;
-
-	return (int)stfs.f_type == BTRFS_SUPER_MAGIC;
-}
-
 const char *subvol_strip_mountpoint(const char *mnt, const char *full_path)
 {
 	int len = strlen(mnt);
 	if (!len)
 		return full_path;
 
+	if ((strncmp(mnt, full_path, len) != 0) || ((len > 1) && (full_path[len] != '/'))) {
+		error("not on mount point: %s", mnt);
+		exit(1);
+	}
+
 	if (mnt[len - 1] != '/')
 		len += 1;
 
 	return full_path + len;
-}
-
-/*
- * Returns
- * <0: Std error
- * 0: All fine
- * 1: Error; and error info printed to the terminal. Fixme.
- * 2: If the fullpath is root tree instead of subvol tree
- */
-int get_subvol_info(const char *fullpath, struct root_info *get_ri)
-{
-	u64 sv_id;
-	int ret = 1;
-	int fd = -1;
-	int mntfd = -1;
-	char *mnt = NULL;
-	const char *svpath = NULL;
-	DIR *dirstream1 = NULL;
-	DIR *dirstream2 = NULL;
-
-	ret = test_issubvolume(fullpath);
-	if (ret < 0)
-		return ret;
-	if (!ret) {
-		error("not a subvolume: %s", fullpath);
-		return 1;
-	}
-
-	ret = find_mount_root(fullpath, &mnt);
-	if (ret < 0)
-		return ret;
-	if (ret > 0) {
-		error("%s doesn't belong to btrfs mount point", fullpath);
-		return 1;
-	}
-	ret = 1;
-	svpath = subvol_strip_mountpoint(mnt, fullpath);
-
-	fd = btrfs_open_dir(fullpath, &dirstream1, 1);
-	if (fd < 0)
-		goto out;
-
-	ret = btrfs_list_get_path_rootid(fd, &sv_id);
-	if (ret)
-		goto out;
-
-	mntfd = btrfs_open_dir(mnt, &dirstream2, 1);
-	if (mntfd < 0)
-		goto out;
-
-	memset(get_ri, 0, sizeof(*get_ri));
-	get_ri->root_id = sv_id;
-
-	if (sv_id == BTRFS_FS_TREE_OBJECTID)
-		ret = btrfs_get_toplevel_subvol(mntfd, get_ri);
-	else
-		ret = btrfs_get_subvol(mntfd, get_ri);
-	if (ret)
-		error("can't find '%s': %d", svpath, ret);
-
-out:
-	close_file_or_dir(mntfd, dirstream2);
-	close_file_or_dir(fd, dirstream1);
-	free(mnt);
-
-	return ret;
-}
-
-int get_subvol_info_by_rootid(const char *mnt, struct root_info *get_ri, u64 r_id)
-{
-	int fd;
-	int ret;
-	DIR *dirstream = NULL;
-
-	fd = btrfs_open_dir(mnt, &dirstream, 1);
-	if (fd < 0)
-		return -EINVAL;
-
-	memset(get_ri, 0, sizeof(*get_ri));
-	get_ri->root_id = r_id;
-
-	if (r_id == BTRFS_FS_TREE_OBJECTID)
-		ret = btrfs_get_toplevel_subvol(fd, get_ri);
-	else
-		ret = btrfs_get_subvol(fd, get_ri);
-
-	if (ret)
-		error("can't find rootid '%llu' on '%s': %d", r_id, mnt, ret);
-
-	close_file_or_dir(fd, dirstream);
-
-	return ret;
-}
-
-int get_subvol_info_by_uuid(const char *mnt, struct root_info *get_ri, u8 *uuid_arg)
-{
-	int fd;
-	int ret;
-	DIR *dirstream = NULL;
-
-	fd = btrfs_open_dir(mnt, &dirstream, 1);
-	if (fd < 0)
-		return -EINVAL;
-
-	memset(get_ri, 0, sizeof(*get_ri));
-	uuid_copy(get_ri->uuid, uuid_arg);
-
-	ret = btrfs_get_subvol(fd, get_ri);
-	if (ret) {
-		char uuid_parsed[BTRFS_UUID_UNPARSED_SIZE];
-		uuid_unparse(uuid_arg, uuid_parsed);
-		error("can't find uuid '%s' on '%s': %d",
-					uuid_parsed, mnt, ret);
-	}
-
-	close_file_or_dir(fd, dirstream);
-
-	return ret;
 }
 
 /* Set the seed manually */
@@ -2618,7 +2485,7 @@ void init_rand_seed(u64 seed)
 		rand_seed[i] = (unsigned short)(seed ^ (unsigned short)(-1));
 		seed >>= 16;
 	}
-	rand_seed_initlized = 1;
+	rand_seed_initialized = 1;
 }
 
 static void __init_seed(void)
@@ -2627,7 +2494,7 @@ static void __init_seed(void)
 	int ret;
 	int fd;
 
-	if(rand_seed_initlized)
+	if(rand_seed_initialized)
 		return;
 	/* Use urandom as primary seed source. */
 	fd = open("/dev/urandom", O_RDONLY);
@@ -2645,14 +2512,14 @@ fallback:
 		rand_seed[1] = getppid() ^ (tv.tv_usec & 0xFFFF);
 		rand_seed[2] = (tv.tv_sec ^ tv.tv_usec) >> 16;
 	}
-	rand_seed_initlized = 1;
+	rand_seed_initialized = 1;
 }
 
 u32 rand_u32(void)
 {
 	__init_seed();
 	/*
-	 * Don't use nrand48, its range is [0,2^31) The highest bit will alwasy
+	 * Don't use nrand48, its range is [0,2^31) The highest bit will always
 	 * be 0.  Use jrand48 to include the highest bit.
 	 */
 	return (u32)jrand48(rand_seed);

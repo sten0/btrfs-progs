@@ -134,6 +134,7 @@ static int cmd_replace_start(int argc, char **argv)
 	u64 srcdev_size;
 	u64 dstdev_size;
 
+	optind = 0;
 	while ((c = getopt(argc, argv, "Brf")) != -1) {
 		switch (c) {
 		case 'B':
@@ -207,7 +208,8 @@ static int cmd_replace_start(int argc, char **argv)
 
 		ret = get_fs_info(path, &fi_args, &di_args);
 		if (ret) {
-			error("failed to get device info: %s", strerror(-ret));
+			errno = -ret;
+			error("failed to get device info: %m");
 			free(di_args);
 			goto leave_with_error;
 		}
@@ -333,6 +335,7 @@ static int cmd_replace_status(int argc, char **argv)
 	int ret;
 	DIR *dirstream = NULL;
 
+	optind = 0;
 	while ((c = getopt(argc, argv, "1")) != -1) {
 		switch (c) {
 		case '1':
@@ -501,6 +504,7 @@ static int cmd_replace_cancel(int argc, char **argv)
 	char *path;
 	DIR *dirstream = NULL;
 
+	optind = 0;
 	while ((c = getopt(argc, argv, "")) != -1) {
 		switch (c) {
 		case '?':

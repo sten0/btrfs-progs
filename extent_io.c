@@ -205,6 +205,62 @@ static int clear_state_bit(struct extent_io_tree *tree,
 }
 
 /*
+ * extent_buffer_bitmap_set - set an area of a bitmap
+ * @eb: the extent buffer
+ * @start: offset of the bitmap item in the extent buffer
+ * @pos: bit number of the first bit
+ * @len: number of bits to set
+ */
+void extent_buffer_bitmap_set(struct extent_buffer *eb, unsigned long start,
+                              unsigned long pos, unsigned long len)
+{
+	u8 *p = (u8 *)eb->data + start + BIT_BYTE(pos);
+	const unsigned int size = pos + len;
+	int bits_to_set = BITS_PER_BYTE - (pos % BITS_PER_BYTE);
+	u8 mask_to_set = BITMAP_FIRST_BYTE_MASK(pos);
+
+	while (len >= bits_to_set) {
+		*p |= mask_to_set;
+		len -= bits_to_set;
+		bits_to_set = BITS_PER_BYTE;
+		mask_to_set = ~0;
+		p++;
+	}
+	if (len) {
+		mask_to_set &= BITMAP_LAST_BYTE_MASK(size);
+		*p |= mask_to_set;
+	}
+}
+
+/*
+ * extent_buffer_bitmap_clear - clear an area of a bitmap
+ * @eb: the extent buffer
+ * @start: offset of the bitmap item in the extent buffer
+ * @pos: bit number of the first bit
+ * @len: number of bits to clear
+ */
+void extent_buffer_bitmap_clear(struct extent_buffer *eb, unsigned long start,
+                                unsigned long pos, unsigned long len)
+{
+	u8 *p = (u8 *)eb->data + start + BIT_BYTE(pos);
+	const unsigned int size = pos + len;
+	int bits_to_clear = BITS_PER_BYTE - (pos % BITS_PER_BYTE);
+	u8 mask_to_clear = BITMAP_FIRST_BYTE_MASK(pos);
+
+	while (len >= bits_to_clear) {
+		*p &= ~mask_to_clear;
+		len -= bits_to_clear;
+		bits_to_clear = BITS_PER_BYTE;
+		mask_to_clear = ~0;
+		p++;
+	}
+	if (len) {
+		mask_to_clear &= BITMAP_LAST_BYTE_MASK(size);
+		*p &= ~mask_to_clear;
+	}
+}
+
+/*
  * clear some bits on a range in the tree.
  */
 int clear_extent_bits(struct extent_io_tree *tree, u64 start, u64 end, int bits)
@@ -545,7 +601,7 @@ out:
 	return ret;
 }
 
-static struct extent_buffer *__alloc_extent_buffer(struct extent_io_tree *tree,
+static struct extent_buffer *__alloc_extent_buffer(struct btrfs_fs_info *info,
 						   u64 bytenr, u32 blocksize)
 {
 	struct extent_buffer *eb;
@@ -558,12 +614,14 @@ static struct extent_buffer *__alloc_extent_buffer(struct extent_io_tree *tree,
 	eb->len = blocksize;
 	eb->refs = 1;
 	eb->flags = 0;
-	eb->tree = tree;
 	eb->fd = -1;
 	eb->dev_bytenr = (u64)-1;
 	eb->cache_node.start = bytenr;
 	eb->cache_node.size = blocksize;
+	eb->fs_info = info;
+	eb->tree = &info->extent_cache;
 	INIT_LIST_HEAD(&eb->recow);
+	INIT_LIST_HEAD(&eb->lru);
 
 	return eb;
 }
@@ -572,9 +630,11 @@ struct extent_buffer *btrfs_clone_extent_buffer(struct extent_buffer *src)
 {
 	struct extent_buffer *new;
 
-	new = __alloc_extent_buffer(NULL, src->start, src->len);
+	new = __alloc_extent_buffer(src->fs_info, src->start, src->len);
 	if (!new)
 		return NULL;
+	/* cloned eb is not linked into fs_info->extent_cache */
+	new->tree = NULL;
 
 	copy_extent_buffer(new, src, 0, 0, src->len);
 	new->flags |= EXTENT_BUFFER_DUMMY;
@@ -587,7 +647,7 @@ static void free_extent_buffer_final(struct extent_buffer *eb)
 	struct extent_io_tree *tree = eb->tree;
 
 	BUG_ON(eb->refs);
-	BUG_ON(tree->cache_size < eb->len);
+	BUG_ON(tree && tree->cache_size < eb->len);
 	list_del_init(&eb->lru);
 	if (!(eb->flags & EXTENT_BUFFER_DUMMY)) {
 		remove_cache_extent(&tree->cache, &eb->cache_node);
@@ -604,7 +664,11 @@ static void free_extent_buffer_internal(struct extent_buffer *eb, bool free_now)
 	eb->refs--;
 	BUG_ON(eb->refs < 0);
 	if (eb->refs == 0) {
-		BUG_ON(eb->flags & EXTENT_DIRTY);
+		if (eb->flags & EXTENT_DIRTY) {
+			warning(
+			"dirty eb leak (aborted trans): start %llu len %u",
+				eb->start, eb->len);
+		}
 		list_del_init(&eb->recow);
 		if (eb->flags & EXTENT_BUFFER_DUMMY || free_now)
 			free_extent_buffer_final(eb);
@@ -664,10 +728,11 @@ static void trim_extent_buffer_cache(struct extent_io_tree *tree)
 	}
 }
 
-struct extent_buffer *alloc_extent_buffer(struct extent_io_tree *tree,
+struct extent_buffer *alloc_extent_buffer(struct btrfs_fs_info *fs_info,
 					  u64 bytenr, u32 blocksize)
 {
 	struct extent_buffer *eb;
+	struct extent_io_tree *tree = &fs_info->extent_cache;
 	struct cache_extent *cache;
 
 	cache = lookup_cache_extent(&tree->cache, bytenr, blocksize);
@@ -684,7 +749,7 @@ struct extent_buffer *alloc_extent_buffer(struct extent_io_tree *tree,
 					  cache_node);
 			free_extent_buffer(eb);
 		}
-		eb = __alloc_extent_buffer(tree, bytenr, blocksize);
+		eb = __alloc_extent_buffer(fs_info, bytenr, blocksize);
 		if (!eb)
 			return NULL;
 		ret = insert_cache_extent(&tree->cache, &eb->cache_node);

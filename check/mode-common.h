@@ -38,6 +38,26 @@ struct node_refs {
 	int full_backref[BTRFS_MAX_LEVEL];
 };
 
+enum task_position {
+	TASK_ROOT_ITEMS,
+	TASK_EXTENTS,
+	TASK_FREE_SPACE,
+	TASK_FS_ROOTS,
+	TASK_CSUMS,
+	TASK_ROOT_REFS,
+	TASK_QGROUPS,
+	TASK_NOTHING, /* has to be the last element */
+};
+
+struct task_ctx {
+	int progress_enabled;
+	enum task_position tp;
+	time_t start_time;
+	u64 item_count;
+
+	struct task_info *info;
+};
+
 extern u64 bytes_used;
 extern u64 total_csum_bytes;
 extern u64 total_btree_bytes;
@@ -80,6 +100,8 @@ static inline int fs_root_objectid(u64 objectid)
 	return is_fstree(objectid);
 }
 
+int check_prealloc_extent_written(struct btrfs_fs_info *fs_info,
+				  u64 disk_bytenr, u64 num_bytes);
 int count_csum_range(struct btrfs_fs_info *fs_info, u64 start,
 		     u64 len, u64 *found);
 int insert_inode_item(struct btrfs_trans_handle *trans,
@@ -96,5 +118,12 @@ void reada_walk_down(struct btrfs_root *root, struct extent_buffer *node,
 int check_child_node(struct extent_buffer *parent, int slot,
 		     struct extent_buffer *child);
 void reset_cached_block_groups(struct btrfs_fs_info *fs_info);
+int pin_metadata_blocks(struct btrfs_fs_info *fs_info);
+int exclude_metadata_blocks(struct btrfs_fs_info *fs_info);
+void cleanup_excluded_extents(struct btrfs_fs_info *fs_info);
+int delete_corrupted_dir_item(struct btrfs_trans_handle *trans,
+			      struct btrfs_root *root,
+			      struct btrfs_key *di_key, char *namebuf,
+			      u32 namelen);
 
 #endif

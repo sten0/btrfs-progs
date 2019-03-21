@@ -1,7 +1,7 @@
 #!/bin/bash
 # test if the reported minimal size of mkfs.btrfs is valid
 
-source "$TOP/tests/common"
+source "$TEST_TOP/common"
 
 check_prereq mkfs.btrfs
 check_prereq btrfs
@@ -14,12 +14,12 @@ do_test()
 	# the minimal device size for the given option combination
 	prepare_test_dev 1M
 	output=$(run_mustfail_stdout "mkfs.btrfs for small image" \
-		 "$TOP/mkfs.btrfs" -f $@ "$TEST_DEV")
+		 "$TOP/mkfs.btrfs" -f "$@" "$TEST_DEV")
 	good_size=$(echo "$output" | grep -oP "(?<=is )\d+")
 
 	prepare_test_dev "$good_size"
 	echo "Minimal device size is $good_size" >> "$RESULTS"
-	run_check $TOP/mkfs.btrfs -f $@ "$TEST_DEV"
+	run_check $TOP/mkfs.btrfs -f "$@" "$TEST_DEV"
 	run_check_mount_test_dev
 	run_check_umount_test_dev
 }

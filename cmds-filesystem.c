@@ -28,6 +28,8 @@
 #include <linux/limits.h>
 #include <getopt.h>
 
+#include <btrfsutil.h>
+
 #include "kerncompat.h"
 #include "ctree.h"
 #include "utils.h"
@@ -143,7 +145,8 @@ static int cmd_filesystem_df(int argc, char **argv)
 		print_df(sargs, unit_mode);
 		free(sargs);
 	} else {
-		error("get_df failed %s", strerror(-ret));
+		errno = -ret;
+		error("get_df failed: %m");
 	}
 
 	close_file_or_dir(fd, dirstream);
@@ -170,6 +173,7 @@ static int match_search_item_kernel(u8 *fsid, char *mnt, char *label,
 	return 0;
 }
 
+/* Search for user visible uuid 'search' in registered filesystems */
 static int uuid_search(struct btrfs_fs_devices *fs_devices, const char *search)
 {
 	char uuidbuf[BTRFS_UUID_UNPARSED_SIZE];
@@ -495,6 +499,7 @@ static int copy_fs_devices(struct btrfs_fs_devices *dst,
 	int ret = 0;
 
 	memcpy(dst->fsid, src->fsid, BTRFS_FSID_SIZE);
+	memcpy(dst->metadata_uuid, src->metadata_uuid, BTRFS_FSID_SIZE);
 	INIT_LIST_HEAD(&dst->devices);
 	dst->seed = NULL;
 
@@ -683,6 +688,7 @@ static int cmd_filesystem_show(int argc, char **argv)
 
 	unit_mode = get_unit_mode_from_arg(&argc, argv, 0);
 
+	optind = 0;
 	while (1) {
 		int c;
 		static const struct option long_options[] = {
@@ -813,25 +819,16 @@ static const char * const cmd_filesystem_sync_usage[] = {
 
 static int cmd_filesystem_sync(int argc, char **argv)
 {
-	int 	fd, res;
-	char	*path;
-	DIR	*dirstream = NULL;
+	enum btrfs_util_error err;
 
 	clean_args_no_options(argc, argv, cmd_filesystem_sync_usage);
 
 	if (check_argc_exact(argc - optind, 1))
 		usage(cmd_filesystem_sync_usage);
 
-	path = argv[optind];
-
-	fd = btrfs_open_dir(path, &dirstream, 1);
-	if (fd < 0)
-		return 1;
-
-	res = ioctl(fd, BTRFS_IOC_SYNC);
-	close_file_or_dir(fd, dirstream);
-	if( res < 0 ){
-		error("sync ioctl failed on '%s': %m", path);
+	err = btrfs_util_sync(argv[optind]);
+	if (err) {
+		error_btrfs_util(err);
 		return 1;
 	}
 
@@ -931,6 +928,7 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 	defrag_global_errors = 0;
 	defrag_global_verbose = 0;
 	defrag_global_errors = 0;
+	optind = 0;
 	while(1) {
 		int c = getopt(argc, argv, "vrc::fs:l:t:");
 		if (c < 0)
@@ -1059,8 +1057,8 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 				break;
 			}
 			if (ret) {
-				error("defrag failed on %s: %s", argv[i],
-				      strerror(defrag_err));
+				errno = defrag_err;
+				error("defrag failed on %s: %m", argv[i]);
 				goto next;
 			}
 		}
@@ -1093,7 +1091,7 @@ static int cmd_filesystem_resize(int argc, char **argv)
 	DIR	*dirstream = NULL;
 	struct stat st;
 
-	clean_args_no_options_relaxed(argc, argv, cmd_filesystem_resize_usage);
+	clean_args_no_options_relaxed(argc, argv);
 
 	if (check_argc_exact(argc - optind, 2))
 		usage(cmd_filesystem_resize_usage);

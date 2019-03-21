@@ -36,7 +36,7 @@ enum btrfs_open_ctree_flags {
 	OPEN_CTREE_PARTIAL		= (1U << 1),
 	/* If primary root pinters are invalid, try backup copies */
 	OPEN_CTREE_BACKUP_ROOT		= (1U << 2),
-	/* Allow reading all superblock sopies if the primary is damaged */
+	/* Allow reading all superblock copies if the primary is damaged */
 	OPEN_CTREE_RECOVER_SUPER	= (1U << 3),
 	/* Restoring filesystem image */
 	OPEN_CTREE_RESTORE		= (1U << 4),
@@ -73,8 +73,12 @@ enum btrfs_open_ctree_flags {
 	 */
 	OPEN_CTREE_IGNORE_CHUNK_TREE_ERROR = (1U << 11),
 
-	/* Allow to open a partially created filesystem */
-	OPEN_CTREE_FS_PARTIAL = (1U << 12),
+	/*
+	 * Allow to open fs with temporary superblock (BTRFS_MAGIC_PARTIAL),
+	 * such fs contains very basic tree layout, just able to be opened.
+	 * Such temporary super is used for mkfs or convert.
+	 */
+	OPEN_CTREE_TEMPORARY_SUPER = (1U << 12),
 
 	/*
 	 * Invalidate the free space tree (i.e., clear the FREE_SPACE_TREE_VALID
@@ -95,7 +99,13 @@ enum btrfs_read_sb_flags {
 	 * Read superblock with the fake signature, cannot be used with
 	 * SBREAD_RECOVER
 	 */
-	SBREAD_PARTIAL		= (1 << 1),
+	SBREAD_TEMPORARY = (1 << 1),
+
+	/*
+	 * Equivalent of OPEN_CTREE_IGNORE_FSID_MISMATCH, allow to read
+	 * superblock that has mismatched sb::fsid and sb::dev_item.fsid
+	 */
+	SBREAD_IGNORE_FSID_MISMATCH = (1 << 2),
 };
 
 /*
@@ -127,8 +137,7 @@ struct extent_buffer* btrfs_find_create_tree_block(
 
 void btrfs_setup_root(struct btrfs_root *root, struct btrfs_fs_info *fs_info,
 		      u64 objectid);
-int clean_tree_block(struct btrfs_trans_handle *trans,
-		     struct btrfs_root *root, struct extent_buffer *buf);
+int clean_tree_block(struct extent_buffer *buf);
 
 void btrfs_free_fs_info(struct btrfs_fs_info *fs_info);
 struct btrfs_fs_info *btrfs_new_fs_info(int writable, u64 sb_bytenr);
@@ -161,8 +170,7 @@ static inline int close_ctree(struct btrfs_root *root)
 }
 
 int write_all_supers(struct btrfs_fs_info *fs_info);
-int write_ctree_super(struct btrfs_trans_handle *trans,
-		      struct btrfs_fs_info *fs_info);
+int write_ctree_super(struct btrfs_trans_handle *trans);
 int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 		unsigned sbflags);
 int btrfs_map_bh_to_logical(struct btrfs_root *root, struct extent_buffer *bh,
@@ -189,5 +197,9 @@ int write_tree_block(struct btrfs_trans_handle *trans,
 		     struct btrfs_fs_info *fs_info,
 		     struct extent_buffer *eb);
 int write_and_map_eb(struct btrfs_fs_info *fs_info, struct extent_buffer *eb);
+int btrfs_fs_roots_compare_roots(struct rb_node *node1, struct rb_node *node2);
+struct btrfs_root *btrfs_create_tree(struct btrfs_trans_handle *trans,
+				     struct btrfs_fs_info *fs_info,
+				     u64 objectid);
 
 #endif

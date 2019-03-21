@@ -1,1 +1,2 @@
-cross.patch
+python3-use-deb-layout.patch
+fix-rootfs-snapshot.patch

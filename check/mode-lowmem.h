@@ -43,6 +43,9 @@
 #define DIR_INDEX_MISMATCH      (1<<19) /* INODE_INDEX found but not match */
 #define DIR_COUNT_AGAIN         (1<<20) /* DIR isize should be recalculated */
 #define BG_ACCOUNTING_ERROR     (1<<21) /* Block group accounting error */
+#define FATAL_ERROR             (1<<22) /* Fatal bit for errno */
+#define INODE_FLAGS_ERROR	(1<<23) /* Invalid inode flags */
+#define DIR_ITEM_HASH_MISMATCH	(1<<24) /* Dir item hash mismatch */
 
 /*
  * Error bit for low memory mode check.
@@ -54,7 +57,7 @@
 #define BACKREF_MISMATCH	(1 << 1) /* Backref exists but does not match */
 #define BYTES_UNALIGNED		(1 << 2) /* Some bytes are not aligned */
 #define REFERENCER_MISSING	(1 << 3) /* Referencer not found */
-#define REFERENCER_MISMATCH	(1 << 4) /* Referenceer found but does not match */
+#define REFERENCER_MISMATCH	(1 << 4) /* Referencer found but does not match */
 #define CROSSING_STRIPE_BOUNDARY (1 << 4) /* For kernel scrub workaround */
 #define ITEM_SIZE_MISMATCH	(1 << 5) /* Bad item size */
 #define UNKNOWN_TYPE		(1 << 6) /* Unknown type */

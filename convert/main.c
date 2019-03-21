@@ -66,7 +66,7 @@
  *      c. Doesn't cover any data chunks in 1.1
  *
  * 2)   Create basic btrfs filesystem structure
- *      Initial metadata and sys chunks are inserted in the first availabe
+ *      Initial metadata and sys chunks are inserted in the first available
  *      space found in step 1.3
  *      Then insert all data chunks into the basic btrfs
  *
@@ -290,10 +290,16 @@ static int create_image_file_range(struct btrfs_trans_handle *trans,
 	if (disk_bytenr) {
 		/* Check if the range is in a data block group */
 		bg_cache = btrfs_lookup_block_group(root->fs_info, bytenr);
-		if (!bg_cache)
+		if (!bg_cache) {
+			error("missing data block for bytenr %llu", bytenr);
 			return -ENOENT;
-		if (!(bg_cache->flags & BTRFS_BLOCK_GROUP_DATA))
+		}
+		if (!(bg_cache->flags & BTRFS_BLOCK_GROUP_DATA)) {
+			error(
+	"data bytenr %llu is covered by non-data block group %llu flags 0x%llu",
+			      bytenr, bg_cache->key.objectid, bg_cache->flags);
 			return -EINVAL;
+		}
 
 		/* The extent should never cross block group boundary */
 		len = min_t(u64, len, bg_cache->key.objectid +
@@ -310,8 +316,15 @@ static int create_image_file_range(struct btrfs_trans_handle *trans,
 	if (ret < 0)
 		return ret;
 
-	if (datacsum)
+	if (datacsum) {
 		ret = csum_disk_extent(trans, root, bytenr, len);
+		if (ret < 0) {
+			errno = -ret;
+			error(
+		"failed to calculate csum for bytenr %llu len %llu: %m",
+			      bytenr, len);
+		}
+	}
 	*ret_len = len;
 	return ret;
 }
@@ -669,7 +682,7 @@ static int calculate_available_space(struct btrfs_convert_context *cctx)
 	cur_off = 0;
 	/*
 	 * Calculate free space
-	 * Always round up the start bytenr, to avoid metadata extent corss
+	 * Always round up the start bytenr, to avoid metadata extent cross
 	 * stripe boundary, as later mkfs_convert() won't have all the extent
 	 * allocation check
 	 */
@@ -711,7 +724,7 @@ out:
 
 /*
  * Read used space, and since we have the used space,
- * calcuate data_chunks and free for later mkfs
+ * calculate data_chunks and free for later mkfs
  */
 static int convert_read_used_space(struct btrfs_convert_context *cctx)
 {
@@ -759,18 +772,34 @@ static int create_image(struct btrfs_root *root,
 
 	ret = btrfs_find_free_objectid(trans, root, BTRFS_FIRST_FREE_OBJECTID,
 				       &ino);
-	if (ret < 0)
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to find free objectid for root %llu: %m",
+			root->root_key.objectid);
 		goto out;
+	}
 	ret = btrfs_new_inode(trans, root, ino, 0400 | S_IFREG);
-	if (ret < 0)
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to create new inode for root %llu: %m",
+			root->root_key.objectid);
 		goto out;
+	}
 	ret = btrfs_change_inode_flags(trans, root, ino, flags);
-	if (ret < 0)
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to change inode flag for ino %llu root %llu: %m",
+			ino, root->root_key.objectid);
 		goto out;
+	}
 	ret = btrfs_add_link(trans, root, ino, BTRFS_FIRST_FREE_OBJECTID, name,
 			     strlen(name), BTRFS_FT_REG_FILE, NULL, 1, 0);
-	if (ret < 0)
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to link ino %llu to '/%s' in root %llu: %m",
+			ino, name, root->root_key.objectid);
 		goto out;
+	}
 
 	key.objectid = ino;
 	key.type = BTRFS_INODE_ITEM_KEY;
@@ -946,7 +975,7 @@ static int init_btrfs(struct btrfs_mkfs_config *cfg, struct btrfs_root *root,
 
 	/*
 	 * Don't alloc any metadata/system chunk, as we don't want
-	 * any meta/sys chunk allcated before all data chunks are inserted.
+	 * any meta/sys chunk allocated before all data chunks are inserted.
 	 * Or we screw up the chunk layout just like the old implement.
 	 */
 	fs_info->avoid_sys_chunk_alloc = 1;
@@ -957,7 +986,7 @@ static int init_btrfs(struct btrfs_mkfs_config *cfg, struct btrfs_root *root,
 		ret = PTR_ERR(trans);
 		goto err;
 	}
-	ret = btrfs_fix_block_accounting(trans, root);
+	ret = btrfs_fix_block_accounting(trans);
 	if (ret)
 		goto err;
 	ret = make_convert_data_block_groups(trans, fs_info, cfg, cctx);
@@ -1026,7 +1055,7 @@ static int migrate_super_block(int fd, u64 old_bytenr)
 	BUG_ON(btrfs_super_bytenr(super) != old_bytenr);
 	btrfs_set_super_bytenr(super, BTRFS_SUPER_INFO_OFFSET);
 
-	csum_tree_block_size(buf, BTRFS_CRC32_SIZE, 0);
+	csum_tree_block_size(buf, btrfs_csum_sizes[BTRFS_CSUM_TYPE_CRC32], 0);
 	ret = pwrite(fd, buf->data, BTRFS_SUPER_INFO_SIZE,
 		BTRFS_SUPER_INFO_OFFSET);
 	if (ret != BTRFS_SUPER_INFO_SIZE)
@@ -1135,12 +1164,13 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 
 	ret = make_convert_btrfs(fd, &mkfs_cfg, &cctx);
 	if (ret) {
-		error("unable to create initial ctree: %s", strerror(-ret));
+		errno = -ret;
+		error("unable to create initial ctree: %m");
 		goto fail;
 	}
 
 	root = open_ctree_fd(fd, devname, mkfs_cfg.super_bytenr,
-			     OPEN_CTREE_WRITES | OPEN_CTREE_FS_PARTIAL);
+			     OPEN_CTREE_WRITES | OPEN_CTREE_TEMPORARY_SUPER);
 	if (!root) {
 		error("unable to open ctree");
 		goto fail;
@@ -1182,7 +1212,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	if (progress) {
 		ctx.info = task_init(print_copied_inodes, after_copied_inodes,
 				     &ctx);
-		task_start(ctx.info);
+		task_start(ctx.info, NULL, NULL);
 	}
 	ret = copy_inodes(&cctx, root, convert_flags, &ctx);
 	if (ret) {
@@ -1230,7 +1260,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	}
 
 	root = open_ctree_fd(fd, devname, 0,
-			OPEN_CTREE_WRITES | OPEN_CTREE_FS_PARTIAL);
+			     OPEN_CTREE_WRITES | OPEN_CTREE_TEMPORARY_SUPER);
 	if (!root) {
 		error("unable to open ctree for finalization");
 		goto fail;
@@ -1314,7 +1344,7 @@ static bool is_chunk_direct_mapped(struct btrfs_fs_info *fs_info, u64 start)
 	if (map->num_stripes != 1)
 		goto out;
 
-	/* Chunk's logical doesn't match with phisical, not 1:1 mapped */
+	/* Chunk's logical doesn't match with physical, not 1:1 mapped */
 	if (map->ce.start != map->stripes[0].physical)
 		goto out;
 	ret = true;
@@ -1326,7 +1356,7 @@ out:
  * Iterate all file extents of the convert image.
  *
  * All file extents except ones in btrfs_reserved_ranges must be mapped 1:1
- * on disk. (Means thier file_offset must match their on disk bytenr)
+ * on disk. (Means their file_offset must match their on disk bytenr)
  *
  * File extents in reserved ranges can be relocated to other place, and in
  * that case we will read them out for later use.
@@ -1353,8 +1383,8 @@ static int check_convert_image(struct btrfs_root *image_root, u64 ino,
 	 * So we only need to check if ret < 0
 	 */
 	if (ret < 0) {
-		error("failed to iterate file extents at offset 0: %s",
-			strerror(-ret));
+		errno = -ret;
+		error("failed to iterate file extents at offset 0: %m");
 		btrfs_release_path(&path);
 		return ret;
 	}
@@ -1558,8 +1588,8 @@ static int do_rollback(const char *devname)
 		ret = -ENOENT;
 		goto close_fs;
 	} else if (ret < 0) {
-		error("failed to find source fs image subvolume: %s",
-			strerror(-ret));
+		errno = -ret;
+		error("failed to find source fs image subvolume: %m");
 		goto close_fs;
 	}
 
@@ -1570,8 +1600,8 @@ static int do_rollback(const char *devname)
 	image_root = btrfs_read_fs_root(fs_info, &key);
 	if (IS_ERR(image_root)) {
 		ret = PTR_ERR(image_root);
-		error("failed to open convert image subvolume: %s",
-			strerror(-ret));
+		errno = -ret;
+		error("failed to open convert image subvolume: %m");
 		goto close_fs;
 	}
 
@@ -1586,8 +1616,8 @@ static int do_rollback(const char *devname)
 			ret = PTR_ERR(dir);
 		else
 			ret = -ENOENT;
-		error("failed to locate file %s: %s", image_name,
-			strerror(-ret));
+		errno = -ret;
+		error("failed to locate file %s: %m", image_name);
 		goto close_fs;
 	}
 	btrfs_dir_item_key_to_cpu(path.nodes[0], dir, &key);
@@ -1600,7 +1630,8 @@ static int do_rollback(const char *devname)
 
 	if (ret < 0) {
 		btrfs_release_path(&path);
-		error("unable to find inode %llu: %s", ino, strerror(-ret));
+		errno = -ret;
+		error("unable to find inode %llu: %m", ino);
 		goto close_fs;
 	}
 	inode_item = btrfs_item_ptr(path.nodes[0], path.slots[0],
@@ -1642,8 +1673,9 @@ close_fs:
 				ret = -errno;
 			else
 				ret = -EIO;
-			error("failed to recover range [%llu, %llu): %s",
-			      range->start, real_size, strerror(-ret));
+			errno = -ret;
+			error("failed to recover range [%llu, %llu): %m",
+			      range->start, real_size);
 			goto free_mem;
 		}
 		ret = 0;
@@ -1805,7 +1837,8 @@ int main(int argc, char *argv[])
 	file = argv[optind];
 	ret = check_mounted(file);
 	if (ret < 0) {
-		error("could not check mount status: %s", strerror(-ret));
+		errno = -ret;
+		error("could not check mount status: %m");
 		return 1;
 	} else if (ret) {
 		error("%s is mounted", file);

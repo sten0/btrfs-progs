@@ -24,6 +24,262 @@
 #include "check/mode-common.h"
 
 /*
+ * Check if the inode referenced by the given data reference uses the extent
+ * at disk_bytenr as a non-prealloc extent.
+ *
+ * Returns 1 if true, 0 if false and < 0 on error.
+ */
+static int check_prealloc_data_ref(struct btrfs_fs_info *fs_info,
+				   u64 disk_bytenr,
+				   struct btrfs_extent_data_ref *dref,
+				   struct extent_buffer *eb)
+{
+	u64 rootid = btrfs_extent_data_ref_root(eb, dref);
+	u64 objectid = btrfs_extent_data_ref_objectid(eb, dref);
+	u64 offset = btrfs_extent_data_ref_offset(eb, dref);
+	struct btrfs_root *root;
+	struct btrfs_key key;
+	struct btrfs_path path;
+	int ret;
+
+	btrfs_init_path(&path);
+	key.objectid = rootid;
+	key.type = BTRFS_ROOT_ITEM_KEY;
+	key.offset = (u64)-1;
+	root = btrfs_read_fs_root(fs_info, &key);
+	if (IS_ERR(root)) {
+		ret = PTR_ERR(root);
+		goto out;
+	}
+
+	key.objectid = objectid;
+	key.type = BTRFS_EXTENT_DATA_KEY;
+	key.offset = offset;
+	ret = btrfs_search_slot(NULL, root, &key, &path, 0, 0);
+	if (ret > 0) {
+		fprintf(stderr,
+		"Missing file extent item for inode %llu, root %llu, offset %llu",
+			objectid, rootid, offset);
+		ret = -ENOENT;
+	}
+	if (ret < 0)
+		goto out;
+
+	while (true) {
+		struct btrfs_file_extent_item *fi;
+		int extent_type;
+
+		if (path.slots[0] >= btrfs_header_nritems(path.nodes[0])) {
+			ret = btrfs_next_leaf(root, &path);
+			if (ret < 0)
+				goto out;
+			if (ret > 0)
+				break;
+		}
+
+		btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
+		if (key.objectid != objectid ||
+		    key.type != BTRFS_EXTENT_DATA_KEY)
+			break;
+
+		fi = btrfs_item_ptr(path.nodes[0], path.slots[0],
+				    struct btrfs_file_extent_item);
+		extent_type = btrfs_file_extent_type(path.nodes[0], fi);
+		if (extent_type != BTRFS_FILE_EXTENT_REG &&
+		    extent_type != BTRFS_FILE_EXTENT_PREALLOC)
+			goto next;
+
+		if (btrfs_file_extent_disk_bytenr(path.nodes[0], fi) !=
+		    disk_bytenr)
+			break;
+
+		if (extent_type == BTRFS_FILE_EXTENT_REG) {
+			ret = 1;
+			goto out;
+		}
+next:
+		path.slots[0]++;
+	}
+	ret = 0;
+ out:
+	btrfs_release_path(&path);
+	return ret;
+}
+
+/*
+ * Check if a shared data reference points to a node that has a file extent item
+ * pointing to the extent at @disk_bytenr that is not of type prealloc.
+ *
+ * Returns 1 if true, 0 if false and < 0 on error.
+ */
+static int check_prealloc_shared_data_ref(struct btrfs_fs_info *fs_info,
+					  u64 parent, u64 disk_bytenr)
+{
+	struct extent_buffer *eb;
+	u32 nr;
+	int i;
+	int ret = 0;
+
+	eb = read_tree_block(fs_info, parent, 0);
+	if (!extent_buffer_uptodate(eb)) {
+		ret = -EIO;
+		goto out;
+	}
+
+	nr = btrfs_header_nritems(eb);
+	for (i = 0; i < nr; i++) {
+		struct btrfs_key key;
+		struct btrfs_file_extent_item *fi;
+		int extent_type;
+
+		btrfs_item_key_to_cpu(eb, &key, i);
+		if (key.type != BTRFS_EXTENT_DATA_KEY)
+			continue;
+
+		fi = btrfs_item_ptr(eb, i, struct btrfs_file_extent_item);
+		extent_type = btrfs_file_extent_type(eb, fi);
+		if (extent_type != BTRFS_FILE_EXTENT_REG &&
+		    extent_type != BTRFS_FILE_EXTENT_PREALLOC)
+			continue;
+
+		if (btrfs_file_extent_disk_bytenr(eb, fi) == disk_bytenr &&
+		    extent_type == BTRFS_FILE_EXTENT_REG) {
+			ret = 1;
+			break;
+		}
+	}
+ out:
+	free_extent_buffer(eb);
+	return ret;
+}
+
+/*
+ * Check if a prealloc extent is shared by multiple inodes and if any inode has
+ * already written to that extent. This is to avoid emitting invalid warnings
+ * about odd csum items (a inode has an extent entirely marked as prealloc
+ * but another inode shares it and has already written to it).
+ *
+ * Note: right now it does not check if the number of checksum items in the
+ * csum tree matches the number of bytes written into the ex-prealloc extent.
+ * It's complex to deal with that because the prealloc extent might have been
+ * partially written through multiple inodes and we would have to keep track of
+ * ranges, merging them and notice ranges that fully or partially overlap, to
+ * avoid false reports of csum items missing for areas of the prealloc extent
+ * that were not written to - for example if we have a 1M prealloc extent, we
+ * can have only the first half of it written, but 2 different inodes refer to
+ * the its first half (through reflinks/cloning), so keeping a counter of bytes
+ * covered by checksum items is not enough, as the correct value would be 512K
+ * and not 1M (whence the need to track ranges).
+ *
+ * Returns 0 if the prealloc extent was not written yet by any inode, 1 if
+ * at least one other inode has written to it, and < 0 on error.
+ */
+int check_prealloc_extent_written(struct btrfs_fs_info *fs_info,
+				  u64 disk_bytenr, u64 num_bytes)
+{
+	struct btrfs_path path;
+	struct btrfs_key key;
+	int ret;
+	struct btrfs_extent_item *ei;
+	u32 item_size;
+	unsigned long ptr;
+	unsigned long end;
+
+	key.objectid = disk_bytenr;
+	key.type = BTRFS_EXTENT_ITEM_KEY;
+	key.offset = num_bytes;
+
+	btrfs_init_path(&path);
+	ret = btrfs_search_slot(NULL, fs_info->extent_root, &key, &path, 0, 0);
+	if (ret > 0) {
+		fprintf(stderr,
+	"Missing extent item in extent tree for disk_bytenr %llu, num_bytes %llu\n",
+			disk_bytenr, num_bytes);
+		ret = -ENOENT;
+	}
+	if (ret < 0)
+		goto out;
+
+	/* First check all inline refs. */
+	ei = btrfs_item_ptr(path.nodes[0], path.slots[0],
+			    struct btrfs_extent_item);
+	item_size = btrfs_item_size_nr(path.nodes[0], path.slots[0]);
+	ptr = (unsigned long)(ei + 1);
+	end = (unsigned long)ei + item_size;
+	while (ptr < end) {
+		struct btrfs_extent_inline_ref *iref;
+		int type;
+
+		iref = (struct btrfs_extent_inline_ref *)ptr;
+		type = btrfs_extent_inline_ref_type(path.nodes[0], iref);
+		ASSERT(type == BTRFS_EXTENT_DATA_REF_KEY ||
+		       type == BTRFS_SHARED_DATA_REF_KEY);
+
+		if (type == BTRFS_EXTENT_DATA_REF_KEY) {
+			struct btrfs_extent_data_ref *dref;
+
+			dref = (struct btrfs_extent_data_ref *)(&iref->offset);
+			ret = check_prealloc_data_ref(fs_info, disk_bytenr,
+						      dref, path.nodes[0]);
+			if (ret != 0)
+				goto out;
+		} else if (type == BTRFS_SHARED_DATA_REF_KEY) {
+			u64 parent;
+
+			parent = btrfs_extent_inline_ref_offset(path.nodes[0],
+								iref);
+			ret = check_prealloc_shared_data_ref(fs_info,
+							     parent,
+							     disk_bytenr);
+			if (ret != 0)
+				goto out;
+		}
+
+		ptr += btrfs_extent_inline_ref_size(type);
+	}
+
+	/* Now check if there are any non-inlined refs. */
+	path.slots[0]++;
+	while (true) {
+		if (path.slots[0] >= btrfs_header_nritems(path.nodes[0])) {
+			ret = btrfs_next_leaf(fs_info->extent_root, &path);
+			if (ret < 0)
+				goto out;
+			if (ret > 0) {
+				ret = 0;
+				break;
+			}
+		}
+
+		btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
+		if (key.objectid != disk_bytenr)
+			break;
+
+		if (key.type == BTRFS_EXTENT_DATA_REF_KEY) {
+			struct btrfs_extent_data_ref *dref;
+
+			dref = btrfs_item_ptr(path.nodes[0], path.slots[0],
+					      struct btrfs_extent_data_ref);
+			ret = check_prealloc_data_ref(fs_info, disk_bytenr,
+						      dref, path.nodes[0]);
+			if (ret != 0)
+				goto out;
+		} else if (key.type == BTRFS_SHARED_DATA_REF_KEY) {
+			ret = check_prealloc_shared_data_ref(fs_info,
+							     key.offset,
+							     disk_bytenr);
+			if (ret != 0)
+				goto out;
+		}
+
+		path.slots[0]++;
+	}
+out:
+	btrfs_release_path(&path);
+	return ret;
+}
+
+/*
  * Search in csum tree to find how many bytes of range [@start, @start + @len)
  * has the corresponding csum item.
  *
@@ -123,18 +379,14 @@ int insert_inode_item(struct btrfs_trans_handle *trans,
 	time_t now = time(NULL);
 	int ret;
 
+	memset(&ii, 0, sizeof(ii));
 	btrfs_set_stack_inode_size(&ii, size);
 	btrfs_set_stack_inode_nbytes(&ii, nbytes);
 	btrfs_set_stack_inode_nlink(&ii, nlink);
 	btrfs_set_stack_inode_mode(&ii, mode);
 	btrfs_set_stack_inode_generation(&ii, trans->transid);
-	btrfs_set_stack_timespec_nsec(&ii.atime, 0);
 	btrfs_set_stack_timespec_sec(&ii.ctime, now);
-	btrfs_set_stack_timespec_nsec(&ii.ctime, 0);
 	btrfs_set_stack_timespec_sec(&ii.mtime, now);
-	btrfs_set_stack_timespec_nsec(&ii.mtime, 0);
-	btrfs_set_stack_timespec_sec(&ii.otime, 0);
-	btrfs_set_stack_timespec_nsec(&ii.otime, 0);
 
 	ret = btrfs_insert_inode(trans, root, ino, &ii);
 	ASSERT(!ret);
@@ -198,7 +450,8 @@ int link_inode_to_lostfound(struct btrfs_trans_handle *trans,
 			  BTRFS_FIRST_FREE_OBJECTID, &lost_found_ino,
 			  mode);
 	if (ret < 0) {
-		error("failed to create '%s' dir: %s", dir_name, strerror(-ret));
+		errno = -ret;
+		error("failed to create '%s' dir: %m", dir_name);
 		goto out;
 	}
 	ret = btrfs_add_link(trans, root, ino, lost_found_ino,
@@ -222,8 +475,9 @@ int link_inode_to_lostfound(struct btrfs_trans_handle *trans,
 				     name_len, filetype, NULL, 1, 0);
 	}
 	if (ret < 0) {
-		error("failed to link the inode %llu to %s dir: %s",
-		      ino, dir_name, strerror(-ret));
+		errno = -ret;
+		error("failed to link the inode %llu to %s dir: %m",
+		      ino, dir_name);
 		goto out;
 	}
 
@@ -239,7 +493,7 @@ out:
 }
 
 /*
- * Extra (optional) check for dev_item size to report possbile problem on a new
+ * Extra (optional) check for dev_item size to report possible problem on a new
  * kernel.
  */
 void check_dev_size_alignment(u64 devid, u64 total_bytes, u32 sectorsize)
@@ -348,4 +602,196 @@ void reset_cached_block_groups(struct btrfs_fs_info *fs_info)
 			cache->cached = 0;
 		start = cache->key.objectid + cache->key.offset;
 	}
+}
+
+static int traverse_tree_blocks(struct btrfs_fs_info *fs_info,
+				struct extent_buffer *eb, int tree_root,
+				int pin)
+{
+	struct extent_buffer *tmp;
+	struct btrfs_root_item *ri;
+	struct btrfs_key key;
+	struct extent_io_tree *tree;
+	u64 bytenr;
+	int level = btrfs_header_level(eb);
+	int nritems;
+	int ret;
+	int i;
+	u64 end = eb->start + eb->len;
+
+	if (pin)
+		tree = &fs_info->pinned_extents;
+	else
+		tree = fs_info->excluded_extents;
+	/*
+	 * If we have pinned/excluded this block before, don't do it again.
+	 * This can not only avoid forever loop with broken filesystem
+	 * but also give us some speedups.
+	 */
+	if (test_range_bit(tree, eb->start, end - 1, EXTENT_DIRTY, 0))
+		return 0;
+
+	if (pin)
+		btrfs_pin_extent(fs_info, eb->start, eb->len);
+	else
+		set_extent_dirty(tree, eb->start, end - 1);
+
+	nritems = btrfs_header_nritems(eb);
+	for (i = 0; i < nritems; i++) {
+		if (level == 0) {
+			bool is_extent_root;
+			btrfs_item_key_to_cpu(eb, &key, i);
+			if (key.type != BTRFS_ROOT_ITEM_KEY)
+				continue;
+			/* Skip the extent root and reloc roots */
+			if (key.objectid == BTRFS_TREE_RELOC_OBJECTID ||
+			    key.objectid == BTRFS_DATA_RELOC_TREE_OBJECTID)
+				continue;
+			is_extent_root =
+				key.objectid == BTRFS_EXTENT_TREE_OBJECTID;
+			/* If pin, skip the extent root */
+			if (pin && is_extent_root)
+				continue;
+			ri = btrfs_item_ptr(eb, i, struct btrfs_root_item);
+			bytenr = btrfs_disk_root_bytenr(eb, ri);
+
+			/*
+			 * If at any point we start needing the real root we
+			 * will have to build a stump root for the root we are
+			 * in, but for now this doesn't actually use the root so
+			 * just pass in extent_root.
+			 */
+			tmp = read_tree_block(fs_info, bytenr, 0);
+			if (!extent_buffer_uptodate(tmp)) {
+				fprintf(stderr, "Error reading root block\n");
+				return -EIO;
+			}
+			ret = traverse_tree_blocks(fs_info, tmp, 0, pin);
+			free_extent_buffer(tmp);
+			if (ret)
+				return ret;
+		} else {
+			bytenr = btrfs_node_blockptr(eb, i);
+
+			/* If we aren't the tree root don't read the block */
+			if (level == 1 && !tree_root) {
+				btrfs_pin_extent(fs_info, bytenr,
+						fs_info->nodesize);
+				continue;
+			}
+
+			tmp = read_tree_block(fs_info, bytenr, 0);
+			if (!extent_buffer_uptodate(tmp)) {
+				fprintf(stderr, "Error reading tree block\n");
+				return -EIO;
+			}
+			ret = traverse_tree_blocks(fs_info, tmp, tree_root,
+						   pin);
+			free_extent_buffer(tmp);
+			if (ret)
+				return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int pin_down_tree_blocks(struct btrfs_fs_info *fs_info,
+				struct extent_buffer *eb, int tree_root)
+{
+	return traverse_tree_blocks(fs_info, eb, tree_root, 1);
+}
+
+int pin_metadata_blocks(struct btrfs_fs_info *fs_info)
+{
+	int ret;
+
+	ret = pin_down_tree_blocks(fs_info, fs_info->chunk_root->node, 0);
+	if (ret)
+		return ret;
+
+	return pin_down_tree_blocks(fs_info, fs_info->tree_root->node, 1);
+}
+
+static int exclude_tree_blocks(struct btrfs_fs_info *fs_info,
+				struct extent_buffer *eb, int tree_root)
+{
+	return traverse_tree_blocks(fs_info, eb, tree_root, 0);
+}
+
+int exclude_metadata_blocks(struct btrfs_fs_info *fs_info)
+{
+	int ret;
+	struct extent_io_tree *excluded_extents;
+
+	excluded_extents = malloc(sizeof(*excluded_extents));
+	if (!excluded_extents)
+		return -ENOMEM;
+	extent_io_tree_init(excluded_extents);
+	fs_info->excluded_extents = excluded_extents;
+
+	ret = exclude_tree_blocks(fs_info, fs_info->chunk_root->node, 0);
+	if (ret)
+		return ret;
+	return exclude_tree_blocks(fs_info, fs_info->tree_root->node, 1);
+}
+
+void cleanup_excluded_extents(struct btrfs_fs_info *fs_info)
+{
+	if (fs_info->excluded_extents) {
+		extent_io_tree_cleanup(fs_info->excluded_extents);
+		free(fs_info->excluded_extents);
+	}
+	fs_info->excluded_extents = NULL;
+}
+
+/*
+ * Delete one corrupted dir item whose hash doesn't match its name.
+ *
+ * Since its hash is incorrect, we can't use btrfs_name_hash() to calculate
+ * the search key, but rely on @di_key parameter to do the search.
+ */
+int delete_corrupted_dir_item(struct btrfs_trans_handle *trans,
+			      struct btrfs_root *root,
+			      struct btrfs_key *di_key, char *namebuf,
+			      u32 namelen)
+{
+	struct btrfs_dir_item *di_item;
+	struct btrfs_path path;
+	int ret;
+
+	btrfs_init_path(&path);
+	ret = btrfs_search_slot(trans, root, di_key, &path, 0, 1);
+	if (ret > 0) {
+		error("key (%llu %u %llu) doesn't exist in root %llu",
+			di_key->objectid, di_key->type, di_key->offset,
+			root->root_key.objectid);
+		ret = -ENOENT;
+		goto out;
+	}
+	if (ret < 0) {
+		error("failed to search root %llu: %d",
+			root->root_key.objectid, ret);
+		goto out;
+	}
+
+	di_item = btrfs_match_dir_item_name(root, &path, namebuf, namelen);
+	if (!di_item) {
+		/*
+		 * This is possible if the dir_item has incorrect namelen.
+		 * But in that case, we shouldn't reach repair path here.
+		 */
+		error("no dir item named '%s' found with key (%llu %u %llu)",
+			namebuf, di_key->objectid, di_key->type,
+			di_key->offset);
+		ret = -ENOENT;
+		goto out;
+	}
+	ret = btrfs_delete_one_dir_name(trans, root, &path, di_item);
+	if (ret < 0)
+		error("failed to delete one dir name: %d", ret);
+
+out:
+	btrfs_release_path(&path);
+	return ret;
 }

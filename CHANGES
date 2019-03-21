@@ -1,3 +1,147 @@
+btrfs-progs-4.20.1 (2019-01-23)
+  * libbtrfs: fix build of external tools due to missing symbols
+  * ci: enable library test
+
+btrfs-progs-4.20 (2019-01-19)
+  * new feature: metadata uuid
+    * lightweight change of UUID without rewriting all metadata
+      (incompatible change)
+    * done by btrfstune -m/-M
+    * needs kernel support, 5.0+
+  * image:
+    * fix block groups when restoring from multi-device image
+    * only enlarge result image if it's a regular file
+  * check
+    * more device extent checks and fixes
+    * can repair dir item with mismatched hash
+  * mkfs: uuid tree created with proper contents
+  * fix mount point detection due to partial prefix match
+  * other:
+    * new tests
+    * libbtrfsutil: fix tests if kernel lacks support for new subvolume ioctls
+    * build fixes
+    * doc fixes
+
+btrfs-progs-4.19.1 (2018-12-05)
+  * build fixes
+    * big-endian builds fail due to bswap helper clashes
+    * 'swap' macro is too generic, renamed to prevent build failures
+  * libbtrfs
+    * minor version update to 1.1.0
+    * fix default search to top=0 as documented
+    * rename 'async' to avoid future python binding problems
+    * add support for unprivileged subvolume listing ioctls
+    * added tests, API docs
+  * other
+    * lot of typos fixed
+    * warning cleanups
+    * doc formatting updates
+    * CI tests against zstd 1.3.7
+
+btrfs-progs-4.19 (2018-11-03)
+  * check: support repair of fs with free-space-tree feature
+  * core:
+    * port delayed ref infrastructure from kernel
+    * support write to free space tree
+  * dump-tree: new options for BFS and DFS enumeration of b-trees
+  * quota: rescan is now done automatically after 'assign'
+  * btrfstune: incomplete fix to uuid change
+  * subvol: fix 255 char limit checks
+  * completion: complete block devices and now regular files too
+  * docs:
+    * ship uncompressed manual pages
+    * btrfsck uses a manual page link instead of symlink
+  * other
+    * improved error handling
+    * docs
+    * new tests
+
+btrfs-progs-4.17.1 (2018-08-06)
+  * check:
+    * add ability to fix wrong ram_bytes for compressed inline files
+    * beautify progress output
+  * btrfstune: allow to continue uuid change after unclean interruption
+  * several fuzz fixes:
+    * detect overlapping chunks
+    * chunk loading error handling
+    * don't crash with unexpected root refs to extents
+  * relax option parsing again to allow mixing options and non-options
+    arguments
+  * fix qgroup rescan status reporting
+  * build:
+    * drop obsolete dir-test
+    * new configure option to disable building of tools
+    * add compatibility options --disable-static and --disable-shared
+  * other:
+    * cleanups and preparatory work
+    * new test images
+
+btrfs-progs-4.17 (2018-06-14)
+  * check
+    * many lowmem mode improvements
+    * properly report qgroup mismatch errors
+    * check symlinks with append/immutable flags
+  * fi usage
+    * correctly calculate allocated/unallocated for raid10
+    * minor output updates
+  * mkfs
+    * detect ENOSPC on thinly provisioned devices
+    * fix spurious EEXIST during directory traversal
+  * restore: fix relative path for restore target
+  * dump-tree: print symbolic tree names for backrefs
+  * send: fix regression preventing send -p with subvolumes mounted on "/"
+  * corrupt-tree: refactoring and command line updates
+  * build
+    * make it work with e2fsprogs < 1.42 again
+    * restore support for autoconf 2.63
+    * detect if -std=gnu90 is supported
+  * other
+    * new tests
+    * cleanups
+
+btrfs-progs-4.16.1 (2018-04-24)
+  * remove obsolete tools: btrfs-debug-tree, btrfs-zero-log, btrfs-show-super,
+    btrfs-calc-size
+  * sb-mod: new debugging tool to edit superblock items
+  * mkfs: detect if thin-provisioned device does not have enough space
+  * check: don't try to verify checksums on metadata dump images
+  * build: fail documentation build if xmlto is not found
+  * build: fix build of btrfs.static
+
+btrfs-progs-4.16 (2018-04-06)
+  * libbtrfsutil - new LGPL library to wrap userspace functionality
+    * several 'btrfs' commands converted to use it:
+      * properties
+      * filesystem sync
+      * subvolume set-default/get-default/delete/show/sync
+    * python bindings, tests
+  * build
+    * use configured pkg-config path
+    * CI: add python, musl/clang, built dependencies caching
+    * convert: build fix for e2fsprogs 1.44+
+    * don't install library links with wrong permissions
+  * fixes
+    * prevent incorrect use of subvol_strip_mountpoint
+    * dump-super: don't verify csum for unknown type
+    * convert: fix inline extent creation condition
+  * check:
+    * lowmem: fix false alert for 'data extent backref lost for snapshot'
+    * lowmem: fix false alert for orphan inode
+    * lowmem: fix false alert for shared prealloc extents
+  * mkfs:
+    * add UUID and otime to root of FS_TREE - with the uuid, snapshots will
+      be now linked to the toplevel subvol by the parent UUID
+    * don't follow symlinks when calculating size
+    * pre-create the UUID tree
+    * fix --rootdir with selinux enabled
+  * dump-tree: add option to print only children nodes of a given block
+  * image: handle missing device for RAID1
+  * other
+    * new tests
+    * test script cleanups (quoting, helpers)
+    * tool to edit superblocks
+    * updated docs
+
 btrfs-progs-4.15.1 (2018-02-16)
   * build
     * fix build on musl
@@ -77,7 +221,7 @@ btrfs-progs-4.13 (2017-09-08)
   * check: new option --force to allow check of a mounted filesystem (no repair)
   * mkfs: --rootdir will now copy special files
   * dump-tree: minor output changes
-  * inspect rootid: accept file as arugment
+  * inspect rootid: accept file as argument
   * dev usage: don't calculate slack space for missing devices
   * fi du: don't print error on EMPTY_SUBVOL (inode number 2)
   * build:
@@ -140,7 +284,7 @@ btrfs-progs-4.11 (2017-05-18)
 btrfs-progs-4.10.2 (2017-03-31)
   * check: lowmem mode fix for false alert about lost backrefs
   * convert: minor bugfix
-  * library: fix build, misisng symbols, added tests
+  * library: fix build, missing symbols, added tests
 
 btrfs-progs-4.10.1 (2017-03-17)
   * receive: handle subvolume in path clone
@@ -251,7 +395,7 @@ btrfs-progs-4.8.3 (2016-11-11)
 
 btrfs-progs-4.8.2 (2016-10-26)
   * convert: also convert file attributes
-  * convert: fix wrong tree block alignment for unalianged block group
+  * convert: fix wrong tree block alignment for unaligned block group
   * check: quota verify fixes, handle reloc tree
   * build: add stub for FIEMAP_EXTENT_SHARED, compiles on ancient kernels
   * build: add stub for BUILD_ASSERT when ioctl.h is included
@@ -526,7 +670,7 @@ btrfs-progs-4.3 (2015-11-06)
     * test for broken 'subvolume sync'
     * basic tests for mkfs, raid option combinations
     * basic tests for fuzzed images (check)
-    * command intrumentation (eg valgrind)
+    * command instrumentation (eg valgrind)
     * print commands if requested
     * add README for tests
 

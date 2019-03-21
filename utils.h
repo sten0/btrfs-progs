@@ -29,6 +29,7 @@
 #include "sizes.h"
 #include "messages.h"
 #include "ioctl.h"
+#include "fsfeatures.h"
 
 #define BTRFS_SCAN_MOUNTED	(1ULL << 0)
 #define BTRFS_SCAN_LBLKID	(1ULL << 1)
@@ -92,7 +93,7 @@ char *canonicalize_dm_name(const char *ptname);
 char *canonicalize_path(const char *path);
 int check_mounted(const char *devicename);
 int check_mounted_where(int fd, const char *file, char *where, int size,
-			struct btrfs_fs_devices **fs_devices_mnt);
+		struct btrfs_fs_devices **fs_devices_mnt, unsigned sbflags);
 int btrfs_device_already_in_root(struct btrfs_root *root, int fd,
 				 int super_offset);
 
@@ -149,15 +150,9 @@ u64 disk_size(const char *path);
 u64 get_partition_size(const char *dev);
 
 int test_issubvolname(const char *name);
-int test_issubvolume(const char *path);
 int test_isdir(const char *path);
 
 const char *subvol_strip_mountpoint(const char *mnt, const char *full_path);
-int get_subvol_info(const char *fullpath, struct root_info *get_ri);
-int get_subvol_info_by_rootid(const char *mnt, struct root_info *get_ri,
-							u64 rootid_arg);
-int get_subvol_info_by_uuid(const char *mnt, struct root_info *get_ri,
-							u8 *uuid_arg);
 int find_next_key(struct btrfs_path *path, struct btrfs_key *key);
 const char* btrfs_group_type_str(u64 flag);
 const char* btrfs_group_profile_str(u64 flag);

@@ -301,7 +301,7 @@ static int reiserfs_record_indirect_extent(reiserfs_filsys_t fs, u64 position,
 
 /*
  * Unlike btrfs inline extents, reiserfs can have multiple inline extents.
- * This handles concatanating multiple tails into one inline extent
+ * This handles concatenating multiple tails into one inline extent
  * for insertion.
  */
 static int reiserfs_record_direct_extent(reiserfs_filsys_t fs, __u64 position,
@@ -350,8 +350,7 @@ static int convert_direct(struct btrfs_trans_handle *trans,
 	if (ret)
 		return ret;
 
-	eb = alloc_extent_buffer(&root->fs_info->extent_cache, key.objectid,
-				 sectorsize);
+	eb = alloc_extent_buffer(root->fs_info, key.objectid, sectorsize);
 
 	if (!eb)
 		return -ENOMEM;
@@ -376,7 +375,8 @@ static int reiserfs_convert_tail(struct btrfs_trans_handle *trans,
 	u64 isize;
 	int ret;
 
-	if (length >= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info))
+	if (length >= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info) ||
+	    length >= root->fs_info->sectorsize)
 		return convert_direct(trans, root, objectid, inode, body,
 				      length, offset, convert_flags);
 
@@ -493,10 +493,10 @@ static int reiserfs_copy_dirent(reiserfs_filsys_t fs,
 	ret = reiserfs_copy_meta(fs, root, dirent_data->convert_flags,
 				 deh_dirid, deh_objectid, &type);
 	if (ret) {
+		errno = -ret;
 		error(
-	"an error occured while converting \"%.*s\", reiserfs key [%u %u]: %s",
-			(int)len, name, deh_dirid, deh_objectid,
-			strerror(-ret));
+	"an error occured while converting \"%.*s\", reiserfs key [%u %u]: %m",
+			(int)len, name, deh_dirid, deh_objectid);
 		return ret;
 	}
 	trans = btrfs_start_transaction(root, 1);
@@ -564,7 +564,7 @@ static int reiserfs_copy_meta(reiserfs_filsys_t fs, struct btrfs_root *root,
 	};
 
 	/* The root directory's dirid in reiserfs points to an object
-	 * that does't exist.  In btrfs it's self-referential.
+	 * that doens't exist.  In btrfs it's self-referential.
 	 */
 	if (deh_dirid == REISERFS_ROOT_PARENT_OBJECTID)
 		parent = objectid;

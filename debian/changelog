@@ -1,3 +1,63 @@
+btrfs-progs (4.20.1-2) unstable; urgency=medium
+
+  * Fix btrfs send of snapshots stored in /. Closes: #920886.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Sat, 09 Feb 2019 13:43:54 +0000
+
+btrfs-progs (4.20.1-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Sat, 26 Jan 2019 00:34:29 +0000
+
+btrfs-progs (4.19.1-2) unstable; urgency=medium
+
+  * Rebuild with libzstd support on.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Fri, 11 Jan 2019 11:26:50 +0000
+
+btrfs-progs (4.19.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Add btrfs-tools provides, too many things still the universal name.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 11 Dec 2018 10:31:04 +1100
+
+btrfs-progs (4.17-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Mon, 23 Jul 2018 14:31:22 +0100
+
+btrfs-progs (4.16.1-2) unstable; urgency=medium
+
+  * Do not copy_exec btrfs-zero-log into initramfs, superseeded by `btrfs
+    rescue zero-log` sub-command. Closes: #898720, #898719.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 15 May 2018 14:15:27 +0100
+
+btrfs-progs (4.16.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Drop transitional btrfs-tools package.
+  * Drop cross.patch, similar change done upstream.
+  * Package libbtrfs, libbtrfsutil, and python bindings.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 08 May 2018 14:17:03 -0700
+
+btrfs-progs (4.15.1-2) unstable; urgency=medium
+
+  * If libzstd is provided in both deb & udeb variants (such as Ubuntu
+    bionic) enable zstd support. If libzstd is not provided with both deb
+    & udeb variants (such as current Debian unstable) disable zstd
+    support. If and when libzstd is provided in both deb & udeb variants,
+    a binNMU of this package is sufficient to enable zstd support. Closes:
+    #886968
+  * Drop obsolete lintian overrides.
+  * Add alternative email address as uploader.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Sat, 21 Apr 2018 11:59:50 +0100
+
 btrfs-progs (4.15.1-1) unstable; urgency=medium
 
   * New upstream release

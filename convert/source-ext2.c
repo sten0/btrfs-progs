@@ -162,8 +162,8 @@ static int ext2_read_used_space(struct btrfs_convert_context *cctx)
 		}
 		ret = __ext2_add_one_block(fs, block_bitmap, i, used_tree);
 		if (ret < 0) {
-			error("fail to build used space tree, %s",
-			      strerror(-ret));
+			errno = -ret;
+			error("fail to build used space tree, %m");
 			break;
 		}
 		blk_itr += EXT2_CLUSTERS_PER_GROUP(fs->super);
@@ -310,7 +310,7 @@ static int ext2_create_file_extents(struct btrfs_trans_handle *trans,
 	if (ret)
 		goto fail;
 	if ((convert_flags & CONVERT_FLAG_INLINE_DATA) && data.first_block == 0
-	    && data.num_blocks > 0
+	    && data.num_blocks > 0 && inode_size < sectorsize
 	    && inode_size <= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info)) {
 		u64 num_bytes = data.num_blocks * sectorsize;
 		u64 disk_bytenr = data.disk_block * sectorsize;
@@ -422,8 +422,7 @@ static int ext2_xattr_check_entry(struct ext2_ext_attr_entry *entry,
 {
 	size_t value_size = entry->e_value_size;
 
-	if (entry->e_value_block != 0 || value_size > size ||
-	    entry->e_value_offs + value_size > size)
+	if (value_size > size || entry->e_value_offs + value_size > size)
 		return -EIO;
 	return 0;
 }

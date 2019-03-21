@@ -259,7 +259,7 @@ again:
 		}
 
 		if (path->reada)
-			reada_for_search(root, path, level, slot, 0);
+			reada_for_search(fs_info, path, level, slot, 0);
 
 		next = read_node_slot(fs_info, c, slot);
 		if (extent_buffer_uptodate(next))
@@ -276,7 +276,7 @@ again:
 		if (!level)
 			break;
 		if (path->reada)
-			reada_for_search(root, path, level, 0, 0);
+			reada_for_search(fs_info, path, level, 0, 0);
 		next = read_node_slot(fs_info, next, 0);
 		if (!extent_buffer_uptodate(next))
 			goto again;
@@ -302,7 +302,7 @@ static int copy_one_inline(struct btrfs_root *root, int fd,
 	fi = btrfs_item_ptr(leaf, path->slots[0],
 			    struct btrfs_file_extent_item);
 	ptr = btrfs_file_extent_inline_start(fi);
-	len = btrfs_file_extent_inline_len(leaf, path->slots[0], fi);
+	len = btrfs_file_extent_ram_bytes(leaf, fi);
 	inline_item_len = btrfs_file_extent_inline_item_len(leaf, btrfs_item_nr(path->slots[0]));
 	read_extent_buffer(leaf, buf, ptr, inline_item_len);
 
@@ -324,7 +324,8 @@ static int copy_one_inline(struct btrfs_root *root, int fd,
 		return -ENOMEM;
 	}
 
-	ret = decompress(root, buf, outbuf, len, &ram_size, compress);
+	ret = decompress(root, buf, outbuf, inline_item_len, &ram_size,
+			 compress);
 	if (ret) {
 		free(outbuf);
 		return ret;
@@ -825,7 +826,7 @@ static int overwrite_ok(const char * path)
 	int ret;
 
 	/* don't be fooled by symlinks */
-	ret = fstatat(-1, path_name, &st, AT_SYMLINK_NOFOLLOW);
+	ret = fstatat(AT_FDCWD, path_name, &st, AT_SYMLINK_NOFOLLOW);
 
 	if (!ret) {
 		if (overwrite)
@@ -1281,8 +1282,15 @@ static struct btrfs_root *open_fs(const char *dev, u64 root_location,
 
 	for (i = super_mirror; i < BTRFS_SUPER_MIRROR_MAX; i++) {
 		bytenr = btrfs_sb_offset(i);
+
+		/*
+		 * Restore won't allocate extent and doesn't care anything
+		 * in extent tree. Skip block group item search will allow
+		 * restore to be executed on heavily damaged fs.
+		 */
 		fs_info = open_ctree_fs_info(dev, bytenr, root_location, 0,
-					     OPEN_CTREE_PARTIAL);
+					     OPEN_CTREE_PARTIAL |
+					     OPEN_CTREE_NO_BLOCK_GROUPS);
 		if (fs_info)
 			break;
 		fprintf(stderr, "Could not open root, trying backup super\n");
@@ -1433,6 +1441,7 @@ int cmd_restore(int argc, char **argv)
 	regex_t match_reg, *mreg = NULL;
 	char reg_err[256];
 
+	optind = 0;
 	while (1) {
 		int opt;
 		enum { GETOPT_VAL_PATH_REGEX = 256 };
@@ -1533,8 +1542,8 @@ int cmd_restore(int argc, char **argv)
 	}
 
 	if ((ret = check_mounted(argv[optind])) < 0) {
-		fprintf(stderr, "Could not check mount status: %s\n",
-			strerror(-ret));
+		errno = -ret;
+		fprintf(stderr, "Could not check mount status: %m\n");
 		return 1;
 	} else if (ret) {
 		fprintf(stderr, "%s is currently mounted.  Aborting.\n", argv[optind]);
@@ -1582,8 +1591,9 @@ int cmd_restore(int argc, char **argv)
 		key.offset = (u64)-1;
 		root = btrfs_read_fs_root(orig_root->fs_info, &key);
 		if (IS_ERR(root)) {
-			fprintf(stderr, "fail to read root %llu: %s\n",
-					root_objectid, strerror(-PTR_ERR(root)));
+			errno = -PTR_ERR(root);
+			fprintf(stderr, "fail to read root %llu: %m\n",
+					root_objectid);
 			root = orig_root;
 			ret = 1;
 			goto out;

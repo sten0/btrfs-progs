@@ -46,7 +46,6 @@ check_prereq btrfs-corrupt-block
 check_prereq btrfs-image
 check_prereq btrfstune
 check_prereq btrfs
-check_prereq btrfs-zero-log
 check_prereq btrfs-find-root
 check_prereq btrfs-select-super
 check_kernel_support
@@ -58,7 +57,7 @@ for i in $(find "$TEST_TOP/misc-tests" -maxdepth 1 -mindepth 1 -type d	\
 do
 	echo "    [TEST/misc]   $(basename $i)"
 	cd "$i"
-	echo "=== Entering $i" >> "$RESULTS"
+	echo "=== START TEST $i" >> "$RESULTS"
 	if [ -x test.sh ]; then
 		./test.sh
 		if [ $? -ne 0 ]; then

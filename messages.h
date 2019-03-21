@@ -26,13 +26,13 @@
 #ifdef DEBUG_TRACE_ON_ERROR
 #define PRINT_TRACE_ON_ERROR	print_trace()
 #else
-#define PRINT_TRACE_ON_ERROR
+#define PRINT_TRACE_ON_ERROR	do { } while (0)
 #endif
 
 #ifdef DEBUG_ABORT_ON_ERROR
 #define DO_ABORT_ON_ERROR	abort()
 #else
-#define DO_ABORT_ON_ERROR
+#define DO_ABORT_ON_ERROR	do { } while (0)
 #endif
 
 #define error(fmt, ...)							\
@@ -52,6 +52,19 @@
 		__btrfs_error_on((cond), (fmt), ##__VA_ARGS__);		\
 		if ((cond))						\
 			DO_ABORT_ON_ERROR;				\
+	} while (0)
+
+#define error_btrfs_util(err)						\
+	do {								\
+		const char *errno_str = strerror(errno);		\
+		const char *lib_str = btrfs_util_strerror(err);		\
+		PRINT_TRACE_ON_ERROR;					\
+		PRINT_VERBOSE_ERROR;					\
+		if (lib_str && strcmp(errno_str, lib_str) != 0)		\
+			__btrfs_error("%s: %m", lib_str);		\
+		else							\
+			__btrfs_error("%m");				\
+		DO_ABORT_ON_ERROR;					\
 	} while (0)
 
 #define warning(fmt, ...)						\

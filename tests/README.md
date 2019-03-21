@@ -170,7 +170,7 @@ how to do mkfs, mount, unmount, check, loop device management etc.
 and join by dashes `-`. This will become the directory name, eg. `012-subvolume-sync-must-wait`.
 
 3. Write a short description of the bug and how it's tested to the comment at the
-begining of `test.sh`. You don't need to add the file to git yet. Don't forget
+beginning of `test.sh`. You don't need to add the file to git yet. Don't forget
 to make the file executable, otherwise it's not going to be executed by the
 infrastructure.
 
@@ -188,6 +188,27 @@ $ TEST=012\* ./misc-tests.sh           # from tests/
 
 7. A commit that fixes a bug should be applied before the test that verifies
   the fix. This is to keep the git history bisectable.
+
+
+### Test images
+
+Most tests should be able to create the test images from scratch, using regular
+commands and file operation. The commands also document the testcase and use
+the test code and kernel of the environment.
+
+In other cases, a pre-created image may be the right way if the above does not
+work (eg. comparing output, requesting an exact layout or some intermediate
+state that would be hard to achieve otherwise).
+
+* images that don't need data and valid checksums can be created by
+  `btrfs-image`, the image can be compressed by the tool itself (file extension
+  `.img`) or compressed externally (recognized is `.img.xz`)
+
+* raw images that are binary dump of an existing image, created eg. from a
+  sparse file (`.raw` or `.raw.xz`)
+
+Use `xz --best` and try to get the smallest size as the file is stored in git.
+
 
 ### Crafted/fuzzed images
 
@@ -223,7 +244,7 @@ There are some utilities that are not distributed but are necessary for the
 tests. They are in the top level directory of the testsuite and their path
 cannot be set.
 
-The tests assume write acesss to their directories.
+The tests assume write access to their directories.
 
 
 # Coding style, best practices
@@ -232,9 +253,10 @@ The tests assume write acesss to their directories.
 
 * quote all variables by default, any path, even the TOP could need that, and
   we use it everywhere
+  * even if the variable is safe, use quotes for consistency and to ease
+    reading the code
   * there are exceptions:
     * `$SUDO_HELPER` as it might be intentionally unset
-    * the variable is obviously set to a value that does not require it
 * use `#!/bin/bash` explicitly
 * check for all external dependencies (`check_prereq_global`)
 * check for internal dependencies (`check_prereq`), though the basic set is
