@@ -26,6 +26,7 @@ Vcs-Git: https://salsa.debian.org/debian/btrfs-progs.git -b debian
 
 Package: btrfs-progs
 Architecture: linux-any
+Multi-Arch: foreign
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Replaces: btrfs-tools (<< 4.4.1-1)
 Breaks: btrfs-tools (<< 4.4.1-1), btrbk (<= 0.25.0)
@@ -41,6 +42,7 @@ Description: Checksumming Copy on Write Filesystem utilities
 
 Package: libbtrfs0
 Architecture: linux-any
+Multi-Arch: same
 Section: libs
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Replaces: btrfs-progs (<< 4.16.1-1)
@@ -54,6 +56,7 @@ Description: Checksumming Copy on Write Filesystem utilities (runtime library)
 
 Package: libbtrfs-dev
 Architecture: linux-any
+Multi-Arch: same
 Section: libdevel
 Depends: ${misc:Depends}, ${shlibs:Depends}, libbtrfs0 (= ${binary:Version})
 Replaces: btrfs-progs (<< 4.16.1-1)
@@ -67,6 +70,7 @@ Description: Checksumming Copy on Write Filesystem utilities (development header
 
 Package: libbtrfsutil1
 Architecture: linux-any
+Multi-Arch: same
 Section: libs
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Description: Checksumming Copy on Write Filesystem utilities (runtime util library)
@@ -78,6 +82,7 @@ Description: Checksumming Copy on Write Filesystem utilities (runtime util libra
 
 Package: libbtrfsutil-dev
 Architecture: linux-any
+Multi-Arch: same
 Section: libdevel
 Depends: ${misc:Depends}, ${shlibs:Depends}, libbtrfsutil1 (= ${binary:Version})
 Description: Checksumming Copy on Write Filesystem utilities (util development headers)
@@ -89,6 +94,7 @@ Description: Checksumming Copy on Write Filesystem utilities (util development h
 
 Package: python3-btrfsutil
 Architecture: linux-any
+Multi-Arch: same
 Section: python
 Depends: ${misc:Depends}, ${shlibs:Depends}, ${python3:Depends}
 Description: Checksumming Copy on Write Filesystem utilities (python3 bindings)
