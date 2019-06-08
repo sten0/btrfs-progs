@@ -581,12 +581,12 @@ int cmd_filesystem_du(int argc, char **argv)
 			summarize = 1;
 			break;
 		default:
-			usage(cmd_filesystem_du_usage);
+			usage_unknown_option(cmd_filesystem_du_usage, argv);
 		}
 	}
 
 	if (check_argc_min(argc - optind, 1))
-		usage(cmd_filesystem_du_usage);
+		return 1;
 
 	kernel_version = get_running_kernel_version();
 

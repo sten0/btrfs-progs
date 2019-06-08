@@ -42,8 +42,9 @@ static const char * const device_cmd_group_usage[] = {
 
 static const char * const cmd_device_add_usage[] = {
 	"btrfs device add [options] <device> [<device>...] <path>",
-	"Add a device to a filesystem",
-	"-K|--nodiscard    do not perform whole device TRIM",
+	"Add one or more devices to a mounted filesystem.",
+	"",
+	"-K|--nodiscard    do not perform whole device TRIM on devices that report such capability",
 	"-f|--force        force overwrite existing filesystem on the disk",
 	NULL
 };
@@ -77,12 +78,12 @@ static int cmd_device_add(int argc, char **argv)
 			force = 1;
 			break;
 		default:
-			usage(cmd_device_add_usage);
+			usage_unknown_option(cmd_device_add_usage, argv);
 		}
 	}
 
 	if (check_argc_min(argc - optind, 2))
-		usage(cmd_device_add_usage);
+		return 1;
 
 	last_dev = argc - 1;
 	mntpnt = argv[last_dev];
@@ -152,7 +153,7 @@ static int _cmd_device_remove(int argc, char **argv,
 	clean_args_no_options(argc, argv, usagestr);
 
 	if (check_argc_min(argc - optind, 2))
-		usage(usagestr);
+		return 1;
 
 	mntpnt = argv[argc - 1];
 
@@ -224,6 +225,9 @@ static int _cmd_device_remove(int argc, char **argv,
 }
 
 #define COMMON_USAGE_REMOVE_DELETE					\
+	"Remove a device from a filesystem, specified by a path to the device or", \
+	"as a device id in the filesystem. The btrfs signature is removed from",   \
+	"the device.",								\
 	"If 'missing' is specified for <device>, the first device that is",	\
 	"described by the filesystem metadata, but not present at the mount",	\
 	"time will be removed. (only in degraded mode)"
@@ -254,10 +258,41 @@ static int cmd_device_delete(int argc, char **argv)
 	return _cmd_device_remove(argc, argv, cmd_device_delete_usage);
 }
 
+static int btrfs_forget_devices(const char *path)
+{
+	struct btrfs_ioctl_vol_args args;
+	int ret;
+	int fd;
+
+	fd = open("/dev/btrfs-control", O_RDWR);
+	if (fd < 0)
+		return -errno;
+
+	memset(&args, 0, sizeof(args));
+	if (path)
+		strncpy_null(args.name, path);
+	ret = ioctl(fd, BTRFS_IOC_FORGET_DEV, &args);
+	if (ret)
+		ret = -errno;
+	close(fd);
+	return ret;
+}
+
 static const char * const cmd_device_scan_usage[] = {
-	"btrfs device scan [(-d|--all-devices)|<device> [<device>...]]",
-	"Scan devices for a btrfs filesystem",
-	" -d|--all-devices (deprecated)",
+	"btrfs device scan [-d|--all-devices] <device> [<device>...]\n"
+	"btrfs device scan -u|--forget [<device>...]",
+	"Scan or forget (unregister) devices of btrfs filesystems",
+	"Scan or forget (unregister) devices of btrfs filesystems. Multi-device",
+	"filesystems need to scan devices before mount. The blkid provides list",
+	"of devices in case no path is given. If blkid is no available, there's",
+	"a fallback to manual enumeration of device nodes.",
+	"",
+	"The reverse is done by the forget option, such devices must be unmounted.",
+	"No argument will unregister all devices that are not part of a mounted filesystem.",
+	"",
+	" -d|--all-devices            enumerate and register all devices, use as a fallback",
+	"                             if blkid is not available",
+	" -u|--forget [<device>...]   unregister a given device or all stale devices if no path ",
 	NULL
 };
 
@@ -267,37 +302,55 @@ static int cmd_device_scan(int argc, char **argv)
 	int devstart;
 	int all = 0;
 	int ret = 0;
+	int forget = 0;
 
 	optind = 0;
 	while (1) {
 		int c;
 		static const struct option long_options[] = {
 			{ "all-devices", no_argument, NULL, 'd'},
+			{ "forget", no_argument, NULL, 'u'},
 			{ NULL, 0, NULL, 0}
 		};
 
-		c = getopt_long(argc, argv, "d", long_options, NULL);
+		c = getopt_long(argc, argv, "du", long_options, NULL);
 		if (c < 0)
 			break;
 		switch (c) {
 		case 'd':
 			all = 1;
 			break;
+		case 'u':
+			forget = 1;
+			break;
 		default:
-			usage(cmd_device_scan_usage);
+			usage_unknown_option(cmd_device_scan_usage, argv);
 		}
 	}
 	devstart = optind;
+
+	if (all && forget)
+		usage(cmd_device_scan_usage);
 
 	if (all && check_argc_max(argc - optind, 1))
 		usage(cmd_device_scan_usage);
 
 	if (all || argc - optind == 0) {
-		printf("Scanning for Btrfs filesystems\n");
-		ret = btrfs_scan_devices();
-		error_on(ret, "error %d while scanning", ret);
-		ret = btrfs_register_all_devices();
-		error_on(ret, "there are %d errors while registering devices", ret);
+		if (forget) {
+			ret = btrfs_forget_devices(NULL);
+			if (ret < 0) {
+				errno = -ret;
+				error("cannot unregister devices: %m");
+			}
+		} else {
+			printf("Scanning for Btrfs filesystems\n");
+			ret = btrfs_scan_devices();
+			error_on(ret, "error %d while scanning", ret);
+			ret = btrfs_register_all_devices();
+			error_on(ret,
+				"there were %d errors while registering devices",
+				ret);
+		}
 		goto out;
 	}
 
@@ -315,11 +368,19 @@ static int cmd_device_scan(int argc, char **argv)
 			ret = 1;
 			goto out;
 		}
-		printf("Scanning for Btrfs filesystems in '%s'\n", path);
-		if (btrfs_register_one_device(path) != 0) {
-			ret = 1;
-			free(path);
-			goto out;
+		if (forget) {
+			ret = btrfs_forget_devices(path);
+			if (ret < 0) {
+				errno = -ret;
+				error("cannot unregister device '%s': %m", path);
+			}
+		} else {
+			printf("Scanning for btrfs filesystems on '%s'\n", path);
+			if (btrfs_register_one_device(path) != 0) {
+				ret = 1;
+				free(path);
+				goto out;
+			}
 		}
 		free(path);
 	}
@@ -330,7 +391,7 @@ out:
 
 static const char * const cmd_device_ready_usage[] = {
 	"btrfs device ready <device>",
-	"Check device to see if it has all of its devices in cache for mounting",
+	"Check and wait until a group of devices of a filesystem is ready for mount",
 	NULL
 };
 
@@ -344,7 +405,7 @@ static int cmd_device_ready(int argc, char **argv)
 	clean_args_no_options(argc, argv, cmd_device_ready_usage);
 
 	if (check_argc_exact(argc - optind, 1))
-		usage(cmd_device_ready_usage);
+		return 1;
 
 	fd = open("/dev/btrfs-control", O_RDWR);
 	if (fd < 0) {
@@ -425,14 +486,13 @@ static int cmd_device_stats(int argc, char **argv)
 		case 'z':
 			flags = BTRFS_DEV_STATS_RESET;
 			break;
-		case '?':
 		default:
-			usage(cmd_device_stats_usage);
+			usage_unknown_option(cmd_device_stats_usage, argv);
 		}
 	}
 
 	if (check_argc_exact(argc - optind, 1))
-		usage(cmd_device_stats_usage);
+		return 1;
 
 	dev_path = argv[optind];
 
@@ -569,7 +629,7 @@ static int cmd_device_usage(int argc, char **argv)
 	clean_args_no_options(argc, argv, cmd_device_usage_usage);
 
 	if (check_argc_min(argc - optind, 1))
-		usage(cmd_device_usage_usage);
+		return 1;
 
 	for (i = optind; i < argc; i++) {
 		int fd;

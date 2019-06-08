@@ -36,12 +36,7 @@
 #include "extent-cache.h"
 #include "find-root.h"
 #include "help.h"
-
-static void find_root_usage(void)
-{
-	fprintf(stderr, "Usage: find-roots [-a] [-o search_objectid] "
-		"[ -g search_generation ] [ -l search_level ] <device>\n");
-}
+#include "commands.h"
 
 /*
  * Get reliable generation and level for given root.
@@ -143,6 +138,20 @@ static void print_find_root_result(struct cache_tree *result,
 	}
 }
 
+static const char * btrfs_find_root_usage[] = {
+	"btrfs-find-usage [options] <device>",
+	"Attempt to find tree roots on the device",
+	"",
+	"  -a              search through all metadata even if the root has been found",
+	"  -o OBJECTID     filter by the tree's object id",
+	"  -l LEVEL        filter by tree level, (default: 0)",
+	"  -g GENERATION   filter by tree generation",
+};
+
+static const struct cmd_struct btrfs_find_root_cmd = {
+	"btrfs-find-root", NULL, btrfs_find_root_usage, NULL, 0,
+};
+
 int main(int argc, char **argv)
 {
 	struct btrfs_fs_info *fs_info;
@@ -155,6 +164,7 @@ int main(int argc, char **argv)
 	filter.objectid = BTRFS_ROOT_TREE_OBJECTID;
 	filter.match_gen = (u64)-1;
 	filter.match_level = (u8)-1;
+	opterr = 0;
 	while (1) {
 		static const struct option long_options[] = {
 			{ "help", no_argument, NULL, GETOPT_VAL_HELP},
@@ -179,24 +189,23 @@ int main(int argc, char **argv)
 			filter.level = arg_strtou64(optarg);
 			break;
 		case GETOPT_VAL_HELP:
+			usage_command(&btrfs_find_root_cmd, 0, 0);
+			return 0;
 		default:
-			find_root_usage();
-			exit(c != GETOPT_VAL_HELP);
+			usage_unknown_option(btrfs_find_root_usage, argv);
 		}
 	}
 
 	set_argv0(argv);
-	if (check_argc_min(argc - optind, 1)) {
-		find_root_usage();
-		exit(1);
-	}
+	if (check_argc_min(argc - optind, 1))
+		return 1;
 
 	fs_info = open_ctree_fs_info(argv[optind], 0, 0, 0,
 			OPEN_CTREE_CHUNK_ROOT_ONLY |
 			OPEN_CTREE_IGNORE_CHUNK_TREE_ERROR);
 	if (!fs_info) {
 		error("open ctree failed");
-		exit(1);
+		return 1;
 	}
 	cache_tree_init(&result);
 

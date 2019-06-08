@@ -31,11 +31,6 @@
 
 static char argv0_buf[ARGV0_BUF_SIZE] = "btrfs";
 
-const char *get_argv0_buf(void)
-{
-	return argv0_buf;
-}
-
 void fixup_argv0(char **argv, const char *token)
 {
 	int len = strlen(argv0_buf);
@@ -52,10 +47,10 @@ void set_argv0(char **argv)
 
 int check_argc_exact(int nargs, int expected)
 {
-	if (nargs < expected)
-		fprintf(stderr, "%s: too few arguments\n", argv0_buf);
-	if (nargs > expected)
-		fprintf(stderr, "%s: too many arguments\n", argv0_buf);
+	if (nargs != expected)
+		fprintf(stderr, "%s: exactly %d argument%s expected, %d given\n",
+				argv0_buf, expected,
+				expected > 1 ? "s" : "", nargs);
 
 	return nargs != expected;
 }
@@ -63,7 +58,9 @@ int check_argc_exact(int nargs, int expected)
 int check_argc_min(int nargs, int expected)
 {
 	if (nargs < expected) {
-		fprintf(stderr, "%s: too few arguments\n", argv0_buf);
+		fprintf(stderr,
+			"%s: not enough arguments: %d but at least %d expected\n",
+			argv0_buf, nargs, expected);
 		return 1;
 	}
 
@@ -73,7 +70,9 @@ int check_argc_min(int nargs, int expected)
 int check_argc_max(int nargs, int expected)
 {
 	if (nargs > expected) {
-		fprintf(stderr, "%s: too many arguments\n", argv0_buf);
+		fprintf(stderr,
+			"%s: too many arguments: %d but at most %d expected\n",
+			argv0_buf, nargs, expected);
 		return 1;
 	}
 
@@ -239,6 +238,50 @@ void usage_command(const struct cmd_struct *cmd, int full, int err)
 }
 
 __attribute__((noreturn))
+void usage_unknown_option(const char * const *usagestr, char **argv)
+{
+	int i;
+	int c;
+	int prev = 0;
+
+	/*
+	 * Guess the command prefix, until the first option or argument
+	 * specifier
+	 */
+	i = 0;
+	do {
+		c = usagestr[0][i];
+		if (c == '<' || c == '[' || (prev == ' ' && c == '-')) {
+			i--;
+			break;
+		}
+		prev = c;
+		i++;
+	} while (c);
+
+	/*
+	 * Example:
+	 *
+	 * $ btrfs device add --unknown device path
+	 * btrfs device add: unrecognized option '--unknown'
+	 * Try 'btrfs device add --help' for more information
+	 */
+
+	fprintf(stderr, "%.*s: ", i, usagestr[0]);
+	if (!optopt) {
+		/*
+		 * There's no better way to get the exact unrecognized token
+		 * from getopt
+		 */
+		fprintf(stderr, "unrecognized option '%s'\n", argv[optind - 1]);
+	} else {
+		fprintf(stderr, "invalid option '%c'\n", optopt);
+	}
+	fprintf(stderr, "Try '%.*s --help' for more information\n", i, usagestr[0]);
+	exit(1);
+}
+
+__attribute__((noreturn))
 void usage(const char * const *usagestr)
 {
 	usage_command_usagestr(usagestr, NULL, 1, 1);
@@ -349,7 +392,7 @@ void usage_command_group(const struct cmd_group *grp, int full, int err)
 __attribute__((noreturn))
 void help_unknown_token(const char *arg, const struct cmd_group *grp)
 {
-	fprintf(stderr, "%s: unknown token '%s'\n", get_argv0_buf(), arg);
+	fprintf(stderr, "%s: unknown token '%s'\n", argv0_buf, arg);
 	usage_command_group(grp, 0, 1);
 	exit(1);
 }
@@ -359,7 +402,7 @@ void help_ambiguous_token(const char *arg, const struct cmd_group *grp)
 {
 	const struct cmd_struct *cmd = grp->commands;
 
-	fprintf(stderr, "%s: ambiguous token '%s'\n", get_argv0_buf(), arg);
+	fprintf(stderr, "%s: ambiguous token '%s'\n", argv0_buf, arg);
 	fprintf(stderr, "\nDid you mean one of these ?\n");
 
 	for (; cmd->token; cmd++) {

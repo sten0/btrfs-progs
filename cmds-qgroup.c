@@ -68,8 +68,7 @@ static int _cmd_qgroup_assign(int assign, int argc, char **argv,
 				rescan = false;
 				break;
 			default:
-				/* Usage printed by the caller */
-				return -1;
+				usage_unknown_option(usage_str, argv);
 			}
 		}
 	} else {
@@ -77,7 +76,7 @@ static int _cmd_qgroup_assign(int assign, int argc, char **argv,
 	}
 
 	if (check_argc_exact(argc - optind, 3))
-		usage(usage_str);
+		return 1;
 
 	memset(&args, 0, sizeof(args));
 	args.assign = assign;
@@ -139,7 +138,7 @@ static int _cmd_qgroup_create(int create, int argc, char **argv)
 	DIR *dirstream = NULL;
 
 	if (check_argc_exact(argc - optind, 2))
-		return -1;
+		return 1;
 
 	memset(&args, 0, sizeof(args));
 	args.create = create;
@@ -243,15 +242,9 @@ static const char * const cmd_qgroup_create_usage[] = {
 
 static int cmd_qgroup_create(int argc, char **argv)
 {
-	int ret;
-
 	clean_args_no_options(argc, argv, cmd_qgroup_create_usage);
 
-	ret = _cmd_qgroup_create(1, argc, argv);
-
-	if (ret < 0)
-		usage(cmd_qgroup_create_usage);
-	return ret;
+	return _cmd_qgroup_create(1, argc, argv);
 }
 
 static const char * const cmd_qgroup_destroy_usage[] = {
@@ -262,15 +255,9 @@ static const char * const cmd_qgroup_destroy_usage[] = {
 
 static int cmd_qgroup_destroy(int argc, char **argv)
 {
-	int ret;
-
 	clean_args_no_options(argc, argv, cmd_qgroup_destroy_usage);
 
-	ret = _cmd_qgroup_create(0, argc, argv);
-
-	if (ret < 0)
-		usage(cmd_qgroup_destroy_usage);
-	return ret;
+	return _cmd_qgroup_create(0, argc, argv);
 }
 
 static const char * const cmd_qgroup_show_usage[] = {
@@ -354,20 +341,27 @@ static int cmd_qgroup_show(int argc, char **argv)
 		case GETOPT_VAL_SORT:
 			ret = btrfs_qgroup_parse_sort_string(optarg,
 							     &comparer_set);
-			if (ret)
-				usage(cmd_qgroup_show_usage);
+			if (ret < 0) {
+				errno = -ret;
+				error("cannot parse sort string: %m");
+				return 1;
+			}
+			if (ret > 0) {
+				error("unrecognized format of sort string");
+				return 1;
+			}
 			break;
 		case GETOPT_VAL_SYNC:
 			sync = 1;
 			break;
 		default:
-			usage(cmd_qgroup_show_usage);
+			usage_unknown_option(cmd_qgroup_show_usage, argv);
 		}
 	}
 	btrfs_qgroup_setup_units(unit_mode);
 
 	if (check_argc_exact(argc - optind, 1))
-		usage(cmd_qgroup_show_usage);
+		return 1;
 
 	path = argv[optind];
 	fd = btrfs_open_dir(path, &dirstream, 1);
@@ -444,12 +438,12 @@ static int cmd_qgroup_limit(int argc, char **argv)
 			exclusive = 1;
 			break;
 		default:
-			usage(cmd_qgroup_limit_usage);
+			usage_unknown_option(cmd_qgroup_limit_usage, argv);
 		}
 	}
 
 	if (check_argc_min(argc - optind, 2))
-		usage(cmd_qgroup_limit_usage);
+		return 1;
 
 	if (!parse_limit(argv[optind], &size)) {
 		error("invalid size argument: %s", argv[optind]);

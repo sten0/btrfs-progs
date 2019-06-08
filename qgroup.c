@@ -468,9 +468,8 @@ int btrfs_qgroup_setup_comparer(struct btrfs_qgroup_comparer_set  **comp_set,
 		tmp = set;
 		set = realloc(set, size);
 		if (!set) {
-			error("memory allocation failed");
 			free(tmp);
-			exit(1);
+			return -ENOMEM;
 		}
 
 		memset(&set->comps[set->total], 0,
@@ -1195,6 +1194,13 @@ int btrfs_show_qgroups(int fd,
 	return ret;
 }
 
+/*
+ * Parse sort string and allocate new comparator.
+ *
+ * Return: 0 no errors while parsing
+ *         1 parse error
+ *        <0 other errors
+ */
 int btrfs_qgroup_parse_sort_string(const char *opt_arg,
 				   struct btrfs_qgroup_comparer_set **comps)
 {
@@ -1204,7 +1210,7 @@ int btrfs_qgroup_parse_sort_string(const char *opt_arg,
 	char **ptr_argv;
 	int what_to_sort;
 	char *opt_tmp;
-	int ret = 0;
+	int ret = 0, ret2;
 
 	opt_tmp = strdup(opt_arg);
 	if (!opt_tmp)
@@ -1232,7 +1238,7 @@ int btrfs_qgroup_parse_sort_string(const char *opt_arg,
 		}
 
 		if (flag == 0) {
-			ret = -1;
+			ret = 1;
 			goto out;
 		} else {
 			if (*p == '+') {
@@ -1246,10 +1252,15 @@ int btrfs_qgroup_parse_sort_string(const char *opt_arg,
 
 			what_to_sort = btrfs_qgroup_get_sort_item(p);
 			if (what_to_sort < 0) {
-				ret = -1;
+				ret = 1;
 				goto out;
 			}
-			btrfs_qgroup_setup_comparer(comps, what_to_sort, order);
+			ret2 = btrfs_qgroup_setup_comparer(comps, what_to_sort,
+					order);
+			if (ret2 < 0) {
+				ret = ret2;
+				goto out;
+			}
 		}
 		p = strtok(NULL, ",");
 	}

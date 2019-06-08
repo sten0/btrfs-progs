@@ -201,7 +201,7 @@ static int dump_props(int types, const char *object, int name_and_help)
 		for (j = 1; j < __prop_object_max; j <<= 1) {
 			ret = dump_prop(prop, object, types, j, name_and_help);
 			if (ret < 0) {
-				ret = 50;
+				ret = 1;
 				goto out;
 			}
 		}
@@ -222,43 +222,38 @@ static int setget_prop(int types, const char *object,
 	ret = parse_prop(name, prop_handlers, &prop);
 	if (ret == -1) {
 		error("unknown property: %s", name);
-		ret = 40;
-		goto out;
+		return 1;
 	}
 
 	types &= prop->types;
 	if (!types) {
 		error("object is not compatible with property: %s", prop->name);
-		ret = 47;
-		goto out;
+		return 1;
 	}
 
 	if (count_bits(types) > 1) {
 		error("type of object is ambiguous, please use option -t");
-		ret = 48;
-		goto out;
+		return 1;
 	}
 
 	if (value && prop->read_only) {
 		error("property is read-only property: %s",
 				prop->name);
-		ret = 51;
-		goto out;
+		return 1;
 	}
 
 	ret = prop->handler(types, object, name, value);
 
 	if (ret < 0)
-		ret = 50;
+		ret = 1;
 	else
 		ret = 0;
 
-out:
 	return ret;
 
 }
 
-static void parse_args(int argc, char **argv,
+static int parse_args(int argc, char **argv,
 		       const char * const *usage_str,
 		       int *types, char **object,
 		       char **name, char **value, int min_nonopt_args)
@@ -278,7 +273,7 @@ static void parse_args(int argc, char **argv,
 			type_str = optarg;
 			break;
 		default:
-			usage(usage_str);
+			usage_unknown_option(usage_str, argv);
 		}
 	}
 
@@ -289,7 +284,7 @@ static void parse_args(int argc, char **argv,
 
 	if (check_argc_min(argc - optind, min_nonopt_args) ||
 	    check_argc_max(argc - optind, max_nonopt_args))
-		usage(usage_str);
+		return 1;
 
 	*types = 0;
 	if (type_str) {
@@ -306,7 +301,7 @@ static void parse_args(int argc, char **argv,
 			*types = prop_object_dev;
 		} else {
 			error("invalid object type: %s", type_str);
-			usage(usage_str);
+			return 1;
 		}
 	}
 
@@ -321,13 +316,15 @@ static void parse_args(int argc, char **argv,
 		if (ret < 0) {
 			errno = -ret;
 			error("failed to detect object type: %m");
-			usage(usage_str);
+			return 1;
 		}
 		if (!*types) {
 			error("object is not a btrfs object: %s", *object);
-			usage(usage_str);
+			return 1;
 		}
 	}
+
+	return 0;
 }
 
 static const char * const cmd_property_get_usage[] = {
@@ -350,8 +347,9 @@ static int cmd_property_get(int argc, char **argv)
 	char *name = NULL;
 	int types = 0;
 
-	parse_args(argc, argv, cmd_property_get_usage, &types, &object, &name,
-		   NULL, 1);
+	if (parse_args(argc, argv, cmd_property_get_usage, &types, &object,
+				&name, NULL, 1))
+		return 1;
 
 	if (name)
 		ret = setget_prop(types, object, name, NULL);
@@ -377,8 +375,9 @@ static int cmd_property_set(int argc, char **argv)
 	char *value = NULL;
 	int types = 0;
 
-	parse_args(argc, argv, cmd_property_set_usage, &types,
-		   &object, &name, &value, 3);
+	if (parse_args(argc, argv, cmd_property_set_usage, &types, &object,
+				&name, &value, 3))
+		return 1;
 
 	ret = setget_prop(types, object, name, value);
 
@@ -399,8 +398,9 @@ static int cmd_property_list(int argc, char **argv)
 	char *object = NULL;
 	int types = 0;
 
-	parse_args(argc, argv, cmd_property_list_usage,
-		   &types, &object, NULL, NULL, 1);
+	if (parse_args(argc, argv, cmd_property_list_usage, &types, &object,
+				NULL, NULL, 1))
+		return 1;
 
 	ret = dump_props(types, object, 1);
 

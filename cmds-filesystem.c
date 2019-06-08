@@ -26,6 +26,7 @@
 #include <ftw.h>
 #include <mntent.h>
 #include <linux/limits.h>
+#include <linux/version.h>
 #include <getopt.h>
 
 #include <btrfsutil.h>
@@ -39,12 +40,14 @@
 #include "list_sort.h"
 #include "disk-io.h"
 #include "help.h"
+#include "fsfeatures.h"
 
 /*
  * for btrfs fi show, we maintain a hash of fsids we've already printed.
  * This way we don't print dups if a given FS is mounted more than once.
  */
 static struct seen_fsid *seen_fsid_hash[SEEN_FSID_HASH_SIZE] = {NULL,};
+static mode_t defrag_open_mode = O_RDONLY;
 
 static const char * const filesystem_cmd_group_usage[] = {
 	"btrfs filesystem [<group>] <command> [<args>]",
@@ -131,7 +134,7 @@ static int cmd_filesystem_df(int argc, char **argv)
 	clean_args_no_options(argc, argv, cmd_filesystem_df_usage);
 
 	if (check_argc_exact(argc - optind, 1))
-		usage(cmd_filesystem_df_usage);
+		return 1;
 
 	path = argv[optind];
 
@@ -708,12 +711,12 @@ static int cmd_filesystem_show(int argc, char **argv)
 			where = BTRFS_SCAN_MOUNTED;
 			break;
 		default:
-			usage(cmd_filesystem_show_usage);
+			usage_unknown_option(cmd_filesystem_show_usage, argv);
 		}
 	}
 
 	if (check_argc_max(argc, optind + 1))
-		usage(cmd_filesystem_show_usage);
+		return 1;
 
 	if (argc > optind) {
 		search = argv[optind];
@@ -824,7 +827,7 @@ static int cmd_filesystem_sync(int argc, char **argv)
 	clean_args_no_options(argc, argv, cmd_filesystem_sync_usage);
 
 	if (check_argc_exact(argc - optind, 1))
-		usage(cmd_filesystem_sync_usage);
+		return 1;
 
 	err = btrfs_util_sync(argv[optind]);
 	if (err) {
@@ -880,7 +883,7 @@ static int defrag_callback(const char *fpath, const struct stat *sb,
 	if ((typeflag == FTW_F) && S_ISREG(sb->st_mode)) {
 		if (defrag_global_verbose)
 			printf("%s\n", fpath);
-		fd = open(fpath, O_RDWR);
+		fd = open(fpath, defrag_open_mode);
 		if (fd < 0) {
 			goto error;
 		}
@@ -916,6 +919,13 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 	int ret = 0;
 	int compress_type = BTRFS_COMPRESS_NONE;
 	DIR *dirstream;
+
+	/*
+	 * Kernel 4.19+ supports defragmention of files open read-only,
+	 * otherwise it's an ETXTBSY error
+	 */
+	if (get_running_kernel_version() < KERNEL_VERSION(4,19,0))
+		defrag_open_mode = O_RDWR;
 
 	/*
 	 * Kernel has a different default (256K) that is supposed to be safe,
@@ -965,12 +975,12 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 			recursive = 1;
 			break;
 		default:
-			usage(cmd_filesystem_defrag_usage);
+			usage_unknown_option(cmd_filesystem_defrag_usage, argv);
 		}
 	}
 
 	if (check_argc_min(argc - optind, 1))
-		usage(cmd_filesystem_defrag_usage);
+		return 1;
 
 	memset(&defrag_global_range, 0, sizeof(defrag_global_range));
 	defrag_global_range.start = start;
@@ -1017,7 +1027,7 @@ static int cmd_filesystem_defrag(int argc, char **argv)
 		int defrag_err = 0;
 
 		dirstream = NULL;
-		fd = open_file_or_dir(argv[i], &dirstream);
+		fd = open_file_or_dir3(argv[i], &dirstream, defrag_open_mode);
 		if (fd < 0) {
 			error("cannot open %s: %m", argv[i]);
 			ret = -errno;
@@ -1094,7 +1104,7 @@ static int cmd_filesystem_resize(int argc, char **argv)
 	clean_args_no_options_relaxed(argc, argv);
 
 	if (check_argc_exact(argc - optind, 2))
-		usage(cmd_filesystem_resize_usage);
+		return 1;
 
 	amount = argv[optind];
 	path = argv[optind + 1];
@@ -1166,7 +1176,7 @@ static int cmd_filesystem_label(int argc, char **argv)
 
 	if (check_argc_min(argc - optind, 1) ||
 			check_argc_max(argc - optind, 2))
-		usage(cmd_filesystem_label_usage);
+		return 1;
 
 	if (argc - optind > 1) {
 		return set_label(argv[optind], argv[optind + 1]);

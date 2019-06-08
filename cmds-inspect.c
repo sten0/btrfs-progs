@@ -105,12 +105,13 @@ static int cmd_inspect_inode_resolve(int argc, char **argv)
 			verbose = 1;
 			break;
 		default:
-			usage(cmd_inspect_inode_resolve_usage);
+			usage_unknown_option(cmd_inspect_inode_resolve_usage,
+					argv);
 		}
 	}
 
 	if (check_argc_exact(argc - optind, 2))
-		usage(cmd_inspect_inode_resolve_usage);
+		return 1;
 
 	fd = btrfs_open_dir(argv[optind + 1], &dirstream, 1);
 	if (fd < 0)
@@ -166,12 +167,13 @@ static int cmd_inspect_logical_resolve(int argc, char **argv)
 			size = arg_strtou64(optarg);
 			break;
 		default:
-			usage(cmd_inspect_logical_resolve_usage);
+			usage_unknown_option(cmd_inspect_logical_resolve_usage,
+					argv);
 		}
 	}
 
 	if (check_argc_exact(argc - optind, 2))
-		usage(cmd_inspect_logical_resolve_usage);
+		return 1;
 
 	size = min(size, (u64)SZ_64K);
 	inodes = malloc(size);
@@ -279,7 +281,7 @@ static int cmd_inspect_subvolid_resolve(int argc, char **argv)
 	clean_args_no_options(argc, argv, cmd_inspect_subvolid_resolve_usage);
 
 	if (check_argc_exact(argc - optind, 2))
-		usage(cmd_inspect_subvolid_resolve_usage);
+		return 1;
 
 	fd = btrfs_open_dir(argv[optind + 1], &dirstream, 1);
 	if (fd < 0) {
@@ -320,7 +322,7 @@ static int cmd_inspect_rootid(int argc, char **argv)
 	clean_args_no_options(argc, argv, cmd_inspect_rootid_usage);
 
 	if (check_argc_exact(argc - optind, 1))
-		usage(cmd_inspect_rootid_usage);
+		return 1;
 
 	fd = btrfs_open_file_or_dir(argv[optind], &dirstream, 1);
 	if (fd < 0) {
@@ -615,11 +617,12 @@ static int cmd_inspect_min_dev_size(int argc, char **argv)
 			devid = arg_strtou64(optarg);
 			break;
 		default:
-			usage(cmd_inspect_min_dev_size_usage);
+			usage_unknown_option(cmd_inspect_min_dev_size_usage,
+					argv);
 		}
 	}
 	if (check_argc_exact(argc - optind, 1))
-		usage(cmd_inspect_min_dev_size_usage);
+		return 1;
 
 	fd = btrfs_open_dir(argv[optind], &dirstream, 1);
 	if (fd < 0) {

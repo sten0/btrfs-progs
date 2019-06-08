@@ -146,9 +146,8 @@ static int cmd_replace_start(int argc, char **argv)
 		case 'f':
 			force_using_targetdev = 1;
 			break;
-		case '?':
 		default:
-			usage(cmd_replace_start_usage);
+			usage_unknown_option(cmd_replace_start_usage, argv);
 		}
 	}
 
@@ -157,7 +156,7 @@ static int cmd_replace_start(int argc, char **argv)
 		 BTRFS_IOCTL_DEV_REPLACE_CONT_READING_FROM_SRCDEV_MODE_AVOID :
 		 BTRFS_IOCTL_DEV_REPLACE_CONT_READING_FROM_SRCDEV_MODE_ALWAYS;
 	if (check_argc_exact(argc - optind, 3))
-		usage(cmd_replace_start_usage);
+		return 1;
 	path = argv[optind + 2];
 
 	fdmnt = open_path_or_dev_mnt(path, &dirstream, 1);
@@ -295,8 +294,12 @@ static int cmd_replace_start(int argc, char **argv)
 			goto leave_with_error;
 		}
 
-		if (start_args.result !=
-		    BTRFS_IOCTL_DEV_REPLACE_RESULT_NO_ERROR) {
+		if (ret > 0)
+			error("ioctl(DEV_REPLACE_START) '%s': %s", path,
+			      btrfs_err_str(ret));
+
+		if (start_args.result != BTRFS_IOCTL_DEV_REPLACE_RESULT_NO_RESULT &&
+		    start_args.result != BTRFS_IOCTL_DEV_REPLACE_RESULT_NO_ERROR) {
 			error("ioctl(DEV_REPLACE_START) on '%s' returns error: %s",
 				path,
 				replace_dev_result2string(start_args.result));
@@ -341,14 +344,13 @@ static int cmd_replace_status(int argc, char **argv)
 		case '1':
 			once = 1;
 			break;
-		case '?':
 		default:
-			usage(cmd_replace_status_usage);
+			usage_unknown_option(cmd_replace_status_usage, argv);
 		}
 	}
 
 	if (check_argc_exact(argc - optind, 1))
-		usage(cmd_replace_status_usage);
+		return 1;
 
 	path = argv[optind];
 	fd = btrfs_open_dir(path, &dirstream, 1);
@@ -509,12 +511,12 @@ static int cmd_replace_cancel(int argc, char **argv)
 		switch (c) {
 		case '?':
 		default:
-			usage(cmd_replace_cancel_usage);
+			usage_unknown_option(cmd_replace_cancel_usage, argv);
 		}
 	}
 
 	if (check_argc_exact(argc - optind, 1))
-		usage(cmd_replace_cancel_usage);
+		return 1;
 
 	path = argv[optind];
 	fd = btrfs_open_dir(path, &dirstream, 1);

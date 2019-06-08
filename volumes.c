@@ -744,6 +744,7 @@ int btrfs_add_device(struct btrfs_trans_handle *trans,
 	write_extent_buffer(leaf, fs_info->fs_devices->metadata_uuid, ptr,
 			    BTRFS_UUID_SIZE);
 	btrfs_mark_buffer_dirty(leaf);
+	fs_info->fs_devices->total_rw_bytes += device->total_bytes;
 	ret = 0;
 
 out:
@@ -988,8 +989,12 @@ int btrfs_alloc_chunk(struct btrfs_trans_handle *trans,
 			min_stripe_size = SZ_64M;
 			max_stripes = BTRFS_MAX_DEVS(info);
 		} else if (type & BTRFS_BLOCK_GROUP_METADATA) {
-			calc_size = SZ_1G;
-			max_chunk_size = 4 * calc_size;
+			/* for larger filesystems, use larger metadata chunks */
+			if (info->fs_devices->total_rw_bytes > 50ULL * SZ_1G)
+				max_chunk_size = SZ_1G;
+			else
+				max_chunk_size = SZ_256M;
+			calc_size = max_chunk_size;
 			min_stripe_size = SZ_32M;
 			max_stripes = BTRFS_MAX_DEVS(info);
 		}
@@ -2060,6 +2065,8 @@ static int read_one_dev(struct btrfs_fs_info *fs_info,
 
 	fill_device_from_item(leaf, dev_item, device);
 	device->dev_root = fs_info->dev_root;
+	fs_info->fs_devices->total_rw_bytes +=
+		btrfs_device_total_bytes(leaf, dev_item);
 	return ret;
 }
 

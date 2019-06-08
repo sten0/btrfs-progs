@@ -987,12 +987,12 @@ int cmd_filesystem_usage(int argc, char **argv)
 			tabular = 1;
 			break;
 		default:
-			usage(cmd_filesystem_usage_usage);
+			usage_unknown_option(cmd_filesystem_usage_usage, argv);
 		}
 	}
 
 	if (check_argc_min(argc - optind, 1))
-		usage(cmd_filesystem_usage_usage);
+		return 1;
 
 	for (i = optind; i < argc; i++) {
 		int fd;
