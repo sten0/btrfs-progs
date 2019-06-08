@@ -12,8 +12,6 @@ SHELL := sh -e
 CFLAGS := $(shell dpkg-buildflags --get CFLAGS)
 CFLAGS := $(patsubst -O2,-Os,$(CFLAGS))
 
-ZSTD := $(shell grep '^udeb: ' /var/lib/dpkg/info/libzstd*.shlibs)
-
 %:
 	dh ${@} --with bash-completion,python3
 
@@ -21,11 +19,7 @@ override_dh_autoreconf:
 	dh_autoreconf ./autogen.sh
 
 override_dh_auto_configure:
-ifneq (,$(ZSTD))
-	dh_auto_configure -- --bindir=/bin --disable-convert --enable-zstd
-else
-	dh_auto_configure -- --bindir=/bin --disable-convert --disable-zstd
-endif
+	dh_auto_configure -- --bindir=/bin --disable-convert
 
 override_dh_auto_build:
 	dh_auto_build -- V=1
