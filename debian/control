@@ -19,6 +19,7 @@ Build-Depends: debhelper (>= 11),
 	       python3-setuptools,
 	       dh-python,
 Standards-Version: 4.3.0
+Rules-Requires-Root: no
 Homepage: http://btrfs.wiki.kernel.org/
 Vcs-Browser: https://salsa.debian.org/debian/btrfs-progs/tree/debian
 Vcs-Git: https://salsa.debian.org/debian/btrfs-progs.git -b debian
