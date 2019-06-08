@@ -1,8 +1,7 @@
 Source: btrfs-progs
 Section: admin
 Priority: optional
-Maintainer: Dimitri John Ledkov <xnox@debian.org>
-Uploaders: Dimitri John Ledkov <xnox@ubuntu.com>
+Maintainer: Debian QA Group <packages@qa.debian.org>
 Build-Depends: debhelper (>= 11),
                e2fslibs-dev,
                pkg-config,
