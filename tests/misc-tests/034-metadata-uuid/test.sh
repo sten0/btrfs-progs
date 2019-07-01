@@ -27,7 +27,7 @@ function read_metadata_uuid {
 function check_btrfstune {
 	local fsid
 
-	echo "Checking btrfstune logic" >> "$RESULTS"
+	_log "Checking btrfstune logic"
 	# test with random uuid
 	run_check $SUDO_HELPER "$TOP/btrfstune" -m "$TEST_DEV"
 
@@ -39,21 +39,21 @@ function check_btrfstune {
 		$SUDO_HELPER "$TOP/btrfstune" -S 1 "$TEST_DEV"
 
 	# test that setting both seed and -m|M is forbidden
-	run_check $SUDO_HELPER "$TOP/mkfs.btrfs" -f "$TEST_DEV"
+	run_check_mkfs_test_dev
 	run_mustfail "Succeeded setting seed and changing fs uuid" \
 		$SUDO_HELPER "$TOP/btrfstune" -S 1 -m "$TEST_DEV"
 
 	# test that having -m|-M on seed device is forbidden
-	run_check $SUDO_HELPER "$TOP/mkfs.btrfs" -f "$TEST_DEV"
+	run_check_mkfs_test_dev
 	run_check $SUDO_HELPER "$TOP/btrfstune" -S 1 "$TEST_DEV"
-	run_mustfail "Succeded changing fsid on a seed device" $SUDO_HELPER "$TOP/btrfstune" -m "$TEST_DEV"
+	run_mustfail "Succeded changing fsid on a seed device" \
+		$SUDO_HELPER "$TOP/btrfstune" -m "$TEST_DEV"
 
 	# test that using -U|-u on an fs with METADATA_UUID flag is forbidden
-	run_check $SUDO_HELPER "$TOP/mkfs.btrfs" -f "$TEST_DEV"
+	run_check_mkfs_test_dev
 	run_check $SUDO_HELPER "$TOP/btrfstune" -m "$TEST_DEV"
 	run_mustfail "Succeeded triggering FSID rewrite while METADATA_UUID is active" \
 		$SUDO_HELPER "$TOP/btrfstune" -u  "$TEST_DEV"
-
 }
 
 function check_dump_super_output {
@@ -62,7 +62,7 @@ function check_dump_super_output {
 	local dev_item_match
 	local old_metadata_uuid
 
-	echo "Checking dump-super output" >> "$RESULTS"
+	_log "Checking dump-super output"
 	# assert that metadata/fsid match on non-changed fs
 	fsid=$(read_fsid "$TEST_DEV")
 	metadata_uuid=$(read_metadata_uuid "$TEST_DEV")
@@ -74,7 +74,7 @@ function check_dump_super_output {
 	[ $dev_item_match = "[match]" ] || _fail "dev_item.fsid doesn't match on non-metadata uuid fs"
 
 
-	echo "Checking output after fsid change" >> "$RESULTS"
+	_log "Checking output after fsid change"
 	# change metadatauuid and ensure everything in the output is still correct
 	old_metadata_uuid=$metadata_uuid
 	run_check $SUDO_HELPER "$TOP/btrfstune" -M d88c8333-a652-4476-b225-2e9284eb59f1 "$TEST_DEV"
@@ -83,24 +83,24 @@ function check_dump_super_output {
 	dev_item_match=$(run_check_stdout $SUDO_HELPER "$TOP/btrfs" \
 		inspect-internal dump-super "$TEST_DEV" | awk '/dev_item.fsid/ {print $3}')
 
-	[ "$dev_item_match" = "[match]" ] || _fail "dev_item.fsid doesn't match on metadata uuid fs"
-	[ "$fsid" = "d88c8333-a652-4476-b225-2e9284eb59f1" ] || _fail "btrfstune metadata UUID change failed"
-	[ "$old_metadata_uuid" = "$metadata_uuid" ] || _fail "Metadata uuid change unexpectedly"
+	[ "$dev_item_match" = "[match]" ] || _fail "dev_item.fsid doesn't match on metadata_uuid fs"
+	[ "$fsid" = "d88c8333-a652-4476-b225-2e9284eb59f1" ] || _fail "btrfstune metadata_uuid change failed"
+	[ "$old_metadata_uuid" = "$metadata_uuid" ] || _fail "metadata_uuid changed unexpectedly"
 
-	echo "Checking for incompat textual representation" >> "$RESULTS"
+	_log "Checking for incompat textual representation"
 	# check for textual output of the new incompat feature
 	run_check_stdout $SUDO_HELPER "$TOP/btrfs" inspect-internal dump-super \
 		"$TEST_DEV" | grep -q METADATA_UUID
 	[ $? -eq 0 ] || _fail "Didn't find textual representation of METADATA_UUID feature"
 
-	echo "Checking setting fsid back to original" >> "$RESULTS"
+	_log "Checking setting fsid back to original"
 	# ensure that  setting the fsid back to the original works
 	run_check $SUDO_HELPER "$TOP/btrfstune" -M "$old_metadata_uuid" "$TEST_DEV"
 
 	fsid=$(read_fsid "$TEST_DEV")
 	metadata_uuid=$(read_metadata_uuid "$TEST_DEV")
 
-	[ "$fsid" = "$metadata_uuid" ] || _fail "FSID and METADATA_UUID don't match"
+	[ "$fsid" = "$metadata_uuid" ] || _fail "fsid and metadata_uuid don't match"
 	run_check_stdout $SUDO_HELPER "$TOP/btrfs" inspect-internal dump-super \
 		"$TEST_DEV" | grep -q METADATA_UUID
 	[ $? -eq 1 ] || _fail "METADATA_UUID feature still shown as enabled"
@@ -112,48 +112,48 @@ function check_image_restore {
 	local fsid_restored
 	local metadata_uuid_restored
 
-	echo "TESTING btrfs-image restore" >> "$RESULTS"
-	run_check $SUDO_HELPER "$TOP/mkfs.btrfs" -f "$TEST_DEV"
+	_log "Testing btrfs-image restore"
+	run_check_mkfs_test_dev
 	run_check $SUDO_HELPER "$TOP/btrfstune" -m "$TEST_DEV"
 	fsid=$(read_fsid "$TEST_DEV")
 	metadata_uuid=$(read_metadata_uuid "$TEST_DEV")
 	run_mayfail $SUDO_HELPER "$TOP/btrfs-image" "$TEST_DEV" /tmp/test-img.dump
 	# erase the fs by creating a new one, wipefs is not sufficient as it just
 	# deletes the fs magic string
-	run_check $SUDO_HELPER "$TOP/mkfs.btrfs" -f "$TEST_DEV"
+	run_check_mkfs_test_dev
 	run_check $SUDO_HELPER "$TOP/btrfs-image" -r /tmp/test-img.dump "$TEST_DEV"
 	fsid_restored=$(read_fsid "$TEST_DEV")
 	metadata_uuid_restored=$(read_metadata_uuid "$TEST_DEV")
 
-	[ "$fsid" = "$fsid_restored" ] || _fail "FSID don't match after restore"
-	[ "$metadata_uuid" = "$metadata_uuid_restored" ] || _fail "metadata uuids don't match after restore"
+	[ "$fsid" = "$fsid_restored" ] || _fail "fsid don't match after restore"
+	[ "$metadata_uuid" = "$metadata_uuid_restored" ] || _fail "metadata_uuids don't match after restore"
 }
 
 function check_inprogress_flag {
 	# check the flag is indeed cleared
 	run_check_stdout $SUDO_HELPER "$TOP/btrfs" inspect-internal dump-super \
-		$1 | grep -q 0x1000000001
+		"$1" | grep -q 0x1000000001
 	[ $? -eq 1 ] || _fail "Found BTRFS_SUPER_FLAG_CHANGING_FSID_V2 set for $1"
 
 	run_check_stdout $SUDO_HELPER $TOP/btrfs inspect-internal dump-super \
-		$2 | grep -q 0x1000000001
+		"$2" | grep -q 0x1000000001
 	[ $? -eq 1 ] || _fail "Found BTRFS_SUPER_FLAG_CHANGING_FSID_V2 set for $2"
 }
 
 function check_completed {
 	# check that metadata uuid is indeed completed
 	run_check_stdout $SUDO_HELPER "$TOP/btrfs" inspect-internal dump-super \
-		$1 | grep -q METADATA_UUID
-	[ $? -eq 0 ] || _fail "METADATA_UUID not set on $1"
+		"$1" | grep -q METADATA_UUID
+	[ $? -eq 0 ] || _fail "metadata_uuid not set on $1"
 
-	run_check_stdout $SUDO_HELPER $TOP/btrfs inspect-internal dump-super \
-		$2 | grep -q METADATA_UUID
-	[ $? -eq 0 ] || _fail "METADATA_UUID not set on $2"
+	run_check_stdout $SUDO_HELPER "$TOP/btrfs" inspect-internal dump-super \
+		"$2" | grep -q METADATA_UUID
+	[ $? -eq 0 ] || _fail "metadata_uuid not set on $2"
 }
 
 function check_multi_fsid_change {
-	check_inprogress_flag $1 $2
-	check_completed $1 $2
+	check_inprogress_flag "$1" "$2"
+	check_completed "$1" "$2"
 }
 
 function failure_recovery {
@@ -173,31 +173,31 @@ function failure_recovery {
 	run_check $SUDO_HELPER umount "$TEST_MNT"
 
 	# perform any specific check
-	$3 "$loop1" "$loop2"
+	"$3" "$loop1" "$loop2"
 
 	# cleanup
 	run_check $SUDO_HELPER losetup -d "$loop1"
 	run_check $SUDO_HELPER losetup -d "$loop2"
-	rm -f "$image1" "$image2"
+	rm -f -- "$image1" "$image2"
 }
 
 function reload_btrfs {
-	rmmod btrfs
-	modprobe btrfs
+	run_check $SUDO_HELPER rmmod btrfs
+	run_check $SUDO_HELPER modprobe btrfs
 }
 
 # for full coverage we need btrfs to actually be a module
 modinfo btrfs > /dev/null 2>&1 || _not_run "btrfs must be a module"
-modprobe -r btrfs || _not_run "btrfs must be unloadable"
-modprobe btrfs || _not_run "loading btrfs module failed"
+run_mayfail $SUDO_HELPER modprobe -r btrfs || _not_run "btrfs must be unloadable"
+run_mayfail $SUDO_HELPER modprobe btrfs || _not_run "loading btrfs module failed"
 
-run_check $SUDO_HELPER "$TOP/mkfs.btrfs" -f "$TEST_DEV"
+run_check_mkfs_test_dev
 check_btrfstune
 
-run_check $SUDO_HELPER "$TOP/mkfs.btrfs" -f "$TEST_DEV"
+run_check_mkfs_test_dev
 check_dump_super_output
 
-run_check $SUDO_HELPER "$TOP/mkfs.btrfs" -f "$TEST_DEV"
+run_check_mkfs_test_dev
 check_image_restore
 
 # disk1 is an image which has no metadata uuid flags set and disk2 is part of

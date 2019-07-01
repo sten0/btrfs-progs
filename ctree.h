@@ -56,8 +56,6 @@ struct btrfs_free_space_ctl;
 
 #define BTRFS_MAX_LEVEL 8
 
-#define BTRFS_COMPAT_EXTENT_TREE_V0
-
 /* holds pointers to all of the tree roots */
 #define BTRFS_ROOT_TREE_OBJECTID 1ULL
 
@@ -2395,19 +2393,6 @@ static inline struct btrfs_disk_balance_args* btrfs_balance_item_sys(
 	struct btrfs_balance_item *p;
 	p = (struct btrfs_balance_item *)(eb->data + offset);
 	return &p->sys;
-}
-
-/*
- * btrfs_dev_stats_item helper, returns pointer to the raw array, do the
- * endianness conversion, @dsi is offset to eb data
- */
-static inline __le64* btrfs_dev_stats_values(struct extent_buffer *eb,
-		struct btrfs_dev_stats_item *dsi)
-{
-	unsigned long offset = (unsigned long)dsi;
-	struct btrfs_dev_stats_item *p;
-	p = (struct btrfs_dev_stats_item *)(eb->data + offset);
-	return p->values;
 }
 
 /*

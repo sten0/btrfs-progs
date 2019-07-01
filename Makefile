@@ -24,6 +24,10 @@
 #   DEBUG_CFLAGS   additional compiler flags for debugging build
 #   EXTRA_CFLAGS   additional compiler flags
 #   EXTRA_LDFLAGS  additional linker flags
+#   EXTRA_PYTHON_CFLAGS   additional compiler flags to pass when building Python
+#                         library
+#   EXTRA_PYTHON_LDFLAGS  additional linker flags to pass when building Python
+#                         library
 #
 # Testing-specific options (see also tests/README.md):
 #   TEST=GLOB      run test(s) from directories matching GLOB
@@ -97,6 +101,11 @@ LDFLAGS = $(SUBST_LDFLAGS) \
 	  -rdynamic -L$(TOPDIR) \
 	  $(DEBUG_LDFLAGS_INTERNAL) \
 	  $(EXTRA_LDFLAGS)
+
+LIBBTRFSUTIL_LDFLAGS = $(SUBST_LDFLAGS) \
+		       -rdynamic -L$(TOPDIR) \
+		       $(DEBUG_LDFLAGS_INTERNAL) \
+		       $(EXTRA_LDFLAGS)
 
 LIBS = $(LIBS_BASE)
 LIBBTRFS_LIBS = $(LIBS_BASE)
@@ -424,7 +433,7 @@ libbtrfsutil/%.o: libbtrfsutil/%.c
 
 libbtrfsutil.so.$(libbtrfsutil_version): $(libbtrfsutil_objects)
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(LIBBTRFSUTIL_CFLAGS) $(libbtrfsutil_objects) \
+	$(Q)$(CC) $(LIBBTRFSUTIL_CFLAGS) $(libbtrfsutil_objects) $(LIBBTRFSUTIL_LDFLAGS) \
 		-shared -Wl,-soname,libbtrfsutil.so.$(libbtrfsutil_major) -o $@
 
 libbtrfsutil.a: $(libbtrfsutil_objects)
@@ -439,7 +448,7 @@ ifeq ($(PYTHON_BINDINGS),1)
 libbtrfsutil_python: libbtrfsutil.so.$(libbtrfsutil_major) libbtrfsutil.so libbtrfsutil/btrfsutil.h
 	@echo "    [PY]     libbtrfsutil"
 	$(Q)cd libbtrfsutil/python; \
-		CFLAGS= LDFLAGS= $(PYTHON) setup.py $(SETUP_PY_Q) build_ext -i build
+		CFLAGS="$(EXTRA_PYTHON_CFLAGS)" LDFLAGS="$(EXTRA_PYTHON_LDFLAGS)" $(PYTHON) setup.py $(SETUP_PY_Q) build_ext -i build
 
 .PHONY: libbtrfsutil_python
 endif

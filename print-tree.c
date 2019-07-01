@@ -422,18 +422,8 @@ void print_extent_item(struct extent_buffer *eb, int slot, int metadata)
 	u64 offset;
 	char flags_str[32] = {0};
 
-	if (item_size < sizeof(*ei)) {
-#ifdef BTRFS_COMPAT_EXTENT_TREE_V0
-		struct btrfs_extent_item_v0 *ei0;
-		BUG_ON(item_size != sizeof(*ei0));
-		ei0 = btrfs_item_ptr(eb, slot, struct btrfs_extent_item_v0);
-		printf("\t\trefs %u\n",
-		       btrfs_extent_refs_v0(eb, ei0));
+	if (item_size < sizeof(*ei))
 		return;
-#else
-		BUG();
-#endif
-	}
 
 	ei = btrfs_item_ptr(eb, slot, struct btrfs_extent_item);
 	flags = btrfs_extent_flags(eb, ei);
@@ -501,21 +491,6 @@ void print_extent_item(struct extent_buffer *eb, int slot, int metadata)
 	}
 	WARN_ON(ptr > end);
 }
-
-#ifdef BTRFS_COMPAT_EXTENT_TREE_V0
-static void print_extent_ref_v0(struct extent_buffer *eb, int slot)
-{
-	struct btrfs_extent_ref_v0 *ref0;
-
-	ref0 = btrfs_item_ptr(eb, slot, struct btrfs_extent_ref_v0);
-	printf("\t\textent back ref root %llu gen %llu "
-		"owner %llu num_refs %lu\n",
-		(unsigned long long)btrfs_ref_root_v0(eb, ref0),
-		(unsigned long long)btrfs_ref_generation_v0(eb, ref0),
-		(unsigned long long)btrfs_ref_objectid_v0(eb, ref0),
-		(unsigned long)btrfs_ref_count_v0(eb, ref0));
-}
-#endif
 
 static void print_root_ref(struct extent_buffer *leaf, int slot, const char *tag)
 {
@@ -978,24 +953,32 @@ static void print_balance_item(struct extent_buffer *eb,
 static void print_dev_stats(struct extent_buffer *eb,
 		struct btrfs_dev_stats_item *stats, u32 size)
 {
-	int i;
+	struct btrfs_dev_stats_item *item;
+	const unsigned long offset = (unsigned long)stats;
 	u32 known = BTRFS_DEV_STAT_VALUES_MAX * sizeof(__le64);
-	__le64 *values = btrfs_dev_stats_values(eb, stats);
+	int i;
+
+	item = (struct btrfs_dev_stats_item *)(eb->data + offset);
 
 	printf("\t\tdevice stats\n");
 	printf("\t\twrite_errs %llu read_errs %llu flush_errs %llu corruption_errs %llu generation %llu\n",
-		(unsigned long long)le64_to_cpu(values[BTRFS_DEV_STAT_WRITE_ERRS]),
-		(unsigned long long)le64_to_cpu(values[BTRFS_DEV_STAT_READ_ERRS]),
-		(unsigned long long)le64_to_cpu(values[BTRFS_DEV_STAT_FLUSH_ERRS]),
-		(unsigned long long)le64_to_cpu(values[BTRFS_DEV_STAT_CORRUPTION_ERRS]),
-		(unsigned long long)le64_to_cpu(values[BTRFS_DEV_STAT_GENERATION_ERRS]));
+		(unsigned long long)get_unaligned_le64(
+				&item->values[BTRFS_DEV_STAT_WRITE_ERRS]),
+		(unsigned long long)get_unaligned_le64(
+				&item->values[BTRFS_DEV_STAT_READ_ERRS]),
+		(unsigned long long)get_unaligned_le64(
+				&item->values[BTRFS_DEV_STAT_FLUSH_ERRS]),
+		(unsigned long long)get_unaligned_le64(
+				&item->values[BTRFS_DEV_STAT_CORRUPTION_ERRS]),
+		(unsigned long long)get_unaligned_le64(
+				&item->values[BTRFS_DEV_STAT_GENERATION_ERRS]));
 
 	if (known < size) {
 		printf("\t\tunknown stats item bytes %u", size - known);
 		for (i = BTRFS_DEV_STAT_VALUES_MAX; i * sizeof(__le64) < size; i++) {
 			printf("\t\tunknown item %u offset %zu value %llu\n",
 				i, i * sizeof(__le64),
-				(unsigned long long)le64_to_cpu(values[i]));
+				(unsigned long long)le64_to_cpu(&item->values[i]));
 		}
 	}
 }
@@ -1310,11 +1293,7 @@ void btrfs_print_leaf(struct extent_buffer *eb)
 			print_shared_data_ref(eb, i);
 			break;
 		case BTRFS_EXTENT_REF_V0_KEY:
-#ifdef BTRFS_COMPAT_EXTENT_TREE_V0
-			print_extent_ref_v0(eb, i);
-#else
-			BUG();
-#endif
+			printf("\t\textent ref v0 (deprecated)\n");
 			break;
 		case BTRFS_CSUM_ITEM_KEY:
 			printf("\t\tcsum item\n");
