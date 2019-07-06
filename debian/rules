@@ -28,6 +28,7 @@ override_dh_auto_install:
 	dh_auto_install -- install install_python
 	mkdir -p debian/tmp/sbin
 	mv debian/tmp/bin/fsck.btrfs debian/tmp/sbin/fsck.btrfs
+	mv debian/tmp/bin/mkfs.btrfs debian/tmp/sbin/mkfs.btrfs
 
 	# Adding initramfs-tools integration
 	install -D -m 0755 debian/local/btrfs.hook debian/btrfs-progs/usr/share/initramfs-tools/hooks/btrfs
