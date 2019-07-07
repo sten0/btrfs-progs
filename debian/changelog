@@ -1,3 +1,11 @@
+btrfs-progs (5.2-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Install mkfs.btrfs to /sbin (Nicholas D Steeves; closes: #911623).
+  * Fix a printf format-security fatal warning.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Sun, 07 Jul 2019 23:33:26 +0200
+
 btrfs-progs (5.1.1-1) experimental; urgency=medium
 
   * New upstream release.
