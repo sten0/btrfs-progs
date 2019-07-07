@@ -22,13 +22,13 @@
 #include <stdbool.h>
 
 #if BTRFS_FLAT_INCLUDES
-#include "list.h"
+#include "kernel-lib/list.h"
 #include "kerncompat.h"
-#include "radix-tree.h"
+#include "kernel-lib/radix-tree.h"
 #include "extent-cache.h"
 #include "extent_io.h"
 #include "ioctl.h"
-#include "sizes.h"
+#include "kernel-lib/sizes.h"
 #else
 #include <btrfs/list.h>
 #include <btrfs/kerncompat.h>
@@ -1058,8 +1058,29 @@ struct btrfs_qgroup_limit_item {
 struct btrfs_space_info {
 	u64 flags;
 	u64 total_bytes;
+	/*
+	 * Space already used.
+	 * Only accounting space in current extent tree, thus delayed ref
+	 * won't be accounted here.
+	 */
 	u64 bytes_used;
+
+	/*
+	 * Space being pinned down.
+	 * So extent allocator will not try to allocate space from them.
+	 *
+	 * For cases like extents being freed in current transaction, or
+	 * manually pinned bytes for re-initializing certain trees.
+	 */
 	u64 bytes_pinned;
+
+	/*
+	 * Space being reserved.
+	 * Space has already being reserved but not yet reach extent tree.
+	 *
+	 * New tree blocks allocated in current transaction goes here.
+	 */
+	u64 bytes_reserved;
 	int full;
 	struct list_head list;
 };
@@ -2395,6 +2416,19 @@ static inline struct btrfs_disk_balance_args* btrfs_balance_item_sys(
 	return &p->sys;
 }
 
+static inline u64 btrfs_dev_stats_value(const struct extent_buffer *eb,
+					const struct btrfs_dev_stats_item *ptr,
+					int index)
+{
+	u64 val;
+
+	read_extent_buffer(eb, &val,
+			   offsetof(struct btrfs_dev_stats_item, values) +
+			    ((unsigned long)ptr) + (index * sizeof(u64)),
+			   sizeof(val));
+	return val;
+}
+
 /*
  * this returns the number of bytes used by the item on disk, minus the
  * size of any extent headers.  If a file is compressed on disk, this is
@@ -2513,6 +2547,9 @@ int btrfs_update_extent_ref(struct btrfs_trans_handle *trans,
 			    u64 root_objectid, u64 ref_generation,
 			    u64 owner_objectid);
 int btrfs_write_dirty_block_groups(struct btrfs_trans_handle *trans);
+int update_space_info(struct btrfs_fs_info *info, u64 flags,
+		      u64 total_bytes, u64 bytes_used,
+		      struct btrfs_space_info **space_info);
 int btrfs_free_block_groups(struct btrfs_fs_info *info);
 int btrfs_read_block_groups(struct btrfs_root *root);
 struct btrfs_block_group_cache *
@@ -2773,7 +2810,7 @@ static inline int is_fstree(u64 rootid)
 	return 0;
 }
 
-void btrfs_uuid_to_key(const u8 *uuid, u64 *key_objectid, u64 *key_offset);
+void btrfs_uuid_to_key(const u8 *uuid, struct btrfs_key *key);
 
 /* inode.c */
 int check_dir_conflict(struct btrfs_root *root, char *name, int namelen,

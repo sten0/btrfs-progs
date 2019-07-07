@@ -36,14 +36,18 @@
 #include "disk-io.h"
 #include "volumes.h"
 #include "transaction.h"
-#include "utils.h"
-#include "list_sort.h"
-#include "help.h"
-#include "rbtree-utils.h"
+#include "common/utils.h"
+#include "common/path-utils.h"
+#include "common/device-utils.h"
+#include "common/device-scan.h"
+#include "kernel-lib/list_sort.h"
+#include "common/help.h"
+#include "common/rbtree-utils.h"
 #include "mkfs/common.h"
 #include "mkfs/rootdir.h"
 #include "kernel-lib/crc32c.h"
-#include "fsfeatures.h"
+#include "common/fsfeatures.h"
+#include "common/box.h"
 
 static int verbose = 1;
 
@@ -59,10 +63,21 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 {
 	struct btrfs_fs_info *fs_info = root->fs_info;
 	struct btrfs_trans_handle *trans;
+	struct btrfs_space_info *sinfo;
 	u64 bytes_used;
 	u64 chunk_start = 0;
 	u64 chunk_size = 0;
 	int ret;
+
+	/* Create needed space info to trace extents reservation */
+	ret = update_space_info(fs_info, BTRFS_BLOCK_GROUP_METADATA,
+				0, 0, &sinfo);
+	if (ret < 0)
+		return ret;
+	ret = update_space_info(fs_info, BTRFS_BLOCK_GROUP_DATA,
+				0, 0, &sinfo);
+	if (ret < 0)
+		return ret;
 
 	trans = btrfs_start_transaction(root, 1);
 	BUG_ON(IS_ERR(trans));
@@ -771,7 +786,7 @@ out:
 	return ret;
 }
 
-int main(int argc, char **argv)
+int BOX_MAIN(mkfs)(int argc, char **argv)
 {
 	char *file;
 	struct btrfs_root *root;
@@ -959,9 +974,9 @@ int main(int argc, char **argv)
 
 	while (dev_cnt-- > 0) {
 		file = argv[optind++];
-		if (source_dir_set && is_path_exist(file) == 0)
+		if (source_dir_set && path_exists(file) == 0)
 			ret = 0;
-		else if (is_block_device(file) == 1)
+		else if (path_is_block_device(file) == 1)
 			ret = test_dev_for_mkfs(file, force_overwrite);
 		else
 			ret = test_status_for_mkfs(file, force_overwrite);
@@ -1044,7 +1059,7 @@ int main(int argc, char **argv)
 		int oflags = O_RDWR;
 		struct stat statbuf;
 
-		if (is_path_exist(file) == 0)
+		if (path_exists(file) == 0)
 			oflags |= O_CREAT;
 
 		fd = open(file, oflags, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP |
@@ -1355,7 +1370,7 @@ out:
 		dev_cnt = argc - optind;
 		while (dev_cnt-- > 0) {
 			file = argv[optind++];
-			if (is_block_device(file) == 1)
+			if (path_is_block_device(file) == 1)
 				btrfs_register_one_device(file);
 		}
 	}

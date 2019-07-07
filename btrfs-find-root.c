@@ -29,14 +29,14 @@
 #include "disk-io.h"
 #include "print-tree.h"
 #include "transaction.h"
-#include "list.h"
+#include "kernel-lib/list.h"
 #include "volumes.h"
-#include "utils.h"
-#include "crc32c.h"
+#include "common/utils.h"
+#include "kernel-lib/crc32c.h"
 #include "extent-cache.h"
 #include "find-root.h"
-#include "help.h"
-#include "commands.h"
+#include "common/help.h"
+#include "cmds/commands.h"
 
 /*
  * Get reliable generation and level for given root.
@@ -192,7 +192,7 @@ int main(int argc, char **argv)
 			usage_command(&btrfs_find_root_cmd, 0, 0);
 			return 0;
 		default:
-			usage_unknown_option(btrfs_find_root_usage, argv);
+			usage_unknown_option(&btrfs_find_root_cmd, argv);
 		}
 	}
 

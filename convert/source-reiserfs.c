@@ -24,8 +24,8 @@
 #include <stdbool.h>
 #include "disk-io.h"
 #include "transaction.h"
-#include "utils.h"
-#include "bitops.h"
+#include "common/utils.h"
+#include "kernel-lib/bitops.h"
 #include "convert/common.h"
 #include "convert/source-reiserfs.h"
 

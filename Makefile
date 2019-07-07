@@ -7,6 +7,11 @@
 #   clean       clean built binaries (not the documentation)
 #   clean-all   clean as above, clean docs and generated files
 #
+# All-in-one binary (busybox style):
+#   btrfs.box         single binary with functionality of mkfs.btrfs, btrfs-image,
+#                     btrfs-convert and btrfstune, selected by the file name
+#   btrfs.box.static  dtto, static version
+#
 # Tuning by variables (environment or make arguments):
 #   V=1            verbose, print command lines (default: quiet)
 #   C=1            run checker before compilation (default checker: sparse)
@@ -69,7 +74,9 @@ TOPDIR := .
 
 # Disable certain GCC 8 + glibc 2.28 warning for snprintf()
 # where string truncation for snprintf() is expected.
-DISABLE_WARNING_FLAGS := $(call cc-disable-warning, format-truncation)
+# For GCC9 disable address-of-packed (under W=1)
+DISABLE_WARNING_FLAGS := $(call cc-disable-warning, format-truncation) \
+	$(call cc-disable-warning, address-of-packed-member)
 
 # Common build flags
 CFLAGS = $(SUBST_CFLAGS) \
@@ -80,7 +87,6 @@ CFLAGS = $(SUBST_CFLAGS) \
 	 -fno-strict-aliasing \
 	 -fPIC \
 	 -I$(TOPDIR) \
-	 -I$(TOPDIR)/kernel-lib \
 	 -I$(TOPDIR)/libbtrfsutil \
 	 $(DISABLE_WARNING_FLAGS) \
 	 $(EXTRAWARN_CFLAGS) \
@@ -127,22 +133,25 @@ CHECKER_FLAGS := -include $(check_defs) -D__CHECKER__ \
 
 objects = ctree.o disk-io.o kernel-lib/radix-tree.o extent-tree.o print-tree.o \
 	  root-tree.o dir-item.o file-item.o inode-item.o inode-map.o \
-	  extent-cache.o extent_io.o volumes.o utils.o repair.o \
+	  extent-cache.o extent_io.o volumes.o common/utils.o repair.o \
 	  qgroup.o free-space-cache.o kernel-lib/list_sort.o props.o \
-	  kernel-shared/ulist.o qgroup-verify.o backref.o string-table.o task-utils.o \
-	  inode.o file.o find-root.o free-space-tree.o help.o send-dump.o \
-	  fsfeatures.o kernel-lib/tables.o kernel-lib/raid56.o transaction.o \
-	  delayed-ref.o
-cmds_objects = cmds-subvolume.o cmds-filesystem.o cmds-device.o cmds-scrub.o \
-	       cmds-inspect.o cmds-balance.o cmds-send.o cmds-receive.o \
-	       cmds-quota.o cmds-qgroup.o cmds-replace.o check/main.o \
-	       cmds-restore.o cmds-rescue.o chunk-recover.o super-recover.o \
-	       cmds-property.o cmds-fi-usage.o cmds-inspect-dump-tree.o \
-	       cmds-inspect-dump-super.o cmds-inspect-tree-stats.o cmds-fi-du.o \
+	  kernel-shared/ulist.o qgroup-verify.o backref.o common/string-table.o \
+	  common/task-utils.o \
+	  inode.o file.o find-root.o free-space-tree.o common/help.o send-dump.o \
+	  common/fsfeatures.o kernel-lib/tables.o kernel-lib/raid56.o transaction.o \
+	  delayed-ref.o common/format-output.o common/path-utils.o \
+	  common/device-utils.o common/device-scan.o
+cmds_objects = cmds/subvolume.o cmds/filesystem.o cmds/device.o cmds/scrub.o \
+	       cmds/inspect.o cmds/balance.o cmds/send.o cmds/receive.o \
+	       cmds/quota.o cmds/qgroup.o cmds/replace.o check/main.o \
+	       cmds/restore.o cmds/rescue.o cmds/rescue-chunk-recover.o \
+	       cmds/rescue-super-recover.o \
+	       cmds/property.o cmds/filesystem-usage.o cmds/inspect-dump-tree.o \
+	       cmds/inspect-dump-super.o cmds/inspect-tree-stats.o cmds/filesystem-du.o \
 	       mkfs/common.o check/mode-common.o check/mode-lowmem.o
 libbtrfs_objects = send-stream.o send-utils.o kernel-lib/rbtree.o btrfs-list.o \
-		   kernel-lib/crc32c.o messages.o \
-		   uuid-tree.o utils-lib.o rbtree-utils.o
+		   kernel-lib/crc32c.o common/messages.o \
+		   uuid-tree.o utils-lib.o common/rbtree-utils.o
 libbtrfs_headers = send-stream.h send-utils.h send.h kernel-lib/rbtree.h btrfs-list.h \
 	       kernel-lib/crc32c.h kernel-lib/list.h kerncompat.h \
 	       kernel-lib/radix-tree.h kernel-lib/sizes.h kernel-lib/raid56.h \
@@ -222,6 +231,19 @@ endif
 
 MAKEOPTS = --no-print-directory Q=$(Q)
 
+# built-in sources into "busybox", all files that contain the main function and
+# are not compiled standalone
+progs_box_main = btrfs.o mkfs/main.o image/main.o convert/main.o \
+		 btrfstune.o
+
+progs_box_all_objects = $(mkfs_objects) $(image_objects) $(convert_objects)
+progs_box_all_static_objects = $(static_mkfs_objects) $(static_image_objects) \
+			       $(static_convert_objects)
+
+progs_box_objects = $(filter-out %/main.o, $(progs_box_all_objects)) \
+		    $(patsubst %.o, %.box.o, $(progs_box_main))
+progs_box_static_objects = $(filter-out %/main.static.o, $(progs_box_all_static_objects)) \
+		    $(patsubst %.o, %.box.static.o, $(progs_box_main))
 
 # Programs to install.
 progs_install = btrfs mkfs.btrfs btrfs-map-logical btrfs-image \
@@ -325,13 +347,21 @@ endif
 	@$(check_echo) "    [SP]     $<"
 	$(Q)$(check) $(CFLAGS) $(CHECKER_FLAGS) $<
 	@echo "    [CC]     $@"
-	$(Q)$(CC) $(CFLAGS) -c $< -o $@ $($(subst -,_,$(@:%.o=%)-cflags)) \
+	$(Q)$(CC) $(CFLAGS) -c $< -o $@ $($(subst /,_,$(subst -,_,$(@:%.o=%)-cflags))) \
 		$($(subst -,_,btrfs-$(@:%/$(notdir $@)=%)-cflags))
 
 %.static.o: %.c
 	@echo "    [CC]     $@"
-	$(Q)$(CC) $(STATIC_CFLAGS) -c $< -o $@ $($(subst -,_,$(@:%.static.o=%)-cflags)) \
+	$(Q)$(CC) $(STATIC_CFLAGS) -c $< -o $@ $($(subst /,_,$(subst -,_,$(@:%.static.o=%)-cflags))) \
 		$($(subst -,_,btrfs-$(@:%/$(notdir $@)=%)-cflags))
+
+%.box.o: %.c
+	@echo "    [CC]     $@"
+	$(Q)$(CC) -DENABLE_BOX=1 $(CFLAGS) $(btrfs_convert_cflags) -c $< -o $@
+
+%.box.static.o: %.c
+	@echo "    [CC]     $@"
+	$(Q)$(CC) -DENABLE_BOX=1 $(STATIC_CFLAGS) $(btrfs_convert_cflags) -c $< -o $@
 
 all: $(progs_build) $(libs_build) $(BUILDDIRS)
 ifeq ($(PYTHON_BINDINGS),1)
@@ -485,6 +515,25 @@ btrfs.static: btrfs.static.o $(static_objects) $(static_cmds_objects) $(static_l
 	@echo "    [LD]     $@"
 	$(Q)$(CC) -o $@ $^ $(STATIC_LDFLAGS) $(STATIC_LIBS) $(STATIC_LIBS_COMP)
 
+btrfs.box: btrfs.box.o $(objects) $(cmds_objects) $(progs_box_objects) $(libs_static)
+	@echo "    [LD]     $@"
+	$(Q)$(CC) -o $@ $^ $(btrfs_convert_libs) $(LDFLAGS) $(LIBS) $(LIBS_COMP)
+
+btrfs.box.static: btrfs.box.static.o $(static_objects) $(static_cmds_objects) $(progs_box_static_objects) $(static_libbtrfs_objects) $(static_libbtrfsutil_objects)
+	@echo "    [LD]     $@"
+	$(Q)$(CC) $(STATIC_CFLAGS) -o $@ $^ $(btrfs_convert_libs) \
+		$(STATIC_LDFLAGS) $(STATIC_LIBS) $(STATIC_LIBS_COMP)
+
+box-links: btrfs.box
+	@echo "    [LN]     mkfs.btrfs"
+	$(Q)$(LN_S) -sf btrfs.box mkfs.btrfs
+	@echo "    [LN]     btrfs-image"
+	$(Q)$(LN_S) -sf btrfs.box btrfs-image
+	@echo "    [LN]     btrfs-convert"
+	$(Q)$(LN_S) -sf btrfs.box btrfs-convert
+	@echo "    [LN]     btrfstune"
+	$(Q)$(LN_S) -sf btrfs.box btrfstune
+
 # For backward compatibility, 'btrfs' changes behaviour to fsck if it's named 'btrfsck'
 btrfsck: btrfs
 	@echo "    [LN]     $@"
@@ -610,18 +659,21 @@ tags: FORCE
 	@echo "    [TAGS]   $(TAGS_CMD)"
 	$(Q)$(TAGS_CMD) *.[ch] image/*.[ch] convert/*.[ch] mkfs/*.[ch] \
 		check/*.[ch] kernel-lib/*.[ch] kernel-shared/*.[ch] \
+		cmds/*.[ch] common/*.[ch] \
 		libbtrfsutil/*.[ch]
 
 etags: FORCE
 	@echo "    [ETAGS]   $(ETAGS_CMD)"
 	$(Q)$(ETAGS_CMD) *.[ch] image/*.[ch] convert/*.[ch] mkfs/*.[ch] \
 		check/*.[ch] kernel-lib/*.[ch] kernel-shared/*.[ch] \
+		cmds/*.[ch] common/*.[ch] \
 		libbtrfsutil/*.[ch]
 
 cscope: FORCE
 	@echo "    [CSCOPE] $(CSCOPE_CMD)"
 	$(Q)ls -1 *.[ch] image/*.[ch] convert/*.[ch] mkfs/*.[ch] check/*.[ch] \
 		kernel-lib/*.[ch] kernel-shared/*.[ch] libbtrfsutil/*.[ch] \
+		cmds/*.[ch] common/*.[ch] \
 		> cscope.files
 	$(Q)$(CSCOPE_CMD)
 
@@ -635,8 +687,10 @@ clean: $(CLEANDIRS)
 		image/*.o image/*.o.d \
 		convert/*.o convert/*.o.d \
 		mkfs/*.o mkfs/*.o.d check/*.o check/*.o.d \
+		cmds/*.o cmds/*.o.d common/*.o common/*.o.d \
 	      ioctl-test quick-test library-test library-test-static \
               mktables btrfs.static mkfs.btrfs.static fssum \
+	      btrfs.box btrfs.box.static \
 	      $(check_defs) \
 	      $(libs) $(lib_links) \
 	      $(progs_static) \

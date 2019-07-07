@@ -30,9 +30,10 @@
 #include "ctree.h"
 #include "disk-io.h"
 #include "transaction.h"
-#include "utils.h"
+#include "common/utils.h"
 #include "volumes.h"
-#include "help.h"
+#include "common/help.h"
+#include "common/box.h"
 
 static char *device;
 static int force = 0;
@@ -480,7 +481,7 @@ static void print_usage(void)
 	printf("\t--help      print this help\n");
 }
 
-int main(int argc, char *argv[])
+int BOX_MAIN(btrfstune)(int argc, char *argv[])
 {
 	struct btrfs_root *root;
 	unsigned ctree_flags = OPEN_CTREE_WRITES;

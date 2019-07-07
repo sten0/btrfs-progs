@@ -25,11 +25,11 @@
 #include <stdbool.h>
 #include "kerncompat.h"
 #include "extent_io.h"
-#include "list.h"
+#include "kernel-lib/list.h"
 #include "ctree.h"
 #include "volumes.h"
-#include "utils.h"
-#include "internal.h"
+#include "common/utils.h"
+#include "common/internal.h"
 
 void extent_io_tree_init(struct extent_io_tree *tree)
 {
@@ -963,13 +963,13 @@ int clear_extent_buffer_dirty(struct extent_buffer *eb)
 	return 0;
 }
 
-int memcmp_extent_buffer(struct extent_buffer *eb, const void *ptrv,
+int memcmp_extent_buffer(const struct extent_buffer *eb, const void *ptrv,
 			 unsigned long start, unsigned long len)
 {
 	return memcmp(eb->data + start, ptrv, len);
 }
 
-void read_extent_buffer(struct extent_buffer *eb, void *dst,
+void read_extent_buffer(const struct extent_buffer *eb, void *dst,
 			unsigned long start, unsigned long len)
 {
 	memcpy(dst, eb->data + start, len);

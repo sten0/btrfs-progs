@@ -31,19 +31,19 @@
 #include "repair.h"
 #include "disk-io.h"
 #include "print-tree.h"
-#include "task-utils.h"
+#include "common/task-utils.h"
 #include "transaction.h"
-#include "utils.h"
-#include "commands.h"
+#include "common/utils.h"
+#include "cmds/commands.h"
 #include "free-space-cache.h"
 #include "free-space-tree.h"
 #include "btrfsck.h"
 #include "qgroup-verify.h"
-#include "rbtree-utils.h"
+#include "common/rbtree-utils.h"
 #include "backref.h"
 #include "kernel-shared/ulist.h"
 #include "hash.h"
-#include "help.h"
+#include "common/help.h"
 #include "check/mode-common.h"
 #include "check/mode-original.h"
 #include "check/mode-lowmem.h"
@@ -4385,36 +4385,6 @@ static int check_block(struct btrfs_root *root,
 	return ret;
 }
 
-#if 0
-static struct tree_backref *find_tree_backref(struct extent_record *rec,
-						u64 parent, u64 root)
-{
-	struct list_head *cur = rec->backrefs.next;
-	struct extent_backref *node;
-	struct tree_backref *back;
-
-	while (cur != &rec->backrefs) {
-		node = to_extent_backref(cur);
-		cur = cur->next;
-		if (node->is_data)
-			continue;
-		back = to_tree_backref(node);
-		if (parent > 0) {
-			if (!node->full_backref)
-				continue;
-			if (parent == back->parent)
-				return back;
-		} else {
-			if (node->full_backref)
-				continue;
-			if (back->root == root)
-				return back;
-		}
-	}
-	return NULL;
-}
-#endif
-
 static struct tree_backref *alloc_tree_backref(struct extent_record *rec,
 						u64 parent, u64 root)
 {
@@ -4433,45 +4403,6 @@ static struct tree_backref *alloc_tree_backref(struct extent_record *rec,
 
 	return ref;
 }
-
-#if 0
-static struct data_backref *find_data_backref(struct extent_record *rec,
-						u64 parent, u64 root,
-						u64 owner, u64 offset,
-						int found_ref,
-						u64 disk_bytenr, u64 bytes)
-{
-	struct list_head *cur = rec->backrefs.next;
-	struct extent_backref *node;
-	struct data_backref *back;
-
-	while (cur != &rec->backrefs) {
-		node = to_extent_backref(cur);
-		cur = cur->next;
-		if (!node->is_data)
-			continue;
-		back = to_data_backref(node);
-		if (parent > 0) {
-			if (!node->full_backref)
-				continue;
-			if (parent == back->parent)
-				return back;
-		} else {
-			if (node->full_backref)
-				continue;
-			if (back->root == root && back->owner == owner &&
-			    back->offset == offset) {
-				if (found_ref && node->found_ref &&
-				    (back->bytes != bytes ||
-				    back->disk_bytenr != disk_bytenr))
-					continue;
-				return back;
-			}
-		}
-	}
-	return NULL;
-}
-#endif
 
 static struct data_backref *alloc_data_backref(struct extent_record *rec,
 						u64 parent, u64 root,
@@ -9831,7 +9762,7 @@ out:
 	return ret ? -EINVAL : 0;
 }
 
-const char * const cmd_check_usage[] = {
+static const char * const cmd_check_usage[] = {
 	"btrfs check [options] <device>",
 	"Check structural integrity of a filesystem (unmounted).",
 	"Check structural integrity of an unmounted filesystem. Verify internal",
@@ -9869,7 +9800,7 @@ const char * const cmd_check_usage[] = {
 	NULL
 };
 
-int cmd_check(int argc, char **argv)
+static int cmd_check(const struct cmd_struct *cmd, int argc, char **argv)
 {
 	struct cache_tree root_cache;
 	struct btrfs_root *root;
@@ -9960,7 +9891,7 @@ int cmd_check(int argc, char **argv)
 				break;
 			case '?':
 			case 'h':
-				usage(cmd_check_usage);
+				usage(cmd);
 			case GETOPT_VAL_REPAIR:
 				printf("enabling repair mode\n");
 				repair = 1;
@@ -10011,7 +9942,7 @@ int cmd_check(int argc, char **argv)
 	}
 
 	if (check_argc_exact(argc - optind, 1))
-		usage(cmd_check_usage);
+		usage(cmd);
 
 	if (ctx.progress_enabled) {
 		ctx.tp = TASK_NOTHING;
@@ -10423,3 +10354,4 @@ err_out:
 
 	return err;
 }
+DEFINE_SIMPLE_COMMAND(check, "check");

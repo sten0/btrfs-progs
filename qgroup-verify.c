@@ -22,13 +22,13 @@
 #include <stdlib.h>
 #include <uuid/uuid.h>
 #include "kerncompat.h"
-#include "radix-tree.h"
+#include "kernel-lib/radix-tree.h"
 #include "ctree.h"
 #include "disk-io.h"
 #include "print-tree.h"
-#include "utils.h"
+#include "common/utils.h"
 #include "kernel-shared/ulist.h"
-#include "rbtree-utils.h"
+#include "common/rbtree-utils.h"
 #include "transaction.h"
 #include "repair.h"
 

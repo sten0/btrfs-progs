@@ -28,16 +28,18 @@
 #include <getopt.h>
 
 #include "kerncompat.h"
-#include "crc32c.h"
+#include "kernel-lib/crc32c.h"
 #include "ctree.h"
 #include "disk-io.h"
 #include "transaction.h"
-#include "utils.h"
+#include "common/utils.h"
 #include "volumes.h"
 #include "extent_io.h"
-#include "help.h"
+#include "common/help.h"
+#include "common/device-utils.h"
 #include "image/metadump.h"
 #include "image/sanitize.h"
+#include "common/box.h"
 
 #define MAX_WORKER_THREADS	(32)
 
@@ -1983,6 +1985,11 @@ static int build_chunk_tree(struct mdrestore_struct *mdres,
 
 	pthread_mutex_lock(&mdres->mutex);
 	super = (struct btrfs_super_block *)buffer;
+	ret = btrfs_check_super(super, 0);
+	if (ret < 0) {
+		error("invalid superblock");
+		return ret;
+	}
 	chunk_root_bytenr = btrfs_super_chunk_root(super);
 	mdres->nodesize = btrfs_super_nodesize(super);
 	if (btrfs_super_incompat_flags(super) &
@@ -2584,7 +2591,7 @@ static void print_usage(int ret)
 	exit(ret);
 }
 
-int main(int argc, char *argv[])
+int BOX_MAIN(image)(int argc, char *argv[])
 {
 	char *source;
 	char *target;
@@ -2645,7 +2652,7 @@ int main(int argc, char *argv[])
 			create = 0;
 			multi_devices = 1;
 			break;
-			case GETOPT_VAL_HELP:
+		case GETOPT_VAL_HELP:
 		default:
 			print_usage(c != GETOPT_VAL_HELP);
 		}
@@ -2701,6 +2708,7 @@ int main(int argc, char *argv[])
 
 			if (tmp <= 0)
 				tmp = 1;
+			tmp = min_t(long, tmp, MAX_WORKER_THREADS);
 			num_threads = tmp;
 		}
 	} else {

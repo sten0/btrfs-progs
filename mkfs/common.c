@@ -22,7 +22,9 @@
 #include "ctree.h"
 #include "disk-io.h"
 #include "volumes.h"
-#include "utils.h"
+#include "common/utils.h"
+#include "common/path-utils.h"
+#include "common/device-utils.h"
 #include "mkfs/common.h"
 
 static u64 reference_root_table[] = {

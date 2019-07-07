@@ -22,7 +22,7 @@
 #if BTRFS_FLAT_INCLUDES
 #include "kerncompat.h"
 #include "extent-cache.h"
-#include "list.h"
+#include "kernel-lib/list.h"
 #else
 #include <btrfs/kerncompat.h>
 #include <btrfs/extent-cache.h>
@@ -154,9 +154,9 @@ void free_extent_buffer_nocache(struct extent_buffer *eb);
 int read_extent_from_disk(struct extent_buffer *eb,
 			  unsigned long offset, unsigned long len);
 int write_extent_to_disk(struct extent_buffer *eb);
-int memcmp_extent_buffer(struct extent_buffer *eb, const void *ptrv,
+int memcmp_extent_buffer(const struct extent_buffer *eb, const void *ptrv,
 			 unsigned long start, unsigned long len);
-void read_extent_buffer(struct extent_buffer *eb, void *dst,
+void read_extent_buffer(const struct extent_buffer *eb, void *dst,
 			unsigned long start, unsigned long len);
 void write_extent_buffer(struct extent_buffer *eb, const void *src,
 			 unsigned long start, unsigned long len);

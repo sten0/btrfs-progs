@@ -22,10 +22,10 @@
 #include "transaction.h"
 #include "disk-io.h"
 #include "extent_io.h"
-#include "crc32c.h"
-#include "bitops.h"
-#include "internal.h"
-#include "utils.h"
+#include "kernel-lib/crc32c.h"
+#include "kernel-lib/bitops.h"
+#include "common/internal.h"
+#include "common/utils.h"
 
 /*
  * Kernel always uses PAGE_CACHE_SIZE for sectorsize, but we don't have

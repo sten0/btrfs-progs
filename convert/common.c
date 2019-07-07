@@ -18,7 +18,8 @@
 #include <uuid/uuid.h>
 #include "disk-io.h"
 #include "volumes.h"
-#include "utils.h"
+#include "common/utils.h"
+#include "common/path-utils.h"
 #include "mkfs/common.h"
 #include "convert/common.h"
 

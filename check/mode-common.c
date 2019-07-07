@@ -16,10 +16,10 @@
 
 #include <time.h>
 #include "ctree.h"
-#include "internal.h"
-#include "messages.h"
+#include "common/internal.h"
+#include "common/messages.h"
 #include "transaction.h"
-#include "utils.h"
+#include "common/utils.h"
 #include "disk-io.h"
 #include "repair.h"
 #include "check/mode-common.h"
