@@ -164,10 +164,7 @@ static void print_scrub_summary(struct btrfs_scrub_progress *p, struct scrub_sta
 		char t[4096];
 		struct tm tm;
 
-		if (s->t_resumed)
-			sec_eta = s->t_resumed;
-		else
-			sec_eta = s->t_start;
+		sec_eta = time(NULL);
 		sec_eta += sec_left;
 		localtime_r(&sec_eta, &tm);
 		t[sizeof(t) - 1] = '\0';
@@ -274,7 +271,7 @@ static void _print_scrub_ss(struct scrub_stats *ss)
 		localtime_r(&ss->t_resumed, &tm);
 		strftime(t, sizeof(t), "%c", &tm);
 		t[sizeof(t) - 1] = '\0';
-		printf("Scrub resumed:   %s\n", t);
+		printf("Scrub resumed:    %s\n", t);
 	} else {
 		localtime_r(&ss->t_start, &tm);
 		strftime(t, sizeof(t), "%c", &tm);

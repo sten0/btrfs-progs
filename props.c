@@ -167,11 +167,25 @@ out:
 }
 
 const struct prop_handler prop_handlers[] = {
-	{"ro", "Set/get read-only flag of subvolume.", 0, prop_object_subvol,
-	 prop_read_only},
-	{"label", "Set/get label of device.", 0,
-	 prop_object_dev | prop_object_root, prop_label},
-	{"compression", "Set/get compression for a file or directory", 0,
-	 prop_object_inode, prop_compression},
+	{
+		.name ="ro",
+		.desc = "read-only status of a subvolume",
+		.read_only = 0,
+		.types = prop_object_subvol,
+	 	.handler = prop_read_only
+	},
+	{
+		.name = "label",
+		.desc = "label of the filesystem",
+		.read_only = 0,
+		.types = prop_object_dev | prop_object_root,
+		.handler = prop_label
+	},
+	{
+		.name = "compression",
+		.desc = "compression algorighm for the file or directory",
+		.read_only = 0,
+	 	.types = prop_object_inode, prop_compression
+	},
 	{NULL, NULL, 0, 0, NULL}
 };
