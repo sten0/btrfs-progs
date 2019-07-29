@@ -743,7 +743,7 @@ endif
 ifeq ($(PYTHON_BINDINGS),1)
 install_python: libbtrfsutil_python
 	$(Q)cd libbtrfsutil/python; \
-		$(PYTHON) setup.py install --install-layout=deb --skip-build $(if $(DESTDIR),--root $(DESTDIR)) --prefix $(prefix)
+		$(PYTHON) setup.py install --skip-build $(if $(DESTDIR),--root $(DESTDIR)) --prefix $(prefix)
 
 .PHONY: install_python
 endif

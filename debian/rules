@@ -25,7 +25,9 @@ override_dh_auto_build:
 	dh_auto_build -- V=1
 
 override_dh_auto_install:
-	dh_auto_install -- install install_python
+	dh_auto_install -- install
+	cd libbtrfsutil/python; \
+		python3 setup.py install --install-layout=deb --skip-build --root ../../debian/tmp --prefix /usr
 	mkdir -p debian/tmp/sbin
 	mv debian/tmp/bin/fsck.btrfs debian/tmp/sbin/fsck.btrfs
 	mv debian/tmp/bin/mkfs.btrfs debian/tmp/sbin/mkfs.btrfs
