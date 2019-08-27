@@ -1,9 +1,9 @@
-btrfs-progs (5.2.1-1~bpo10+1) UNRELEASED; urgency=medium
+btrfs-progs (5.2.1-1~bpo10+1) buster-backports; urgency=medium
 
   * Rebuild for buster-backports.
   * Restore Provides: btrfs-tools.
 
- -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 27 Aug 2019 15:48:22 -0400
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 27 Aug 2019 15:59:22 -0400
 
 btrfs-progs (5.2.1-1) unstable; urgency=medium
 
