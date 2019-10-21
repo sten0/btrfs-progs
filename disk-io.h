@@ -186,13 +186,13 @@ int btrfs_free_fs_root(struct btrfs_root *root);
 void btrfs_mark_buffer_dirty(struct extent_buffer *buf);
 int btrfs_buffer_uptodate(struct extent_buffer *buf, u64 parent_transid);
 int btrfs_set_buffer_uptodate(struct extent_buffer *buf);
-u32 btrfs_csum_data(char *data, u32 seed, size_t len);
-void btrfs_csum_final(u32 crc, u8 *result);
+int btrfs_csum_data(u16 csum_type, const u8 *data, u8 *out, size_t len);
 
 int btrfs_open_device(struct btrfs_device *dev);
 int csum_tree_block_size(struct extent_buffer *buf, u16 csum_sectorsize,
-			 int verify);
-int verify_tree_block_csum_silent(struct extent_buffer *buf, u16 csum_size);
+			 int verify, u16 csum_type);
+int verify_tree_block_csum_silent(struct extent_buffer *buf, u16 csum_size,
+				  u16 csum_type);
 int btrfs_read_buffer(struct extent_buffer *buf, u64 parent_transid);
 int write_tree_block(struct btrfs_trans_handle *trans,
 		     struct btrfs_fs_info *fs_info,

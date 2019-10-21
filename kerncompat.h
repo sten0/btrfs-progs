@@ -32,7 +32,11 @@
 
 #include <features.h>
 
-#ifndef __GLIBC__
+/*
+ * Glibc supports backtrace, some other libc implementations don't but need to
+ * be more careful detecting proper glibc.
+ */
+#if !defined(__GLIBC__) || defined(__UCLIBC__)
 #ifndef BTRFS_DISABLE_BACKTRACE
 #define BTRFS_DISABLE_BACKTRACE
 #endif
@@ -98,7 +102,7 @@ static inline void warning_trace(const char *assertion, const char *filename,
 	if (!val)
 		return;
 	fprintf(stderr,
-		"%s:%d: %s: Warning: assertion `%s` failed, value %ld\n",
+		"%s:%u: %s: Warning: assertion `%s` failed, value %ld\n",
 		filename, line, func, assertion, val);
 #ifndef BTRFS_DISABLE_BACKTRACE
 	print_trace();
@@ -111,7 +115,7 @@ static inline void bugon_trace(const char *assertion, const char *filename,
 	if (!val)
 		return;
 	fprintf(stderr,
-		"%s:%d: %s: BUG_ON `%s` triggered, value %ld\n",
+		"%s:%u: %s: BUG_ON `%s` triggered, value %ld\n",
 		filename, line, func, assertion, val);
 #ifndef BTRFS_DISABLE_BACKTRACE
 	print_trace();

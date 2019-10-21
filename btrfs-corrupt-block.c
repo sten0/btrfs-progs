@@ -119,7 +119,7 @@ static void print_usage(int ret)
 	printf("\t-I <u64,u8,u64> Corrupt an item corresponding to the passed key triplet (must also specify the field to corrupt and root for the item)\n");
 	printf("\t-D <u64,u8,u64> Corrupt a dir item corresponding to the passed key triplet, must also specify a field\n");
 	printf("\t-d <u64,u8,u64> Delete item corresponding to passed key triplet\n");
-	printf("\t-r   Operate on this root (only works with -d)\n");
+	printf("\t-r   Operate on this root\n");
 	printf("\t-C   Delete a csum for the specified bytenr.  When used with -b it'll delete that many bytes, otherwise it's just sectorsize\n");
 	exit(ret);
 }
@@ -158,7 +158,8 @@ static void corrupt_keys(struct btrfs_trans_handle *trans,
 	if (!trans) {
 		u16 csum_size =
 			btrfs_super_csum_size(fs_info->super_copy);
-		csum_tree_block_size(eb, csum_size, 0);
+		u16 csum_type = btrfs_super_csum_type(fs_info->super_copy);
+		csum_tree_block_size(eb, csum_size, 0, csum_type);
 		write_extent_to_disk(eb);
 	}
 }

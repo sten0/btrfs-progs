@@ -128,7 +128,7 @@ static void print_tree_block_error(struct btrfs_fs_info *fs_info,
 			eb->start, btrfs_header_bytenr(eb));
 		break;
 	case BTRFS_BAD_LEVEL:
-		fprintf(stderr, "bad level, %u > %u\n",
+		fprintf(stderr, "bad level, %u > %d\n",
 			btrfs_header_level(eb), BTRFS_MAX_LEVEL);
 		break;
 	case BTRFS_BAD_NRITEMS:
@@ -138,34 +138,43 @@ static void print_tree_block_error(struct btrfs_fs_info *fs_info,
 	}
 }
 
-u32 btrfs_csum_data(char *data, u32 seed, size_t len)
+int btrfs_csum_data(u16 csum_type, const u8 *data, u8 *out, size_t len)
 {
-	return crc32c(seed, data, len);
-}
+	u32 crc = ~(u32)0;
 
-void btrfs_csum_final(u32 crc, u8 *result)
-{
-	put_unaligned_le32(~crc, result);
+	memset(out, 0, BTRFS_CSUM_SIZE);
+
+	switch (csum_type) {
+	case BTRFS_CSUM_TYPE_CRC32:
+		crc = crc32c(crc, data, len);
+		put_unaligned_le32(~crc, out);
+		return 0;
+	default:
+		fprintf(stderr, "ERROR: unknown csum type: %d\n", csum_type);
+		ASSERT(0);
+	}
+
+	return -1;
 }
 
 static int __csum_tree_block_size(struct extent_buffer *buf, u16 csum_size,
-				  int verify, int silent)
+				  int verify, int silent, u16 csum_type)
 {
 	u8 result[BTRFS_CSUM_SIZE];
 	u32 len;
-	u32 crc = ~(u32)0;
 
 	len = buf->len - BTRFS_CSUM_SIZE;
-	crc = crc32c(crc, buf->data + BTRFS_CSUM_SIZE, len);
-	btrfs_csum_final(crc, result);
+	btrfs_csum_data(csum_type, (u8 *)buf->data + BTRFS_CSUM_SIZE,
+			result, len);
 
 	if (verify) {
 		if (memcmp_extent_buffer(buf, result, 0, csum_size)) {
+			/* FIXME: format */
 			if (!silent)
 				printk("checksum verify failed on %llu found %08X wanted %08X\n",
 				       (unsigned long long)buf->start,
-				       *((u32 *)result),
-				       *((u32*)(char *)buf->data));
+				       result[0],
+				       buf->data[0]);
 			return 1;
 		}
 	} else {
@@ -174,24 +183,27 @@ static int __csum_tree_block_size(struct extent_buffer *buf, u16 csum_size,
 	return 0;
 }
 
-int csum_tree_block_size(struct extent_buffer *buf, u16 csum_size, int verify)
+int csum_tree_block_size(struct extent_buffer *buf, u16 csum_size, int verify,
+			 u16 csum_type)
 {
-	return __csum_tree_block_size(buf, csum_size, verify, 0);
+	return __csum_tree_block_size(buf, csum_size, verify, 0, csum_type);
 }
 
-int verify_tree_block_csum_silent(struct extent_buffer *buf, u16 csum_size)
+int verify_tree_block_csum_silent(struct extent_buffer *buf, u16 csum_size,
+				  u16 csum_type)
 {
-	return __csum_tree_block_size(buf, csum_size, 1, 1);
+	return __csum_tree_block_size(buf, csum_size, 1, 1, csum_type);
 }
 
 int csum_tree_block(struct btrfs_fs_info *fs_info,
 		    struct extent_buffer *buf, int verify)
 {
-	u16 csum_size =
-		btrfs_super_csum_size(fs_info->super_copy);
+	u16 csum_size = btrfs_super_csum_size(fs_info->super_copy);
+	u16 csum_type = btrfs_super_csum_type(fs_info->super_copy);
+
 	if (verify && fs_info->suppress_check_block_errors)
-		return verify_tree_block_csum_silent(buf, csum_size);
-	return csum_tree_block_size(buf, csum_size, verify);
+		return verify_tree_block_csum_silent(buf, csum_size, csum_type);
+	return csum_tree_block_size(buf, csum_size, verify, csum_type);
 }
 
 struct extent_buffer *btrfs_find_tree_block(struct btrfs_fs_info *fs_info,
@@ -814,7 +826,7 @@ int btrfs_check_fs_compatibility(struct btrfs_super_block *sb,
 		   ~BTRFS_FEATURE_INCOMPAT_SUPP;
 	if (features) {
 		printk("couldn't open because of unsupported "
-		       "option features (%Lx).\n",
+		       "option features (%llx).\n",
 		       (unsigned long long)features);
 		return -ENOTSUP;
 	}
@@ -836,7 +848,7 @@ int btrfs_check_fs_compatibility(struct btrfs_super_block *sb,
 		}
 		if (features & ~BTRFS_FEATURE_COMPAT_RO_SUPP) {
 			printk("couldn't open RDWR because of unsupported "
-			       "option features (%Lx).\n",
+			       "option features (0x%llx)\n",
 			       (unsigned long long)features);
 			return -ENOTSUP;
 		}
@@ -1351,7 +1363,6 @@ struct btrfs_root *open_ctree_fd(int fp, const char *path, u64 sb_bytenr,
 int btrfs_check_super(struct btrfs_super_block *sb, unsigned sbflags)
 {
 	u8 result[BTRFS_CSUM_SIZE];
-	u32 crc;
 	u16 csum_type;
 	int csum_size;
 	u8 *metadata_uuid;
@@ -1366,16 +1377,14 @@ int btrfs_check_super(struct btrfs_super_block *sb, unsigned sbflags)
 	}
 
 	csum_type = btrfs_super_csum_type(sb);
-	if (csum_type >= ARRAY_SIZE(btrfs_csum_sizes)) {
+	if (csum_type >= btrfs_super_num_csums()) {
 		error("unsupported checksum algorithm %u", csum_type);
 		return -EIO;
 	}
-	csum_size = btrfs_csum_sizes[csum_type];
+	csum_size = btrfs_super_csum_size(sb);
 
-	crc = ~(u32)0;
-	crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE, crc,
-			      BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
-	btrfs_csum_final(crc, result);
+	btrfs_csum_data(csum_type, (u8 *)sb + BTRFS_CSUM_SIZE,
+			result, BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
 
 	if (memcmp(result, sb->csum, csum_size)) {
 		error("superblock checksum mismatch");
@@ -1611,8 +1620,9 @@ static int write_dev_supers(struct btrfs_fs_info *fs_info,
 			    struct btrfs_device *device)
 {
 	u64 bytenr;
-	u32 crc;
+	u8 result[BTRFS_CSUM_SIZE];
 	int i, ret;
+	u16 csum_type = btrfs_super_csum_type(sb);
 
 	/*
 	 * We need to write super block after all metadata written.
@@ -1627,10 +1637,9 @@ static int write_dev_supers(struct btrfs_fs_info *fs_info,
 	}
 	if (fs_info->super_bytenr != BTRFS_SUPER_INFO_OFFSET) {
 		btrfs_set_super_bytenr(sb, fs_info->super_bytenr);
-		crc = ~(u32)0;
-		crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE, crc,
-				      BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
-		btrfs_csum_final(crc, &sb->csum[0]);
+		btrfs_csum_data(csum_type, (u8 *)sb + BTRFS_CSUM_SIZE, result,
+				BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
+		memcpy(&sb->csum[0], result, BTRFS_CSUM_SIZE);
 
 		/*
 		 * super_copy is BTRFS_SUPER_INFO_SIZE bytes and is
@@ -1663,10 +1672,9 @@ static int write_dev_supers(struct btrfs_fs_info *fs_info,
 
 		btrfs_set_super_bytenr(sb, bytenr);
 
-		crc = ~(u32)0;
-		crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE, crc,
+		btrfs_csum_data(csum_type, (u8 *)sb + BTRFS_CSUM_SIZE, result,
 				      BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
-		btrfs_csum_final(crc, &sb->csum[0]);
+		memcpy(&sb->csum[0], result, BTRFS_CSUM_SIZE);
 
 		/*
 		 * super_copy is BTRFS_SUPER_INFO_SIZE bytes and is

@@ -37,16 +37,16 @@
 #include "cmds/commands.h"
 #include "free-space-cache.h"
 #include "free-space-tree.h"
-#include "btrfsck.h"
-#include "qgroup-verify.h"
 #include "common/rbtree-utils.h"
 #include "backref.h"
 #include "kernel-shared/ulist.h"
 #include "hash.h"
 #include "common/help.h"
+#include "check/common.h"
 #include "check/mode-common.h"
 #include "check/mode-original.h"
 #include "check/mode-lowmem.h"
+#include "check/qgroup-verify.h"
 
 u64 bytes_used = 0;
 u64 total_csum_bytes = 0;
@@ -74,6 +74,22 @@ enum btrfs_check_mode {
 };
 
 static enum btrfs_check_mode check_mode = CHECK_MODE_DEFAULT;
+
+struct device_record {
+	struct rb_node node;
+	u64 devid;
+
+	u64 generation;
+
+	u64 objectid;
+	u8  type;
+	u64 offset;
+
+	u64 total_byte;
+	u64 byte_used;
+
+	u64 real_used;
+};
 
 static int compare_data_backref(struct rb_node *node1, struct rb_node *node2)
 {
@@ -806,7 +822,8 @@ static void maybe_free_inode_rec(struct cache_tree *inode_cache,
 	} else if (S_ISREG(rec->imode) || S_ISLNK(rec->imode)) {
 		if (rec->found_dir_item)
 			rec->errors |= I_ERR_ODD_DIR_ITEM;
-		if (rec->found_size != rec->nbytes)
+		/* Orphan inodes don't have correct nbytes */
+		if (rec->nlink > 0 && rec->found_size != rec->nbytes)
 			rec->errors |= I_ERR_FILE_NBYTES_WRONG;
 		if (rec->nlink > 0 && !no_holes &&
 		    (rec->extent_end < rec->isize ||
@@ -3437,8 +3454,10 @@ static int check_fs_root(struct btrfs_root *root,
 {
 	int ret = 0;
 	int err = 0;
+	bool generation_err = false;
 	int wret;
 	int level;
+	u64 super_generation;
 	struct btrfs_path path;
 	struct shared_node root_node;
 	struct root_record *rec;
@@ -3449,6 +3468,23 @@ static int check_fs_root(struct btrfs_root *root,
 	struct unaligned_extent_rec_t *urec;
 	struct unaligned_extent_rec_t *tmp;
 
+	super_generation = btrfs_super_generation(root->fs_info->super_copy);
+	if (btrfs_root_generation(root_item) > super_generation + 1) {
+		error(
+	"invalid generation for root %llu, have %llu expect (0, %llu]",
+		      root->root_key.objectid, btrfs_root_generation(root_item),
+		      super_generation + 1);
+		generation_err = true;
+		if (repair) {
+			root->node->flags |= EXTENT_BAD_TRANSID;
+			ret = recow_extent_buffer(root, root->node);
+			if (!ret) {
+				printf("Reset generation for root %llu\n",
+					root->root_key.objectid);
+				generation_err = false;
+			}
+		}
+	}
 	/*
 	 * Reuse the corrupt_block cache tree to record corrupted tree block
 	 *
@@ -3597,6 +3633,8 @@ skip_walking:
 
 	free_corrupt_blocks_tree(&corrupt_blocks);
 	root->fs_info->corrupt_blocks = NULL;
+	if (!ret && generation_err)
+		ret = -1;
 	return ret;
 }
 
@@ -5242,7 +5280,7 @@ static int process_extent_item(struct btrfs_root *root,
 	}
 	if (item_size < sizeof(*ei)) {
 		error(
-"corrupted or unsupported extent item found, item size=%u expect minimal size=%lu",
+"corrupted or unsupported extent item found, item size=%u expect minimal size=%zu",
 		      item_size, sizeof(*ei));
 		return -EIO;
 	}
@@ -5581,10 +5619,11 @@ static int check_extent_csums(struct btrfs_root *root, u64 bytenr,
 	struct btrfs_fs_info *fs_info = root->fs_info;
 	u64 offset = 0;
 	u16 csum_size = btrfs_super_csum_size(fs_info->super_copy);
-	char *data;
+	u16 csum_type = btrfs_super_csum_type(fs_info->super_copy);
+	u8 *data;
 	unsigned long csum_offset;
-	u32 csum;
-	u32 csum_expected;
+	u8 result[BTRFS_CSUM_SIZE];
+	u8 csum_expected[BTRFS_CSUM_SIZE];
 	u64 read_len;
 	u64 data_checked = 0;
 	u64 tmp;
@@ -5610,7 +5649,7 @@ static int check_extent_csums(struct btrfs_root *root, u64 bytenr,
 		for (mirror = 1; mirror <= num_copies; mirror++) {
 			read_len = num_bytes - offset;
 			/* read as much space once a time */
-			ret = read_extent_data(fs_info, data + offset,
+			ret = read_extent_data(fs_info, (char *)data + offset,
 					bytenr + offset, &read_len, mirror);
 			if (ret)
 				goto out;
@@ -5618,23 +5657,22 @@ static int check_extent_csums(struct btrfs_root *root, u64 bytenr,
 			data_checked = 0;
 			/* verify every 4k data's checksum */
 			while (data_checked < read_len) {
-				csum = ~(u32)0;
 				tmp = offset + data_checked;
 
-				csum = btrfs_csum_data((char *)data + tmp,
-						csum, fs_info->sectorsize);
-				btrfs_csum_final(csum, (u8 *)&csum);
+				btrfs_csum_data(csum_type, data + tmp,
+						result, fs_info->sectorsize);
 
 				csum_offset = leaf_offset +
 					 tmp / fs_info->sectorsize * csum_size;
 				read_extent_buffer(eb, (char *)&csum_expected,
 						   csum_offset, csum_size);
-				if (csum != csum_expected) {
+				if (memcmp(result, csum_expected, csum_size) != 0) {
 					csum_mismatch = true;
+					/* FIXME: format of the checksum value */
 					fprintf(stderr,
 			"mirror %d bytenr %llu csum %u expected csum %u\n",
 						mirror, bytenr + tmp,
-						csum, csum_expected);
+						result[0], csum_expected[0]);
 				}
 				data_checked += fs_info->sectorsize;
 			}
@@ -9021,42 +9059,6 @@ again:
 	if (ret)
 		fprintf(stderr, "error resetting the pending balance\n");
 
-	return ret;
-}
-
-static int recow_extent_buffer(struct btrfs_root *root, struct extent_buffer *eb)
-{
-	struct btrfs_path path;
-	struct btrfs_trans_handle *trans;
-	struct btrfs_key key;
-	int ret;
-
-	printf("Recowing metadata block %llu\n", eb->start);
-	key.objectid = btrfs_header_owner(eb);
-	key.type = BTRFS_ROOT_ITEM_KEY;
-	key.offset = (u64)-1;
-
-	root = btrfs_read_fs_root(root->fs_info, &key);
-	if (IS_ERR(root)) {
-		fprintf(stderr, "Couldn't find owner root %llu\n",
-			key.objectid);
-		return PTR_ERR(root);
-	}
-
-	trans = btrfs_start_transaction(root, 1);
-	if (IS_ERR(trans))
-		return PTR_ERR(trans);
-
-	btrfs_init_path(&path);
-	path.lowest_level = btrfs_header_level(eb);
-	if (path.lowest_level)
-		btrfs_node_key_to_cpu(eb, &key, 0);
-	else
-		btrfs_item_key_to_cpu(eb, &key, 0);
-
-	ret = btrfs_search_slot(trans, root, &key, &path, 0, 1);
-	btrfs_commit_transaction(trans, root);
-	btrfs_release_path(&path);
 	return ret;
 }
 

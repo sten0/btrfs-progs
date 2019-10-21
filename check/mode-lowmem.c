@@ -2519,6 +2519,7 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 		return err;
 	}
 
+	is_orphan = has_orphan_item(root, inode_id);
 	ii = btrfs_item_ptr(node, slot, struct btrfs_inode_item);
 	isize = btrfs_inode_size(node, ii);
 	nbytes = btrfs_inode_nbytes(node, ii);
@@ -2672,19 +2673,22 @@ out:
 		"root %llu INODE[%llu] nlink(%llu) not equal to inode_refs(%llu)",
 				      root->objectid, inode_id, nlink, refs);
 			}
-		} else if (!nlink) {
-			is_orphan = has_orphan_item(root, inode_id);
-			if (!is_orphan && repair)
+		} else if (!nlink && !is_orphan) {
+			if (repair)
 				ret = repair_inode_orphan_item_lowmem(root,
 							      path, inode_id);
-			if (!is_orphan && (!repair || ret)) {
+			if (!repair || ret) {
 				err |= ORPHAN_ITEM;
 				error("root %llu INODE[%llu] is orphan item",
 				      root->objectid, inode_id);
 			}
 		}
 
-		if (nbytes != extent_size) {
+		/*
+		 * For orhpan inode, updating nbytes/size is just a waste of
+		 * time, so skip such repair and don't report them as error.
+		 */
+		if (nbytes != extent_size && !is_orphan) {
 			if (repair) {
 				ret = repair_inode_nbytes_lowmem(root, path,
 							 inode_id, extent_size);
@@ -4957,6 +4961,7 @@ static int check_btrfs_root(struct btrfs_root *root, int check_all)
 	struct btrfs_path path;
 	struct node_refs nrefs;
 	struct btrfs_root_item *root_item = &root->root_item;
+	u64 super_generation = btrfs_super_generation(root->fs_info->super_copy);
 	int ret;
 	int level;
 	int err = 0;
@@ -4978,6 +4983,22 @@ static int check_btrfs_root(struct btrfs_root *root, int check_all)
 	level = btrfs_header_level(root->node);
 	btrfs_init_path(&path);
 
+	if (btrfs_root_generation(root_item) > super_generation + 1) {
+		error(
+	"invalid root generation for root %llu, have %llu expect (0, %llu)",
+		      root->root_key.objectid, btrfs_root_generation(root_item),
+		      super_generation + 1);
+		err |= INVALID_GENERATION;
+		if (repair) {
+			root->node->flags |= EXTENT_BAD_TRANSID;
+			ret = recow_extent_buffer(root, root->node);
+			if (!ret) {
+				printf("Reset generation for root %llu\n",
+					root->root_key.objectid);
+				err &= ~INVALID_GENERATION;
+			}
+		}
+	}
 	if (btrfs_root_refs(root_item) > 0 ||
 	    btrfs_disk_key_objectid(&root_item->drop_progress) == 0) {
 		path.nodes[level] = root->node;

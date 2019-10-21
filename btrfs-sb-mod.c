@@ -33,30 +33,24 @@ static int csum_size;
 
 static int check_csum_superblock(void *sb)
 {
-	u8 result[csum_size];
-	u32 crc = ~(u32)0;
+	u8 result[BTRFS_CSUM_SIZE];
+	u16 csum_type = btrfs_super_csum_type(sb);
 
-	crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE,
-				crc, BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
-	btrfs_csum_final(crc, result);
+	btrfs_csum_data(csum_type, (unsigned char *)sb + BTRFS_CSUM_SIZE,
+			result, BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
 
-	return !memcmp(sb, &result, csum_size);
+	return !memcmp(sb, result, csum_size);
 }
 
-static void update_block_csum(void *block, int is_sb)
+static void update_block_csum(void *block)
 {
-	u8 result[csum_size];
+	u8 result[BTRFS_CSUM_SIZE];
 	struct btrfs_header *hdr;
-	u32 crc = ~(u32)0;
+	u16 csum_type = btrfs_super_csum_type(block);
 
-	if (is_sb) {
-		crc = btrfs_csum_data((char *)block + BTRFS_CSUM_SIZE, crc,
-				BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
-	} else {
-		crc = btrfs_csum_data((char *)block + BTRFS_CSUM_SIZE, crc,
-				BLOCKSIZE - BTRFS_CSUM_SIZE);
-	}
-	btrfs_csum_final(crc, result);
+	btrfs_csum_data(csum_type, (unsigned char *)block + BTRFS_CSUM_SIZE,
+			result, BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
+
 	memset(block, 0, BTRFS_CSUM_SIZE);
 	hdr = (struct btrfs_header *)block;
 	memcpy(&hdr->csum, result, csum_size);
@@ -289,7 +283,7 @@ int main(int argc, char **argv) {
 	}
 
 	/* verify superblock */
-	csum_size = btrfs_csum_sizes[BTRFS_CSUM_TYPE_CRC32];
+	csum_size = btrfs_csum_type_size(BTRFS_CSUM_TYPE_CRC32);
 	off = BTRFS_SUPER_INFO_OFFSET;
 
 	ret = pread(fd, buf, BLOCKSIZE, off);
@@ -346,7 +340,7 @@ int main(int argc, char **argv) {
 
 	if (changed) {
 		printf("Update csum\n");
-		update_block_csum(buf, 1);
+		update_block_csum(buf);
 		ret = pwrite(fd, buf, BLOCKSIZE, off);
 		if (ret <= 0) {
 			printf("pwrite error %d at offset %llu\n",

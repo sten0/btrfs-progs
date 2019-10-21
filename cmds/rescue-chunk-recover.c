@@ -38,7 +38,7 @@
 #include "transaction.h"
 #include "kernel-lib/crc32c.h"
 #include "common/utils.h"
-#include "btrfsck.h"
+#include "check/common.h"
 #include "cmds/commands.h"
 #include "cmds/rescue.h"
 
@@ -47,6 +47,7 @@ struct recover_control {
 	int yes;
 
 	u16 csum_size;
+	u16 csum_type;
 	u32 sectorsize;
 	u32 nodesize;
 	u64 generation;
@@ -767,7 +768,8 @@ static int scan_one_device(void *dev_scan_struct)
 			continue;
 		}
 
-		if (verify_tree_block_csum_silent(buf, rc->csum_size)) {
+		if (verify_tree_block_csum_silent(buf, rc->csum_size,
+						  rc->csum_type)) {
 			bytenr += rc->sectorsize;
 			continue;
 		}
@@ -1530,6 +1532,7 @@ static int recover_prepare(struct recover_control *rc, const char *path)
 	rc->generation = btrfs_super_generation(sb);
 	rc->chunk_root_generation = btrfs_super_chunk_root_generation(sb);
 	rc->csum_size = btrfs_super_csum_size(sb);
+	rc->csum_type = btrfs_super_csum_type(sb);
 
 	/* if seed, the result of scanning below will be partial */
 	if (btrfs_super_flags(sb) & BTRFS_SUPER_FLAG_SEEDING) {
@@ -1884,11 +1887,16 @@ static u64 calc_data_offset(struct btrfs_key *key,
 	return dev_offset + data_offset;
 }
 
-static int check_one_csum(int fd, u64 start, u32 len, u32 tree_csum)
+static int check_one_csum(int fd, u64 start, u32 len, u32 tree_csum,
+			  u16 csum_type)
 {
 	char *data;
 	int ret = 0;
-	u32 csum_result = ~(u32)0;
+	u8 result[BTRFS_CSUM_SIZE];
+	int csum_size = 0;
+	u8 expected_csum[BTRFS_CSUM_SIZE];
+
+	ASSERT(0);
 
 	data = malloc(len);
 	if (!data)
@@ -1899,9 +1907,9 @@ static int check_one_csum(int fd, u64 start, u32 len, u32 tree_csum)
 		goto out;
 	}
 	ret = 0;
-	csum_result = btrfs_csum_data(data, csum_result, len);
-	btrfs_csum_final(csum_result, (u8 *)&csum_result);
-	if (csum_result != tree_csum)
+	put_unaligned_le32(tree_csum, expected_csum);
+	btrfs_csum_data(csum_type, (u8 *)data, result, len);
+	if (memcmp(result, expected_csum, csum_size) != 0)
 		ret = 1;
 out:
 	free(data);
@@ -2099,7 +2107,8 @@ next_csum:
 						  devext->objectid, 1));
 
 		ret = check_one_csum(dev->fd, data_offset, blocksize,
-				     tree_csum);
+				     tree_csum,
+				     btrfs_super_csum_type(root->fs_info->super_copy));
 		if (ret < 0)
 			goto fail_out;
 		else if (ret > 0)

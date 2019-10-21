@@ -165,10 +165,9 @@ struct btrfs_free_space_ctl;
 #define BTRFS_CSUM_SIZE 32
 
 /* csum types */
-#define BTRFS_CSUM_TYPE_CRC32	0
-
-/* four bytes for CRC32 */
-static int btrfs_csum_sizes[] = { 4 };
+enum btrfs_csum_type {
+	BTRFS_CSUM_TYPE_CRC32		= 0,
+};
 
 #define BTRFS_EMPTY_DIR_SIZE 0
 
@@ -2261,13 +2260,6 @@ BTRFS_SETGET_STACK_FUNCS(super_uuid_tree_generation, struct btrfs_super_block,
 			 uuid_tree_generation, 64);
 BTRFS_SETGET_STACK_FUNCS(super_magic, struct btrfs_super_block, magic, 64);
 
-static inline int btrfs_super_csum_size(struct btrfs_super_block *s)
-{
-	int t = btrfs_super_csum_type(s);
-	BUG_ON(t >= ARRAY_SIZE(btrfs_csum_sizes));
-	return btrfs_csum_sizes[t];
-}
-
 static inline unsigned long btrfs_leaf_data(struct extent_buffer *l)
 {
 	return offsetof(struct btrfs_leaf, items);
@@ -2697,6 +2689,11 @@ int btrfs_set_item_key_safe(struct btrfs_root *root, struct btrfs_path *path,
 void btrfs_set_item_key_unsafe(struct btrfs_root *root,
 			       struct btrfs_path *path,
 			       struct btrfs_key *new_key);
+
+u16 btrfs_super_csum_size(const struct btrfs_super_block *s);
+const char *btrfs_super_csum_name(u16 csum_type);
+u16 btrfs_csum_type_size(u16 csum_type);
+size_t btrfs_super_num_csums(void);
 
 /* root-item.c */
 int btrfs_add_root_ref(struct btrfs_trans_handle *trans,
