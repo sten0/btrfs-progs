@@ -3,7 +3,11 @@
 #   all		all main tools and the shared library
 #   static      build static binaries, requires static version of the libraries
 #   test        run the full testsuite
-#   install     install to default location (/usr/local)
+#   install     install binaries, shared libraries and header files to default
+#               location (/usr/local)
+#   install-static
+#               install the static binaries, static libraries and header files
+#               to default locationh (/usr/local)
 #   clean       clean built binaries (not the documentation)
 #   clean-all   clean as above, clean docs and generated files
 #
@@ -78,6 +82,9 @@ TOPDIR := .
 DISABLE_WARNING_FLAGS := $(call cc-disable-warning, format-truncation) \
 	$(call cc-disable-warning, address-of-packed-member)
 
+# Warnings that we want by default
+ENABLE_WARNING_FLAGS := $(call cc-option, -Wimplicit-fallthrough)
+
 # Common build flags
 CFLAGS = $(SUBST_CFLAGS) \
 	 $(CSTD) \
@@ -89,6 +96,7 @@ CFLAGS = $(SUBST_CFLAGS) \
 	 -I$(TOPDIR) \
 	 -I$(TOPDIR)/libbtrfsutil \
 	 $(DISABLE_WARNING_FLAGS) \
+	 $(ENABLE_WARNING_FLAGS) \
 	 $(EXTRAWARN_CFLAGS) \
 	 $(DEBUG_CFLAGS_INTERNAL) \
 	 $(EXTRA_CFLAGS)
@@ -149,16 +157,17 @@ cmds_objects = cmds/subvolume.o cmds/filesystem.o cmds/device.o cmds/scrub.o \
 	       mkfs/common.o check/mode-common.o check/mode-lowmem.o
 libbtrfs_objects = send-stream.o send-utils.o kernel-lib/rbtree.o btrfs-list.o \
 		   kernel-lib/radix-tree.o extent-cache.o extent_io.o \
-		   kernel-lib/crc32c.o common/messages.o \
+		   crypto/crc32c.o common/messages.o \
 		   uuid-tree.o utils-lib.o common/rbtree-utils.o \
 		   ctree.o disk-io.o extent-tree.o delayed-ref.o print-tree.o \
 		   free-space-cache.o root-tree.o volumes.o transaction.o \
 		   free-space-tree.o repair.o inode-item.o file-item.o \
 		   kernel-lib/raid56.o kernel-lib/tables.o \
 		   common/device-scan.o common/path-utils.o \
-		   common/utils.o libbtrfsutil/subvolume.o libbtrfsutil/stubs.o
+		   common/utils.o libbtrfsutil/subvolume.o libbtrfsutil/stubs.o \
+		   crypto/hash.o crypto/xxhash.o crypto/sha224-256.o crypto/blake2b-ref.o
 libbtrfs_headers = send-stream.h send-utils.h send.h kernel-lib/rbtree.h btrfs-list.h \
-	       kernel-lib/crc32c.h kernel-lib/list.h kerncompat.h \
+	       crypto/crc32c.h kernel-lib/list.h kerncompat.h \
 	       kernel-lib/radix-tree.h kernel-lib/sizes.h kernel-lib/raid56.h \
 	       extent-cache.h extent_io.h ioctl.h ctree.h btrfsck.h version.h
 libbtrfsutil_major := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MAJOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
@@ -433,7 +442,7 @@ endif
 # NOTE: For static compiles, you need to have all the required libs
 # 	static equivalent available
 #
-static: $(progs_static)
+static: $(progs_static) $(libs_static)
 
 version.h: version.h.in configure.ac
 	@echo "    [SH]     $@"
@@ -641,9 +650,13 @@ library-test.static: library-test.c $(libs_static)
 	@echo "    [TEST CLEAN] $@"
 	$(Q)$(RM) -rf -- $(TMPD)
 
-fssum: tests/fssum.c tests/sha224-256.c
+fssum: tests/fssum.c crypto/sha224-256.c
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+hash-speedtest: crypto/hash-speedtest.c $(objects) $(libs_static)
+	@echo "    [LD]     $@"
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 test-build: test-build-pre test-build-real
 
@@ -694,6 +707,7 @@ clean: $(CLEANDIRS)
 		convert/*.o convert/*.o.d \
 		mkfs/*.o mkfs/*.o.d check/*.o check/*.o.d \
 		cmds/*.o cmds/*.o.d common/*.o common/*.o.d \
+		crypto/*.o crypto/*.o.d \
 	      ioctl-test quick-test library-test library-test-static \
               mktables btrfs.static mkfs.btrfs.static fssum \
 	      btrfs.box btrfs.box.static \
@@ -759,6 +773,10 @@ install-static: $(progs_static) $(INSTALLDIRS)
 	$(INSTALL) $(progs_static) $(DESTDIR)$(bindir)
 	# btrfsck is a link to btrfs in the src tree, make it so for installed file as well
 	$(LN_S) -f btrfs.static $(DESTDIR)$(bindir)/btrfsck.static
+	$(INSTALL) -m755 -d $(DESTDIR)$(libdir)
+	$(INSTALL) $(libs_static) $(DESTDIR)$(libdir)
+	$(INSTALL) -m755 -d $(DESTDIR)$(incdir)/btrfs
+	$(INSTALL) -m644 $(libbtrfs_headers) $(DESTDIR)$(incdir)/btrfs
 
 $(INSTALLDIRS):
 	@echo "Making install in $(patsubst install-%,%,$@)"

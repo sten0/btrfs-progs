@@ -47,7 +47,7 @@
 #include "ctree.h"
 #include "disk-io.h"
 #include "transaction.h"
-#include "kernel-lib/crc32c.h"
+#include "crypto/crc32c.h"
 #include "common/utils.h"
 #include "common/path-utils.h"
 #include "common/device-scan.h"
@@ -401,15 +401,15 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_size, unsigned unit_mod
 	case UNITS_TBYTES:
 		base *= mult;
 		num_divs++;
-		__attribute__ ((fallthrough));
+		/* fallthrough */
 	case UNITS_GBYTES:
 		base *= mult;
 		num_divs++;
-		__attribute__ ((fallthrough));
+		/* fallthrough */
 	case UNITS_MBYTES:
 		base *= mult;
 		num_divs++;
-		__attribute__ ((fallthrough));
+		/* fallthrough */
 	case UNITS_KBYTES:
 		num_divs++;
 		break;
@@ -760,6 +760,26 @@ path:
 err:
 	error("invalid qgroupid or subvolume path: %s", p);
 	exit(-1);
+}
+
+enum btrfs_csum_type parse_csum_type(const char *s)
+{
+	if (strcasecmp(s, "crc32c") == 0) {
+		return BTRFS_CSUM_TYPE_CRC32;
+	} else if (strcasecmp(s, "xxhash64") == 0 ||
+		   strcasecmp(s, "xxhash") == 0) {
+		return BTRFS_CSUM_TYPE_XXHASH;
+	} else if (strcasecmp(s, "sha256") == 0) {
+		return BTRFS_CSUM_TYPE_SHA256;
+	} else if (strcasecmp(s, "blake2b") == 0 ||
+		   strcasecmp(s, "blake2") == 0) {
+		return BTRFS_CSUM_TYPE_BLAKE2;
+	} else {
+		error("unknown csum type %s", s);
+		exit(1);
+	}
+	/* not reached */
+	return 0;
 }
 
 int open_file_or_dir3(const char *fname, DIR **dirstream, int open_flags)
@@ -1117,8 +1137,10 @@ static int group_profile_devs_min(u64 flag)
 	case BTRFS_BLOCK_GROUP_RAID5:
 		return 2;
 	case BTRFS_BLOCK_GROUP_RAID6:
+	case BTRFS_BLOCK_GROUP_RAID1C3:
 		return 3;
 	case BTRFS_BLOCK_GROUP_RAID10:
+	case BTRFS_BLOCK_GROUP_RAID1C4:
 		return 4;
 	default:
 		return -1;
@@ -1135,14 +1157,15 @@ int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 	default:
 	case 4:
 		allowed |= BTRFS_BLOCK_GROUP_RAID10;
-		__attribute__ ((fallthrough));
+		allowed |= BTRFS_BLOCK_GROUP_RAID10 | BTRFS_BLOCK_GROUP_RAID1C4;
+		/* fallthrough */
 	case 3:
-		allowed |= BTRFS_BLOCK_GROUP_RAID6;
-		__attribute__ ((fallthrough));
+		allowed |= BTRFS_BLOCK_GROUP_RAID6 | BTRFS_BLOCK_GROUP_RAID1C3;
+		/* fallthrough */
 	case 2:
 		allowed |= BTRFS_BLOCK_GROUP_RAID0 | BTRFS_BLOCK_GROUP_RAID1 |
 			BTRFS_BLOCK_GROUP_RAID5;
-		__attribute__ ((fallthrough));
+		/* fallthrough */
 	case 1:
 		allowed |= BTRFS_BLOCK_GROUP_DUP;
 	}
@@ -1191,7 +1214,10 @@ int group_profile_max_safe_loss(u64 flags)
 	case BTRFS_BLOCK_GROUP_RAID10:
 		return 1;
 	case BTRFS_BLOCK_GROUP_RAID6:
+	case BTRFS_BLOCK_GROUP_RAID1C3:
 		return 2;
+	case BTRFS_BLOCK_GROUP_RAID1C4:
+		return 3;
 	default:
 		return -1;
 	}
@@ -1341,6 +1367,10 @@ const char* btrfs_group_profile_str(u64 flag)
 		return "RAID0";
 	case BTRFS_BLOCK_GROUP_RAID1:
 		return "RAID1";
+	case BTRFS_BLOCK_GROUP_RAID1C3:
+		return "RAID1C3";
+	case BTRFS_BLOCK_GROUP_RAID1C4:
+		return "RAID1C4";
 	case BTRFS_BLOCK_GROUP_RAID5:
 		return "RAID5";
 	case BTRFS_BLOCK_GROUP_RAID6:

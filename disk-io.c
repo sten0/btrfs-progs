@@ -29,11 +29,12 @@
 #include "disk-io.h"
 #include "volumes.h"
 #include "transaction.h"
-#include "kernel-lib/crc32c.h"
+#include "crypto/crc32c.h"
 #include "common/utils.h"
 #include "print-tree.h"
 #include "common/rbtree-utils.h"
 #include "common/device-scan.h"
+#include "crypto/hash.h"
 
 /* specified errno for check_tree_block */
 #define BTRFS_BAD_BYTENR		(-1)
@@ -140,15 +141,17 @@ static void print_tree_block_error(struct btrfs_fs_info *fs_info,
 
 int btrfs_csum_data(u16 csum_type, const u8 *data, u8 *out, size_t len)
 {
-	u32 crc = ~(u32)0;
-
 	memset(out, 0, BTRFS_CSUM_SIZE);
 
 	switch (csum_type) {
 	case BTRFS_CSUM_TYPE_CRC32:
-		crc = crc32c(crc, data, len);
-		put_unaligned_le32(~crc, out);
-		return 0;
+		return hash_crc32c(data, len, out);
+	case BTRFS_CSUM_TYPE_XXHASH:
+		return hash_xxhash(data, len, out);
+	case BTRFS_CSUM_TYPE_SHA256:
+		return hash_sha256(data, len, out);
+	case BTRFS_CSUM_TYPE_BLAKE2:
+		return hash_blake2b(data, len, out);
 	default:
 		fprintf(stderr, "ERROR: unknown csum type: %d\n", csum_type);
 		ASSERT(0);
@@ -886,9 +889,11 @@ static int setup_root_or_create_block(struct btrfs_fs_info *fs_info,
 
 	ret = find_and_setup_root(root, fs_info, objectid, info_root);
 	if (ret) {
-		printk("Couldn't setup %s tree\n", str);
-		if (!(flags & OPEN_CTREE_PARTIAL))
+		if (!(flags & OPEN_CTREE_PARTIAL)) {
+			error("could not setup %s tree", str);
 			return -EIO;
+		}
+		warning("could not setup %s tree, skipping it", str);
 		/*
 		 * Need a blank node here just so we don't screw up in the
 		 * million of places that assume a root has a valid ->node
@@ -995,14 +1000,17 @@ int btrfs_setup_all_roots(struct btrfs_fs_info *fs_info, u64 root_tree_bytenr,
 	fs_info->last_trans_committed = generation;
 	if (extent_buffer_uptodate(fs_info->extent_root->node) &&
 	    !(flags & OPEN_CTREE_NO_BLOCK_GROUPS)) {
-		ret = btrfs_read_block_groups(fs_info->tree_root);
+		ret = btrfs_read_block_groups(fs_info);
 		/*
 		 * If we don't find any blockgroups (ENOENT) we're either
 		 * restoring or creating the filesystem, where it's expected,
 		 * anything else is error
 		 */
-		if (ret != -ENOENT)
-			return -EIO;
+		if (ret < 0 && ret != -ENOENT) {
+			errno = -ret;
+			error("failed to read block groups: %m");
+			return ret;
+		}
 	}
 
 	key.objectid = BTRFS_FS_TREE_OBJECTID;

@@ -91,9 +91,25 @@ _get_spec_ins()
 			echo -n 4
 			return
 		fi
+		if [[ $2 =~ /mkfs.btrfs$ ]]; then
+			echo -n 3
+			return
+		fi
+		if [[ $2 =~ /btrfs-convert$ ]]; then
+			echo -n 3
+			return
+		fi
 	else
 		if [[ $1 =~ /btrfs$ ]]; then
 			echo -n 3
+			return
+		fi
+		if [[ $1 =~ /mkfs.btrfs$ ]]; then
+			echo -n 2
+			return
+		fi
+		if [[ $1 =~ /btrfs-convert$ ]]; then
+			echo -n 2
 			return
 		fi
 	fi
@@ -113,6 +129,8 @@ _cmd_spec()
 		fi
 		case "$1" in
 	  		check) echo -n "$TEST_ARGS_CHECK" ;;
+			*/mkfs.btrfs) echo -n "$TEST_ARGS_MKFS" ;;
+			*/btrfs-convert) echo -n "$TEST_ARGS_CONVERT" ;;
 		esac
 	fi
 }
@@ -129,11 +147,9 @@ run_check()
 {
 	local spec
 	local ins
-	local cmd
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
-	cmd=$(eval echo "\${$spec}")
 	spec=$(_cmd_spec "${@:$spec}")
 	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
 	echo "====== RUN CHECK $@" >> "$RESULTS" 2>&1
@@ -151,11 +167,9 @@ run_check_stdout()
 {
 	local spec
 	local ins
-	local cmd
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
-	cmd=$(eval echo "\${$spec}")
 	spec=$(_cmd_spec "${@:$spec}")
 	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
 	echo "====== RUN CHECK $@" >> "$RESULTS" 2>&1
@@ -177,12 +191,10 @@ run_mayfail()
 {
 	local spec
 	local ins
-	local cmd
 	local ret
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
-	cmd=$(eval echo "\${$spec}")
 	spec=$(_cmd_spec "${@:$spec}")
 	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
 	echo "====== RUN MAYFAIL $@" >> "$RESULTS" 2>&1
@@ -210,7 +222,6 @@ run_mustfail()
 {
 	local spec
 	local ins
-	local cmd
 	local msg
 
 	msg="$1"
@@ -223,7 +234,6 @@ run_mustfail()
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
-	cmd=$(eval echo "\${$spec}")
 	spec=$(_cmd_spec "${@:$spec}")
 	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
 	echo "====== RUN MUSTFAIL $@" >> "$RESULTS" 2>&1
@@ -252,7 +262,6 @@ run_mustfail_stdout()
 {
 	local spec
 	local ins
-	local cmd
 	local msg
 	local ret
 	local tmp_output
@@ -269,7 +278,6 @@ run_mustfail_stdout()
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
-	cmd=$(eval echo "\${$spec}")
 	spec=$(_cmd_spec "${@:$spec}")
 	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
 	echo "====== RUN MUSTFAIL $@" >> "$RESULTS" 2>&1
@@ -713,6 +721,8 @@ init_env()
 	if [ "$TEST_ENABLE_OVERRIDE" = 'true' -a -n "$RESULTS" ]; then
 		echo "INCLUDE common.local" >> "$RESULTS"
 		echo "  check: $TEST_ARGS_CHECK" >> "$RESULTS"
+		echo "  mkfs: $TEST_ARGS_MKFS" >> "$RESULTS"
+		echo "  convert: $TEST_ARGS_CONVERT" >> "$RESULTS"
 	fi
 }
 init_env

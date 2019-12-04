@@ -167,6 +167,9 @@ struct btrfs_free_space_ctl;
 /* csum types */
 enum btrfs_csum_type {
 	BTRFS_CSUM_TYPE_CRC32		= 0,
+	BTRFS_CSUM_TYPE_XXHASH		= 1,
+	BTRFS_CSUM_TYPE_SHA256		= 2,
+	BTRFS_CSUM_TYPE_BLAKE2		= 3,
 };
 
 #define BTRFS_EMPTY_DIR_SIZE 0
@@ -489,6 +492,7 @@ struct btrfs_super_block {
 #define BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA	(1ULL << 8)
 #define BTRFS_FEATURE_INCOMPAT_NO_HOLES		(1ULL << 9)
 #define BTRFS_FEATURE_INCOMPAT_METADATA_UUID    (1ULL << 10)
+#define BTRFS_FEATURE_INCOMPAT_RAID1C34		(1ULL << 11)
 
 #define BTRFS_FEATURE_COMPAT_SUPP		0ULL
 
@@ -512,6 +516,7 @@ struct btrfs_super_block {
 	 BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS |		\
 	 BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA |	\
 	 BTRFS_FEATURE_INCOMPAT_NO_HOLES |		\
+	 BTRFS_FEATURE_INCOMPAT_RAID1C34 |		\
 	 BTRFS_FEATURE_INCOMPAT_METADATA_UUID)
 
 /*
@@ -961,6 +966,8 @@ struct btrfs_csum_item {
 #define BTRFS_BLOCK_GROUP_RAID10	(1ULL << 6)
 #define BTRFS_BLOCK_GROUP_RAID5    	(1ULL << 7)
 #define BTRFS_BLOCK_GROUP_RAID6    	(1ULL << 8)
+#define BTRFS_BLOCK_GROUP_RAID1C3    	(1ULL << 9)
+#define BTRFS_BLOCK_GROUP_RAID1C4    	(1ULL << 10)
 #define BTRFS_BLOCK_GROUP_RESERVED	BTRFS_AVAIL_ALLOC_BIT_SINGLE
 
 enum btrfs_raid_types {
@@ -971,6 +978,8 @@ enum btrfs_raid_types {
 	BTRFS_RAID_SINGLE,
 	BTRFS_RAID_RAID5,
 	BTRFS_RAID_RAID6,
+	BTRFS_RAID_RAID1C3,
+	BTRFS_RAID_RAID1C4,
 	BTRFS_NR_RAID_TYPES
 };
 
@@ -982,6 +991,8 @@ enum btrfs_raid_types {
 					 BTRFS_BLOCK_GROUP_RAID1 |   \
 					 BTRFS_BLOCK_GROUP_RAID5 |   \
 					 BTRFS_BLOCK_GROUP_RAID6 |   \
+					 BTRFS_BLOCK_GROUP_RAID1C3 | \
+					 BTRFS_BLOCK_GROUP_RAID1C4 | \
 					 BTRFS_BLOCK_GROUP_DUP |     \
 					 BTRFS_BLOCK_GROUP_RAID10)
 
@@ -1087,9 +1098,9 @@ struct btrfs_space_info {
 struct btrfs_block_group_cache {
 	struct cache_extent cache;
 	struct btrfs_key key;
-	struct btrfs_block_group_item item;
 	struct btrfs_space_info *space_info;
 	struct btrfs_free_space_ctl *free_space_ctl;
+	u64 used;
 	u64 bytes_super;
 	u64 pinned;
 	u64 flags;
@@ -2542,7 +2553,7 @@ int update_space_info(struct btrfs_fs_info *info, u64 flags,
 		      u64 total_bytes, u64 bytes_used,
 		      struct btrfs_space_info **space_info);
 int btrfs_free_block_groups(struct btrfs_fs_info *info);
-int btrfs_read_block_groups(struct btrfs_root *root);
+int btrfs_read_block_groups(struct btrfs_fs_info *info);
 struct btrfs_block_group_cache *
 btrfs_add_block_group(struct btrfs_fs_info *fs_info, u64 bytes_used, u64 type,
 		      u64 chunk_offset, u64 size);
@@ -2560,9 +2571,9 @@ int btrfs_record_file_extent(struct btrfs_trans_handle *trans,
 			      u64 num_bytes);
 int btrfs_free_block_group(struct btrfs_trans_handle *trans,
 			   struct btrfs_fs_info *fs_info, u64 bytenr, u64 len);
-void free_excluded_extents(struct btrfs_root *root,
+void free_excluded_extents(struct btrfs_fs_info *fs_info,
 			   struct btrfs_block_group_cache *cache);
-int exclude_super_stripes(struct btrfs_root *root,
+int exclude_super_stripes(struct btrfs_fs_info *fs_info,
 			  struct btrfs_block_group_cache *cache);
 u64 add_new_free_space(struct btrfs_block_group_cache *block_group,
 		       struct btrfs_fs_info *info, u64 start, u64 end);

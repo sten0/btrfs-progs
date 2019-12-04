@@ -36,7 +36,7 @@
 #include "disk-io.h"
 #include "volumes.h"
 #include "transaction.h"
-#include "kernel-lib/crc32c.h"
+#include "crypto/crc32c.h"
 #include "common/utils.h"
 #include "check/common.h"
 #include "cmds/commands.h"
@@ -1104,7 +1104,7 @@ static int block_group_free_all_extent(struct btrfs_root *root,
 			BLOCK_GROUP_DIRTY);
 	set_extent_dirty(&info->free_space_cache, start, end);
 
-	btrfs_set_block_group_used(&cache->item, 0);
+	cache->used = 0;
 
 	return 0;
 }
@@ -1582,6 +1582,10 @@ static int calc_num_stripes(u64 type)
 	else if (type & (BTRFS_BLOCK_GROUP_RAID1 |
 			 BTRFS_BLOCK_GROUP_DUP))
 		return 2;
+	else if (type & (BTRFS_BLOCK_GROUP_RAID1C3))
+		return 3;
+	else if (type & (BTRFS_BLOCK_GROUP_RAID1C4))
+		return 4;
 	else
 		return 1;
 }

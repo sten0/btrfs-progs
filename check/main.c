@@ -620,6 +620,8 @@ static void print_inode_error(struct btrfs_root *root, struct inode_record *rec)
 	if (errors & I_ERR_INVALID_IMODE)
 		fprintf(stderr, ", invalid inode mode bit 0%o",
 			rec->imode & ~07777);
+	if (errors & I_ERR_INVALID_GEN)
+		fprintf(stderr, ", invalid inode generation");
 	fprintf(stderr, "\n");
 
 	/* Print the holes if needed */
@@ -873,6 +875,7 @@ static int process_inode_item(struct extent_buffer *eb,
 {
 	struct inode_record *rec;
 	struct btrfs_inode_item *item;
+	u64 gen_uplimit;
 	u64 flags;
 
 	rec = active_node->current;
@@ -895,6 +898,13 @@ static int process_inode_item(struct extent_buffer *eb,
 	if (S_ISLNK(rec->imode) &&
 	    flags & (BTRFS_INODE_IMMUTABLE | BTRFS_INODE_APPEND))
 		rec->errors |= I_ERR_ODD_INODE_FLAGS;
+	/*
+	 * We don't have accurate root info to determine the correct
+	 * inode generation uplimit, use super_generation + 1 anyway
+	 */
+	gen_uplimit = btrfs_super_generation(global_info->super_copy) + 1;
+	if (btrfs_inode_generation(eb, item) > gen_uplimit)
+		rec->errors |= I_ERR_INVALID_GEN;
 	maybe_free_inode_rec(&active_node->inode_cache, rec);
 	return 0;
 }
@@ -2448,21 +2458,6 @@ out:
 	return ret;
 }
 
-static u32 btrfs_type_to_imode(u8 type)
-{
-	static u32 imode_by_btrfs_type[] = {
-		[BTRFS_FT_REG_FILE]	= S_IFREG,
-		[BTRFS_FT_DIR]		= S_IFDIR,
-		[BTRFS_FT_CHRDEV]	= S_IFCHR,
-		[BTRFS_FT_BLKDEV]	= S_IFBLK,
-		[BTRFS_FT_FIFO]		= S_IFIFO,
-		[BTRFS_FT_SOCK]		= S_IFSOCK,
-		[BTRFS_FT_SYMLINK]	= S_IFLNK,
-	};
-
-	return imode_by_btrfs_type[(type)];
-}
-
 static int repair_inode_no_item(struct btrfs_trans_handle *trans,
 				struct btrfs_root *root,
 				struct btrfs_path *path,
@@ -2771,23 +2766,76 @@ static int repair_imode_original(struct btrfs_trans_handle *trans,
 				 struct btrfs_path *path,
 				 struct inode_record *rec)
 {
+	struct btrfs_key key;
 	int ret;
 	u32 imode;
 
-	if (root->root_key.objectid != BTRFS_ROOT_TREE_OBJECTID)
-		return -ENOTTY;
-	if (rec->ino != BTRFS_ROOT_TREE_DIR_OBJECTID || !is_fstree(rec->ino))
-		return -ENOTTY;
+	key.objectid = rec->ino;
+	key.type = BTRFS_INODE_ITEM_KEY;
+	key.offset = 0;
 
-	if (rec->ino == BTRFS_ROOT_TREE_DIR_OBJECTID)
-		imode = 040755;
-	else
-		imode = 0100600;
+	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
+	if (ret > 0)
+		ret = -ENOENT;
+	if (ret < 0)
+		return ret;
+
+	if (root->objectid == BTRFS_ROOT_TREE_OBJECTID) {
+		/* In root tree we only have two possible imode */
+		if (rec->ino == BTRFS_ROOT_TREE_OBJECTID)
+			imode = S_IFDIR | 0755;
+		else
+			imode = S_IFREG | 0600;
+	} else {
+		ret = detect_imode(root, path, &imode);
+		if (ret < 0) {
+			btrfs_release_path(path);
+			return ret;
+		}
+	}
+	btrfs_release_path(path);
 	ret = reset_imode(trans, root, path, rec->ino, imode);
+	btrfs_release_path(path);
 	if (ret < 0)
 		return ret;
 	rec->errors &= ~I_ERR_INVALID_IMODE;
+	rec->imode = imode;
 	return ret;
+}
+
+static int repair_inode_gen_original(struct btrfs_trans_handle *trans,
+				     struct btrfs_root *root,
+				     struct btrfs_path *path,
+				     struct inode_record *rec)
+{
+	struct btrfs_inode_item *ii;
+	struct btrfs_key key;
+	int ret;
+
+	key.objectid = rec->ino;
+	key.offset = 0;
+	key.type = BTRFS_INODE_ITEM_KEY;
+
+	ret = btrfs_search_slot(trans, root, &key, path, 0, 1);
+	if (ret > 0) {
+		ret = -ENOENT;
+		error("no inode item found for ino %llu", rec->ino);
+		return ret;
+	}
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to search inode item for ino %llu: %m", rec->ino);
+		return ret;
+	}
+	ii = btrfs_item_ptr(path->nodes[0], path->slots[0],
+			    struct btrfs_inode_item);
+	btrfs_set_inode_generation(path->nodes[0], ii, trans->transid);
+	btrfs_mark_buffer_dirty(path->nodes[0]);
+	btrfs_release_path(path);
+	printf("resetting inode generation to %llu for ino %llu\n",
+		trans->transid, rec->ino);
+	rec->errors &= ~I_ERR_INVALID_GEN;
+	return 0;
 }
 
 static int try_repair_inode(struct btrfs_root *root, struct inode_record *rec)
@@ -2810,7 +2858,9 @@ static int try_repair_inode(struct btrfs_root *root, struct inode_record *rec)
 			     I_ERR_FILE_NBYTES_WRONG |
 			     I_ERR_INLINE_RAM_BYTES_WRONG |
 			     I_ERR_MISMATCH_DIR_HASH |
-			     I_ERR_UNALIGNED_EXTENT_REC)))
+			     I_ERR_UNALIGNED_EXTENT_REC |
+			     I_ERR_INVALID_IMODE |
+			     I_ERR_INVALID_GEN)))
 		return rec->errors;
 
 	/*
@@ -2827,6 +2877,8 @@ static int try_repair_inode(struct btrfs_root *root, struct inode_record *rec)
 	btrfs_init_path(&path);
 	if (!ret && rec->errors & I_ERR_MISMATCH_DIR_HASH)
 		ret = repair_mismatch_dir_hash(trans, root, rec);
+	if (!ret && rec->errors & I_ERR_INVALID_IMODE)
+		ret = repair_imode_original(trans, root, &path, rec);
 	if (rec->errors & I_ERR_NO_INODE_ITEM)
 		ret = repair_inode_no_item(trans, root, &path, rec);
 	if (!ret && rec->errors & I_ERR_FILE_EXTENT_DISCOUNT)
@@ -2843,8 +2895,8 @@ static int try_repair_inode(struct btrfs_root *root, struct inode_record *rec)
 		ret = repair_inline_ram_bytes(trans, root, &path, rec);
 	if (!ret && rec->errors & I_ERR_UNALIGNED_EXTENT_REC)
 		ret = repair_unaligned_extent_recs(trans, root, &path, rec);
-	if (!ret && rec->errors & I_ERR_INVALID_IMODE)
-		ret = repair_imode_original(trans, root, &path, rec);
+	if (!ret && rec->errors & I_ERR_INVALID_GEN)
+		ret = repair_inode_gen_original(trans, root, &path, rec);
 	btrfs_commit_transaction(trans, root);
 	btrfs_release_path(&path);
 	return ret;
@@ -5568,7 +5620,7 @@ static int check_space_cache(struct btrfs_root *root)
 		}
 
 		if (btrfs_fs_compat_ro(root->fs_info, FREE_SPACE_TREE)) {
-			ret = exclude_super_stripes(root, cache);
+			ret = exclude_super_stripes(root->fs_info, cache);
 			if (ret) {
 				errno = -ret;
 				fprintf(stderr,
@@ -5577,7 +5629,7 @@ static int check_space_cache(struct btrfs_root *root)
 				continue;
 			}
 			ret = load_free_space_tree(root->fs_info, cache);
-			free_excluded_extents(root, cache);
+			free_excluded_extents(root->fs_info, cache);
 			if (ret < 0) {
 				errno = -ret;
 				fprintf(stderr,
@@ -9039,15 +9091,19 @@ again:
 	 * pinned all of it above.
 	 */
 	while (1) {
+		struct btrfs_block_group_item bgi;
 		struct btrfs_block_group_cache *cache;
 
 		cache = btrfs_lookup_first_block_group(fs_info, start);
 		if (!cache)
 			break;
 		start = cache->key.objectid + cache->key.offset;
+		btrfs_set_block_group_used(&bgi, cache->used);
+		btrfs_set_block_group_chunk_objectid(&bgi,
+					BTRFS_FIRST_CHUNK_TREE_OBJECTID);
+		btrfs_set_block_group_flags(&bgi, cache->flags);
 		ret = btrfs_insert_item(trans, fs_info->extent_root,
-					&cache->key, &cache->item,
-					sizeof(cache->item));
+					&cache->key, &bgi, sizeof(bgi));
 		if (ret) {
 			fprintf(stderr, "Error adding block group\n");
 			return ret;
@@ -9970,6 +10026,24 @@ static int cmd_check(const struct cmd_struct *cmd, int argc, char **argv)
 		exit(1);
 	}
 
+	if (repair && !force) {
+		int delay = 10;
+
+		printf("WARNING:\n\n");
+		printf("\tDo not use --repair unless you are advised to do so by a developer\n");
+		printf("\tor an experienced user, and then only after having accepted that no\n");
+		printf("\tfsck can successfully repair all types of filesystem corruption. Eg.\n");
+		printf("\tsome software or hardware bugs can fatally damage a volume.\n");
+		printf("\tThe operation will start in %d seconds.\n", delay);
+		printf("\tUse Ctrl-C to stop it.\n");
+		while (delay) {
+			printf("%2d", delay--);
+			fflush(stdout);
+			sleep(1);
+		}
+		printf("\nStarting repair.\n");
+	}
+
 	/*
 	 * experimental and dangerous
 	 */
@@ -9998,12 +10072,6 @@ static int cmd_check(const struct cmd_struct *cmd, int argc, char **argv)
 			goto err_out;
 		}
 	} else {
-		if (repair) {
-			error("repair and --force is not yet supported");
-			ret = 1;
-			err |= !!ret;
-			goto err_out;
-		}
 		if (ret < 0) {
 			warning(
 "cannot check mount status of %s, the filesystem could be mounted, continuing because of --force",
