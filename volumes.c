@@ -1802,6 +1802,11 @@ btrfs_find_device_by_devid(struct btrfs_fs_devices *fs_devices,
 	return NULL;
 }
 
+/*
+ * Return 0 if the chunk at @chunk_offset exists and is not read-only.
+ * Return 1 if the chunk at @chunk_offset exists and is read-only.
+ * Return <0 if we can't find chunk at @chunk_offset.
+ */
 int btrfs_chunk_readonly(struct btrfs_fs_info *fs_info, u64 chunk_offset)
 {
 	struct cache_extent *ce;
@@ -1814,11 +1819,12 @@ int btrfs_chunk_readonly(struct btrfs_fs_info *fs_info, u64 chunk_offset)
 	 * During chunk recovering, we may fail to find block group's
 	 * corresponding chunk, we will rebuild it later
 	 */
-	ce = search_cache_extent(&map_tree->cache_tree, chunk_offset);
-	if (!fs_info->is_chunk_recover)
-		BUG_ON(!ce);
-	else
+	if (fs_info->is_chunk_recover)
 		return 0;
+
+	ce = search_cache_extent(&map_tree->cache_tree, chunk_offset);
+	if (!ce)
+		return -ENOENT;
 
 	map = container_of(ce, struct map_lookup, ce);
 	for (i = 0; i < map->num_stripes; i++) {
@@ -1858,11 +1864,36 @@ int btrfs_check_chunk_valid(struct btrfs_fs_info *fs_info,
 	u32 chunk_ondisk_size;
 	u32 sectorsize = fs_info->sectorsize;
 
+	/*
+	 * Basic chunk item size check.  Note that btrfs_chunk already contains
+	 * one stripe, so no "==" check.
+	 */
+	if (slot >= 0 &&
+	    btrfs_item_size_nr(leaf, slot) < sizeof(struct btrfs_chunk)) {
+		error("invalid chunk item size, have %u expect [%zu, %lu)",
+			btrfs_item_size_nr(leaf, slot),
+			sizeof(struct btrfs_chunk),
+			BTRFS_LEAF_DATA_SIZE(fs_info));
+		return -EUCLEAN;
+	}
 	length = btrfs_chunk_length(leaf, chunk);
 	stripe_len = btrfs_chunk_stripe_len(leaf, chunk);
 	num_stripes = btrfs_chunk_num_stripes(leaf, chunk);
 	sub_stripes = btrfs_chunk_sub_stripes(leaf, chunk);
 	type = btrfs_chunk_type(leaf, chunk);
+
+	if (num_stripes == 0) {
+		error("invalid num_stripes, have %u expect non-zero",
+			num_stripes);
+		return -EUCLEAN;
+	}
+	if (slot >= 0 && btrfs_chunk_item_size(num_stripes) !=
+	    btrfs_item_size_nr(leaf, slot)) {
+		error("invalid chunk item size, have %u expect %lu",
+			btrfs_item_size_nr(leaf, slot),
+			btrfs_chunk_item_size(num_stripes));
+		return -EUCLEAN;
+	}
 
 	/*
 	 * These valid checks may be insufficient to cover every corner cases.
@@ -2144,7 +2175,8 @@ int btrfs_read_sys_array(struct btrfs_fs_info *fs_info)
 				fs_info->nodesize);
 		return -EINVAL;
 	}
-	sb = btrfs_find_create_tree_block(fs_info, BTRFS_SUPER_INFO_OFFSET);
+	sb = alloc_dummy_extent_buffer(fs_info, BTRFS_SUPER_INFO_OFFSET,
+				       BTRFS_SUPER_INFO_SIZE);
 	if (!sb)
 		return -ENOMEM;
 	btrfs_set_buffer_uptodate(sb);
