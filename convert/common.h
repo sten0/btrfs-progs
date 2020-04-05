@@ -16,14 +16,14 @@
 
 /*
  * Defines and function declarations for users of the mkfs API, no internal
- * defintions.
+ * definitions.
  */
 
 #ifndef __BTRFS_CONVERT_COMMON_H__
 #define __BTRFS_CONVERT_COMMON_H__
 
 #include "kerncompat.h"
-#include "common-defs.h"
+#include "common/defs.h"
 #include "extent-cache.h"
 
 struct btrfs_mkfs_config;

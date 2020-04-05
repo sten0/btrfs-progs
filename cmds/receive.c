@@ -345,15 +345,6 @@ static int process_snapshot(const char *path, const u8 *uuid, u64 ctransid,
 			parent_subvol->path[sub_len - root_len - 1] = '\0';
 		}
 	}
-	/*if (rs_args.ctransid > rs_args.rtransid) {
-		if (!r->force) {
-			ret = -EINVAL;
-			fprintf(stderr, "ERROR: subvolume %s was modified after it was received.\n", r->subvol_parent_name);
-			goto out;
-		} else {
-			fprintf(stderr, "WARNING: subvolume %s was modified after it was received.\n", r->subvol_parent_name);
-		}
-	}*/
 
 	if (*parent_subvol->path == 0)
 		args_v2.fd = dup(rctx->mnt_fd);
@@ -754,15 +745,14 @@ static int process_clone(const char *path, u64 offset, u64 len,
 	if (ret < 0)
 		goto out;
 
-	si = subvol_uuid_search(&rctx->sus, 0, clone_uuid, clone_ctransid,
-				NULL,
-				subvol_search_by_received_uuid);
-	if (IS_ERR_OR_NULL(si)) {
-		if (memcmp(clone_uuid, rctx->cur_subvol.received_uuid,
-				BTRFS_UUID_SIZE) == 0) {
-			/* TODO check generation of extent */
-			subvol_path = rctx->cur_subvol_path;
-		} else {
+	if (memcmp(clone_uuid, rctx->cur_subvol.received_uuid,
+		   BTRFS_UUID_SIZE) == 0) {
+		subvol_path = rctx->cur_subvol_path;
+	} else {
+		si = subvol_uuid_search(&rctx->sus, 0, clone_uuid, clone_ctransid,
+					NULL,
+					subvol_search_by_received_uuid);
+		if (IS_ERR_OR_NULL(si)) {
 			if (!si)
 				ret = -ENOENT;
 			else
@@ -770,23 +760,6 @@ static int process_clone(const char *path, u64 offset, u64 len,
 			error("clone: did not find source subvol");
 			goto out;
 		}
-	} else {
-		/*if (rs_args.ctransid > rs_args.rtransid) {
-			if (!r->force) {
-				ret = -EINVAL;
-				fprintf(stderr, "ERROR: subvolume %s was "
-						"modified after it was "
-						"received.\n",
-						r->subvol_parent_name);
-				goto out;
-			} else {
-				fprintf(stderr, "WARNING: subvolume %s was "
-						"modified after it was "
-						"received.\n",
-						r->subvol_parent_name);
-			}
-		}*/
-
 		/* strip the subvolume that we are receiving to from the start of subvol_path */
 		if (rctx->full_root_path) {
 			size_t root_len = strlen(rctx->full_root_path);

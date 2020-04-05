@@ -2338,8 +2338,9 @@ again:
 	return 0;
 }
 
-static void fixup_block_groups(struct btrfs_fs_info *fs_info)
+static void fixup_block_groups(struct btrfs_trans_handle *trans)
 {
+	struct btrfs_fs_info *fs_info = trans->fs_info;
 	struct btrfs_block_group_cache *bg;
 	struct btrfs_mapping_tree *map_tree = &fs_info->mapping_tree;
 	struct cache_extent *ce;
@@ -2364,9 +2365,8 @@ static void fixup_block_groups(struct btrfs_fs_info *fs_info)
 
 		/* Update the block group item and mark the bg dirty */
 		bg->flags = map->type;
-		set_extent_bits(&fs_info->block_group_cache, ce->start,
-				ce->start + ce->size - 1, BLOCK_GROUP_DIRTY);
-
+		if (list_empty(&bg->dirty_list))
+			list_add_tail(&bg->dirty_list, &trans->dirty_bgs);
 		/*
 		 * Chunk and bg flags can be different, changing bg flags
 		 * without update avail_data/meta_alloc_bits will lead to
@@ -2455,7 +2455,7 @@ static int fixup_dev_extents(struct btrfs_trans_handle *trans)
 
 	dev = btrfs_find_device(fs_info, devid, NULL, NULL);
 	if (!dev) {
-		error("faild to find devid %llu", devid);
+		error("failed to find devid %llu", devid);
 		return -ENODEV;
 	}
 
@@ -2499,7 +2499,7 @@ static int fixup_chunks_and_devices(struct btrfs_fs_info *fs_info,
 		return PTR_ERR(trans);
 	}
 
-	fixup_block_groups(fs_info);
+	fixup_block_groups(trans);
 	ret = fixup_dev_extents(trans);
 	if (ret < 0)
 		goto error;

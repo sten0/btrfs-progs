@@ -36,11 +36,10 @@
 #include "common/utils.h"
 #include "cmds/commands.h"
 #include "free-space-cache.h"
-#include "free-space-tree.h"
+#include "kernel-shared/free-space-tree.h"
 #include "common/rbtree-utils.h"
 #include "backref.h"
 #include "kernel-shared/ulist.h"
-#include "hash.h"
 #include "common/help.h"
 #include "check/common.h"
 #include "check/mode-common.h"
@@ -639,10 +638,20 @@ static void print_inode_error(struct btrfs_root *root, struct inode_record *rec)
 				hole->start, hole->len);
 			node = rb_next(node);
 		}
-		if (!found)
-			fprintf(stderr, "\tstart: 0, len: %llu\n",
-				round_up(rec->isize,
-					 root->fs_info->sectorsize));
+		if (!found) {
+			u64 start, len;
+			if (rec->extent_end < rec->isize) {
+				start = rec->extent_end;
+				len = round_up(rec->isize,
+					       root->fs_info->sectorsize) -
+					start;
+			} else {
+				start = 0;
+				len = rec->extent_start;
+			}
+			fprintf(stderr, "\tstart: %llu, len: %llu\n", start,
+				len);
+		}
 	}
 
 	/* Print dir item with mismatch hash */
@@ -827,8 +836,9 @@ static void maybe_free_inode_rec(struct cache_tree *inode_cache,
 		/* Orphan inodes don't have correct nbytes */
 		if (rec->nlink > 0 && rec->found_size != rec->nbytes)
 			rec->errors |= I_ERR_FILE_NBYTES_WRONG;
-		if (rec->nlink > 0 && !no_holes &&
+		if (rec->nlink > 0 && !no_holes && rec->isize &&
 		    (rec->extent_end < rec->isize ||
+		     rec->extent_start != 0 ||
 		     first_extent_gap(&rec->holes) < rec->isize))
 			rec->errors |= I_ERR_FILE_EXTENT_DISCOUNT;
 	}
@@ -4506,7 +4516,7 @@ static struct data_backref *alloc_data_backref(struct extent_record *rec,
 
 	if (!ref)
 		return NULL;
-	memset(&ref->node, 0, sizeof(ref->node));
+	memset(ref, 0, sizeof(*ref));
 	ref->node.is_data = 1;
 
 	if (parent > 0) {
@@ -6692,8 +6702,8 @@ static int delete_extent_records(struct btrfs_trans_handle *trans,
 			u64 bytes = (found_key.type == BTRFS_EXTENT_ITEM_KEY) ?
 				found_key.offset : fs_info->nodesize;
 
-			ret = btrfs_update_block_group(fs_info->extent_root,
-						       bytenr, bytes, 0, 0);
+			ret = btrfs_update_block_group(trans, bytenr, bytes,
+						       0, 0);
 			if (ret)
 				break;
 		}
@@ -6774,7 +6784,7 @@ static int record_extent(struct btrfs_trans_handle *trans,
 		}
 
 		btrfs_mark_buffer_dirty(leaf);
-		ret = btrfs_update_block_group(extent_root, rec->start,
+		ret = btrfs_update_block_group(trans, rec->start,
 					       rec->max_size, 1, 0);
 		if (ret)
 			goto fail;
@@ -8432,7 +8442,7 @@ static int deal_root_from_list(struct list_head *list,
 			       struct device_extent_tree *dev_extent_cache)
 {
 	int ret = 0;
-	u64 last;
+	u64 last = 0;
 
 	while (!list_empty(list)) {
 		struct root_item_record *rec;
@@ -8640,7 +8650,7 @@ static int check_dev_extents(struct btrfs_fs_info *fs_info)
 		}
 		if (physical_offset + physical_len > dev->total_bytes) {
 			error(
-"dev extent devid %llu physical offset %llu len %llu is beyond device boudnary %llu",
+"dev extent devid %llu physical offset %llu len %llu is beyond device boundary %llu",
 			      devid, physical_offset, physical_len,
 			      dev->total_bytes);
 			ret = -EUCLEAN;
@@ -10448,7 +10458,7 @@ static int cmd_check(const struct cmd_struct *cmd, int argc, char **argv)
 			goto out;
 		}
 		if (qgroup_report_ret && (!qgroups_repaired || ret))
-			err |= qgroup_report_ret;
+			err |= !!qgroup_report_ret;
 		ret = 0;
 	} else {
 		fprintf(stderr,

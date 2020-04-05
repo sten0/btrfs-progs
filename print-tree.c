@@ -67,16 +67,27 @@ static void print_dir_item(struct extent_buffer *eb, u32 size,
 		name_len = btrfs_dir_name_len(eb, di);
 		data_len = btrfs_dir_data_len(eb, di);
 		len = (name_len <= sizeof(namebuf))? name_len: sizeof(namebuf);
-		read_extent_buffer(eb, namebuf, (unsigned long)(di + 1), len);
 		printf("\t\ttransid %llu data_len %u name_len %u\n",
 				btrfs_dir_transid(eb, di),
 				data_len, name_len);
-		printf("\t\tname: %.*s\n", len, namebuf);
-		if (data_len) {
-			len = (data_len <= sizeof(namebuf))? data_len: sizeof(namebuf);
+		if (eb->fs_info && eb->fs_info->hide_names) {
+			printf("\t\tname: HIDDEN\n");
+		} else {
 			read_extent_buffer(eb, namebuf,
-				(unsigned long)(di + 1) + name_len, len);
-			printf("\t\tdata %.*s\n", len, namebuf);
+					(unsigned long)(di + 1), len);
+			printf("\t\tname: %.*s\n", len, namebuf);
+		}
+
+		if (data_len) {
+			len = (data_len <= sizeof(namebuf)) ? data_len :
+			      sizeof(namebuf);
+			if (eb->fs_info && eb->fs_info->hide_names) {
+				printf("\t\tdata HIDDEN\n");
+			} else {
+				read_extent_buffer(eb, namebuf,
+					(unsigned long)(di + 1) + name_len, len);
+				printf("\t\tdata %.*s\n", len, namebuf);
+			}
 		}
 		len = sizeof(*di) + name_len + data_len;
 		di = (struct btrfs_dir_item *)((char *)di + len);
@@ -101,12 +112,15 @@ static void print_inode_extref_item(struct extent_buffer *eb, u32 size,
 
 		len = (name_len <= sizeof(namebuf))? name_len: sizeof(namebuf);
 
-		read_extent_buffer(eb, namebuf, (unsigned long)(extref->name), len);
-
-		printf("\t\tindex %llu parent %llu namelen %u name: %.*s\n",
-		       (unsigned long long)index,
-		       (unsigned long long)parent_objid,
-		       name_len, len, namebuf);
+		printf("\t\tindex %llu parent %llu namelen %u ",
+				index, parent_objid, name_len);
+		if (eb->fs_info && eb->fs_info->hide_names) {
+			printf("name: HIDDEN\n");
+		} else {
+			read_extent_buffer(eb, namebuf,
+					(unsigned long)extref->name, len);
+			printf("name: %.*s\n", len, namebuf);
+		}
 
 		len = sizeof(*extref) + name_len;
 		extref = (struct btrfs_inode_extref *)((char *)extref + len);
@@ -127,9 +141,16 @@ static void print_inode_ref_item(struct extent_buffer *eb, u32 size,
 		name_len = btrfs_inode_ref_name_len(eb, ref);
 		index = btrfs_inode_ref_index(eb, ref);
 		len = (name_len <= sizeof(namebuf))? name_len: sizeof(namebuf);
-		read_extent_buffer(eb, namebuf, (unsigned long)(ref + 1), len);
-		printf("\t\tindex %llu namelen %u name: %.*s\n",
-		       (unsigned long long)index, name_len, len, namebuf);
+
+		printf("\t\tindex %llu namelen %u ",
+		       (unsigned long long)index, name_len);
+		if (eb->fs_info && eb->fs_info->hide_names) {
+			printf("name: HIDDEN\n");
+		} else {
+			read_extent_buffer(eb, namebuf,
+					(unsigned long)(ref + 1), len);
+			printf("name: %.*s\n", len, namebuf);
+		}
 		len = sizeof(*ref) + name_len;
 		ref = (struct btrfs_inode_ref *)((char *)ref + len);
 		cur += len;

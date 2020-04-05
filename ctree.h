@@ -29,6 +29,7 @@
 #include "extent_io.h"
 #include "ioctl.h"
 #include "kernel-lib/sizes.h"
+#include "crypto/crc32c.h"
 #else
 #include <btrfs/list.h>
 #include <btrfs/kerncompat.h>
@@ -37,6 +38,7 @@
 #include <btrfs/extent_io.h>
 #include <btrfs/ioctl.h>
 #include <btrfs/sizes.h>
+#include "btrfs/crc32c.h"
 #endif /* BTRFS_FLAT_INCLUDES */
 
 struct btrfs_root;
@@ -569,7 +571,7 @@ struct btrfs_path {
 	struct extent_buffer *nodes[BTRFS_MAX_LEVEL];
 	int slots[BTRFS_MAX_LEVEL];
 #if 0
-	/* The kernel locking sheme is not done in userspace. */
+	/* The kernel locking scheme is not done in userspace. */
 	int locks[BTRFS_MAX_LEVEL];
 #endif
 	signed char reada;
@@ -1003,6 +1005,9 @@ enum btrfs_raid_types {
 /* used in struct btrfs_balance_args fields */
 #define BTRFS_AVAIL_ALLOC_BIT_SINGLE	(1ULL << 48)
 
+#define BTRFS_EXTENDED_PROFILE_MASK	(BTRFS_BLOCK_GROUP_PROFILE_MASK | \
+					 BTRFS_AVAIL_ALLOC_BIT_SINGLE)
+
 /*
  * GLOBAL_RSV does not exist as a on-disk block group type and is used
  * internally for exporting info about global block reserve from space infos
@@ -1111,16 +1116,21 @@ struct btrfs_block_group_cache {
 	int cached;
 	int ro;
 	/*
-         * If the free space extent count exceeds this number, convert the block
-         * group to bitmaps.
-         */
-        u32 bitmap_high_thresh;
-        /*
-         * If the free space extent count drops below this number, convert the
-         * block group back to extents.
-         */
-        u32 bitmap_low_thresh;
+	 * If the free space extent count exceeds this number, convert the block
+	 * group to bitmaps.
+	 */
+	u32 bitmap_high_thresh;
+	/*
+	 * If the free space extent count drops below this number, convert the
+	 * block group back to extents.
+	 */
+	u32 bitmap_low_thresh;
 
+	/* Block group cache stuff */
+	struct rb_node cache_node;
+
+	/* For dirty block groups */
+	struct list_head dirty_list;
 };
 
 struct btrfs_device;
@@ -1145,11 +1155,11 @@ struct btrfs_fs_info {
 
 	struct extent_io_tree extent_cache;
 	struct extent_io_tree free_space_cache;
-	struct extent_io_tree block_group_cache;
 	struct extent_io_tree pinned_extents;
 	struct extent_io_tree extent_ins;
 	struct extent_io_tree *excluded_extents;
 
+	struct rb_root block_group_cache_tree;
 	/* logical->physical extent mapping */
 	struct btrfs_mapping_tree mapping_tree;
 
@@ -1188,6 +1198,7 @@ struct btrfs_fs_info {
 	unsigned int avoid_meta_chunk_alloc:1;
 	unsigned int avoid_sys_chunk_alloc:1;
 	unsigned int finalize_on_close:1;
+	unsigned int hide_names:1;
 
 	int transaction_aborted;
 
@@ -2504,6 +2515,20 @@ static inline int __btrfs_fs_compat_ro(struct btrfs_fs_info *fs_info, u64 flag)
 	((unsigned long)(btrfs_leaf_data(leaf) + \
 	btrfs_item_offset_nr(leaf, slot)))
 
+static inline u64 btrfs_name_hash(const char *name, int len)
+{
+	return crc32c((u32)~1, name, len);
+}
+
+/*
+ * Figure the key offset of an extended inode ref
+ */
+static inline u64 btrfs_extref_hash(u64 parent_objectid, const char *name,
+				    int len)
+{
+	return (u64)btrfs_crc32c(parent_objectid, name, len);
+}
+
 /* extent-tree.c */
 int btrfs_reserve_extent(struct btrfs_trans_handle *trans,
 			 struct btrfs_root *root,
@@ -2566,8 +2591,8 @@ int btrfs_make_block_group(struct btrfs_trans_handle *trans,
 			   u64 type, u64 chunk_offset, u64 size);
 int btrfs_make_block_groups(struct btrfs_trans_handle *trans,
 			    struct btrfs_fs_info *fs_info);
-int btrfs_update_block_group(struct btrfs_root *root, u64 bytenr, u64 num,
-			     int alloc, int mark_free);
+int btrfs_update_block_group(struct btrfs_trans_handle *trans, u64 bytenr,
+			     u64 num, int alloc, int mark_free);
 int btrfs_record_file_extent(struct btrfs_trans_handle *trans,
 			      struct btrfs_root *root, u64 objectid,
 			      struct btrfs_inode_item *inode,

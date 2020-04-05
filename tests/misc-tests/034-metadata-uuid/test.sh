@@ -6,6 +6,7 @@ check_prereq mkfs.btrfs
 check_prereq btrfs
 check_prereq btrfstune
 check_prereq btrfs-image
+check_global_prereq udevadm
 
 setup_root_helper
 prepare_test_dev
@@ -50,7 +51,7 @@ check_btrfstune() {
 	# test that having -m|-M on seed device is forbidden
 	run_check_mkfs_test_dev
 	run_check $SUDO_HELPER "$TOP/btrfstune" -S 1 "$TEST_DEV"
-	run_mustfail "Succeded changing fsid on a seed device" \
+	run_mustfail "Succeeded changing fsid on a seed device" \
 		$SUDO_HELPER "$TOP/btrfstune" -m "$TEST_DEV"
 
 	# test that using -U|-u on an fs with METADATA_UUID flag is forbidden
@@ -155,9 +156,25 @@ check_completed() {
 	[ $? -eq 0 ] || _fail "metadata_uuid not set on $2"
 }
 
+check_flag_cleared() {
+	# Ensure METADATA_UUID is not set
+	run_check_stdout $SUDO_HELPER "$TOP/btrfs" inspect-internal dump-super \
+		"$1" | grep -q METADATA_UUID
+	[ $? -eq 1 ] || _fail "metadata_uuid not set on $1"
+
+	run_check_stdout $SUDO_HELPER "$TOP/btrfs" inspect-internal dump-super \
+		"$2" | grep -q METADATA_UUID
+	[ $? -eq 1 ] || _fail "metadata_uuid not set on $2"
+}
+
 check_multi_fsid_change() {
 	check_inprogress_flag "$1" "$2"
 	check_completed "$1" "$2"
+}
+
+check_multi_fsid_unchanged() {
+	check_inprogress_flag "$1" "$2"
+	check_flag_cleared "$1" "$2"
 }
 
 failure_recovery() {
@@ -171,6 +188,8 @@ failure_recovery() {
 	image2=$(extract_image "$2")
 	loop1=$(run_check_stdout $SUDO_HELPER losetup --find --show "$image1")
 	loop2=$(run_check_stdout $SUDO_HELPER losetup --find --show "$image2")
+
+	run_check $SUDO_HELPER udevadm settle
 
 	# Mount and unmount, on trans commit all disks should be consistent
 	run_check $SUDO_HELPER mount "$loop1" "$TEST_MNT"
@@ -211,11 +230,10 @@ failure_recovery "./disk1.raw.xz" "./disk2.raw.xz" check_inprogress_flag
 reload_btrfs
 failure_recovery "./disk2.raw.xz" "./disk1.raw.xz" check_inprogress_flag
 
-reload_btrfs
-
 # disk4 contains an image in with the in-progress flag set and disk 3 is part
 # of the same filesystem but has both METADATA_UUID incompat and a new
 # metadata uuid set. So disk 3 must always take precedence
+reload_btrfs
 failure_recovery "./disk3.raw.xz" "./disk4.raw.xz" check_completed
 reload_btrfs
 failure_recovery "./disk4.raw.xz" "./disk3.raw.xz" check_completed
@@ -224,6 +242,16 @@ failure_recovery "./disk4.raw.xz" "./disk3.raw.xz" check_completed
 # than once, disk6 on the other hand is member of the same filesystem but
 # hasn't completed its last change. Thus it has both the FSID_CHANGING flag set
 # and METADATA_UUID flag set.
+reload_btrfs
 failure_recovery "./disk5.raw.xz" "./disk6.raw.xz" check_multi_fsid_change
 reload_btrfs
 failure_recovery "./disk6.raw.xz" "./disk5.raw.xz" check_multi_fsid_change
+
+# disk7 contains an image which has undergone a successful fsid change once to
+# a different value and once back to the original one, disk8 is part of the
+# same filesystem but in this case it has missed the second transaction commit
+# during the process change. So disk 7 looks as if it never underwent fsid change
+# and disk 8 has FSID_CHANGING_FLAG and METADATA_UUID but is stale.
+failure_recovery "./disk7.raw.xz" "./disk8.raw.xz" check_multi_fsid_unchanged
+reload_btrfs
+failure_recovery "./disk8.raw.xz" "./disk7.raw.xz" check_multi_fsid_unchanged

@@ -21,7 +21,6 @@
 #include "common/messages.h"
 #include "disk-io.h"
 #include "backref.h"
-#include "hash.h"
 #include "common/internal.h"
 #include "common/utils.h"
 #include "volumes.h"
@@ -522,7 +521,7 @@ static int avoid_extents_overwrite(struct btrfs_fs_info *fs_info)
 	}
 
 	printf(
-	"Try to exclude all metadata blcoks and extents, it may be slow\n");
+	"Try to exclude all metadata blocks and extents, it may be slow\n");
 	ret = exclude_metadata_blocks(fs_info);
 out:
 	if (ret) {
@@ -735,7 +734,7 @@ static int repair_tree_block_ref(struct btrfs_root *root,
 		}
 		btrfs_mark_buffer_dirty(eb);
 		printf("Added an extent item [%llu %u]\n", bytenr, node_size);
-		btrfs_update_block_group(extent_root, bytenr, node_size, 1, 0);
+		btrfs_update_block_group(trans, bytenr, node_size, 1, 0);
 
 		nrefs->refs[level] = 0;
 		nrefs->full_backref[level] =
@@ -2029,7 +2028,8 @@ static int check_file_extent_inline(struct btrfs_root *root,
  * Return 0 if no error occurred.
  */
 static int check_file_extent(struct btrfs_root *root, struct btrfs_path *path,
-			     unsigned int nodatasum, u64 *size, u64 *end)
+			     unsigned int nodatasum, u64 isize, u64 *size,
+			     u64 *end)
 {
 	struct btrfs_file_extent_item *fi;
 	struct btrfs_key fkey;
@@ -2152,7 +2152,7 @@ static int check_file_extent(struct btrfs_root *root, struct btrfs_path *path,
 	}
 
 	/* Check EXTENT_DATA hole */
-	if (!no_holes && *end != fkey.offset) {
+	if (!no_holes && (fkey.offset < isize) && (*end != fkey.offset)) {
 		if (repair)
 			ret = punch_extent_hole(root, path, fkey.objectid,
 						*end, fkey.offset - *end);
@@ -2165,7 +2165,12 @@ static int check_file_extent(struct btrfs_root *root, struct btrfs_path *path,
 		}
 	}
 
-	*end = fkey.offset + extent_num_bytes;
+	/*
+	 * Don't update extent end beyond rounded up isize. As holes
+	 * after isize is not considered as missing holes.
+	 */
+	*end = min(round_up(isize, root->fs_info->sectorsize),
+		   fkey.offset + extent_num_bytes);
 	if (!is_hole)
 		*size += extent_num_bytes;
 
@@ -2565,7 +2570,7 @@ static int repair_inode_gen_lowmem(struct btrfs_root *root,
 		error("failed to commit transaction: %m");
 		goto error;
 	}
-	printf("reseting inode generation to %llu for ino %llu\n",
+	printf("resetting inode generation to %llu for ino %llu\n",
 		transid, key.objectid);
 	return ret;
 
@@ -2726,7 +2731,7 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 					root->objectid, inode_id, key.objectid,
 					key.offset);
 			}
-			ret = check_file_extent(root, path, nodatasum,
+			ret = check_file_extent(root, path, nodatasum, isize,
 						&extent_size, &extent_end);
 			err |= ret;
 			break;
@@ -2810,7 +2815,7 @@ out:
 		}
 
 		/*
-		 * For orhpan inode, updating nbytes/size is just a waste of
+		 * For orphan inode, updating nbytes/size is just a waste of
 		 * time, so skip such repair and don't report them as error.
 		 */
 		if (nbytes != extent_size && !is_orphan) {
@@ -3252,7 +3257,7 @@ static int repair_extent_data_item(struct btrfs_root *root,
 		ret = delete_item(root, pathp);
 		if (!ret)
 			err = 0;
-		goto out;
+		goto out_no_release;
 	}
 
 	/* now repair only adds backref */
@@ -3303,8 +3308,8 @@ static int repair_extent_data_item(struct btrfs_root *root,
 		btrfs_set_extent_flags(eb, ei, BTRFS_EXTENT_FLAG_DATA);
 
 		btrfs_mark_buffer_dirty(eb);
-		ret = btrfs_update_block_group(extent_root, disk_bytenr,
-					       num_bytes, 1, 0);
+		ret = btrfs_update_block_group(trans, disk_bytenr, num_bytes,
+					       1, 0);
 		btrfs_release_path(&path);
 	}
 
@@ -3327,6 +3332,7 @@ out:
 	if (trans)
 		btrfs_commit_transaction(trans, root);
 	btrfs_release_path(&path);
+out_no_release:
 	if (ret)
 		error("can't repair root %llu extent data item[%llu %llu]",
 		      root->objectid, disk_bytenr, num_bytes);
