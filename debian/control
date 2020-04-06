@@ -31,7 +31,7 @@ Depends: ${misc:Depends}, ${shlibs:Depends}
 Breaks: btrbk (<= 0.25.0), libgcc-s1 (<< 10-20200211)
 Suggests: duperemove
 Description: Checksumming Copy on Write Filesystem utilities
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .
@@ -46,7 +46,7 @@ Depends: ${misc:Depends}, ${shlibs:Depends}
 Replaces: btrfs-progs (<< 4.16.1-1)
 Breaks: btrfs-progs (<< 4.16.1-1)
 Description: Checksumming Copy on Write Filesystem utilities (runtime library)
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .
@@ -60,7 +60,7 @@ Depends: ${misc:Depends}, ${shlibs:Depends}, libbtrfs0 (= ${binary:Version})
 Replaces: btrfs-progs (<< 4.16.1-1)
 Breaks: btrfs-progs (<< 4.16.1-1)
 Description: Checksumming Copy on Write Filesystem utilities (development headers)
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .
@@ -72,7 +72,7 @@ Multi-Arch: same
 Section: libs
 Depends: ${misc:Depends}, ${shlibs:Depends}
 Description: Checksumming Copy on Write Filesystem utilities (runtime util library)
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .
@@ -84,7 +84,7 @@ Multi-Arch: same
 Section: libdevel
 Depends: ${misc:Depends}, ${shlibs:Depends}, libbtrfsutil1 (= ${binary:Version})
 Description: Checksumming Copy on Write Filesystem utilities (util development headers)
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .
