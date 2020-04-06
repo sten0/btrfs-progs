@@ -1,3 +1,14 @@
+btrfs-progs (5.6-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Versioned symbols.
+  * Slightly improve long descs.
+  * Drop old -dbgsym migration.
+  * Don't skip scan if modprobe fails (eg. due to built-in).
+    Closes: #956174.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Fri, 10 Apr 2020 00:59:59 +0200
+
 btrfs-progs (5.4.1-2) unstable; urgency=medium
 
   * Declare Breaks: on versions of libgcc-s1 that produce bad initramfs.
