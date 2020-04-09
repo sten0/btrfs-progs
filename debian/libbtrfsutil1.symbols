@@ -11,6 +11,7 @@ libbtrfsutil.so.1 libbtrfsutil1 #MINVER#
  btrfs_util_create_subvolume_iterator@LIBBTRFSUTIL_1.1 5.6
  btrfs_util_create_subvolume_iterator_fd@LIBBTRFSUTIL_1.1 5.6
  btrfs_util_delete_subvolume@LIBBTRFSUTIL_1.1 5.6
+ btrfs_util_delete_subvolume_by_id_fd@LIBBTRFSUTIL_1.2 5.6
  btrfs_util_delete_subvolume_fd@LIBBTRFSUTIL_1.1 5.6
  btrfs_util_deleted_subvolumes@LIBBTRFSUTIL_1.1 5.6
  btrfs_util_deleted_subvolumes_fd@LIBBTRFSUTIL_1.1 5.6
