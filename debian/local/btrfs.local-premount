@@ -18,7 +18,7 @@ esac
 
 if [ -x /bin/btrfs ]
 then
-	modprobe btrfs
+	modprobe btrfs ||:
 	# If asked to be quiet, show only errors
 	[ "${quiet}" = "y" ] && exec >/dev/null
 	/bin/btrfs device scan
