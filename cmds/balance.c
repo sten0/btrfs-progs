@@ -46,6 +46,10 @@ static int parse_one_profile(const char *profile, u64 *flags)
 		*flags |= BTRFS_BLOCK_GROUP_RAID0;
 	} else if (!strcmp(profile, "raid1")) {
 		*flags |= BTRFS_BLOCK_GROUP_RAID1;
+	} else if (!strcmp(profile, "raid1c3")) {
+		*flags |= BTRFS_BLOCK_GROUP_RAID1C3;
+	} else if (!strcmp(profile, "raid1c4")) {
+		*flags |= BTRFS_BLOCK_GROUP_RAID1C4;
 	} else if (!strcmp(profile, "raid10")) {
 		*flags |= BTRFS_BLOCK_GROUP_RAID10;
 	} else if (!strcmp(profile, "raid5")) {
@@ -437,24 +441,6 @@ static int do_balance(const char *path, struct btrfs_ioctl_balance_args *args,
 	if (fd < 0)
 		return 1;
 
-	if (!(flags & BALANCE_START_FILTERS) && !(flags & BALANCE_START_NOWARN)) {
-		int delay = 10;
-
-		printf("WARNING:\n\n");
-		printf("\tFull balance without filters requested. This operation is very\n");
-		printf("\tintense and takes potentially very long. It is recommended to\n");
-		printf("\tuse the balance filters to narrow down the scope of balance.\n");
-		printf("\tUse 'btrfs balance start --full-balance' option to skip this\n");
-		printf("\twarning. The operation will start in %d seconds.\n", delay);
-		printf("\tUse Ctrl-C to stop it.\n");
-		while (delay) {
-			printf("%2d", delay--);
-			fflush(stdout);
-			sleep(1);
-		}
-		printf("\nStarting balance without any filters.\n");
-	}
-
 	ret = ioctl(fd, BTRFS_IOC_BALANCE_V2, args);
 	if (ret < 0) {
 		/*
@@ -508,7 +494,7 @@ static const char * const cmd_balance_start_usage[] = {
 	"-d[filters]    act on data chunks",
 	"-m[filters]    act on metadata chunks",
 	"-s[filters]    act on system chunks (only under -f)",
-	"-v             be verbose",
+	"-v|--verbose   be verbose",
 	"-f             force a reduction of metadata integrity",
 	"--full-balance do not print warning and do not delay start",
 	"--background|--bg",
@@ -632,6 +618,24 @@ static int cmd_balance_start(const struct cmd_struct *cmd,
 			error("'soft' option can be used only when converting profiles");
 			return 1;
 		}
+	}
+
+	if (!(start_flags & BALANCE_START_FILTERS) && !(start_flags & BALANCE_START_NOWARN)) {
+		int delay = 10;
+
+		printf("WARNING:\n\n");
+		printf("\tFull balance without filters requested. This operation is very\n");
+		printf("\tintense and takes potentially very long. It is recommended to\n");
+		printf("\tuse the balance filters to narrow down the scope of balance.\n");
+		printf("\tUse 'btrfs balance start --full-balance' option to skip this\n");
+		printf("\twarning. The operation will start in %d seconds.\n", delay);
+		printf("\tUse Ctrl-C to stop it.\n");
+		while (delay) {
+			printf("%2d", delay--);
+			fflush(stdout);
+			sleep(1);
+		}
+		printf("\nStarting balance without any filters.\n");
 	}
 
 	if (force)
@@ -822,7 +826,7 @@ static const char * const cmd_balance_status_usage[] = {
 	"btrfs balance status [-v] <path>",
 	"Show status of running or paused balance",
 	"",
-	"-v     be verbose",
+	"-v|--verbose     be verbose",
 	NULL
 };
 

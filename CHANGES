@@ -1,3 +1,89 @@
+btrfs-progs-5.6 (2020-04-05)
+  * inspect logical-resolve: support LOGICAL_INO_V2 as new option '-o',
+    helps advanced dedupe tools
+  * inspect: user larger buffer (64K) for results
+  * subvol delete: support deletion by id (requires kernel 5.7+)
+  * libbtrfsutil:
+    * support subvolume deletion by id
+    * bump version to 1.2
+    * library symbols are now versioned
+  * dump-tree: new option --hide-names, replace any names (file, directory,
+    subvolume, xattr) in the output with stubs
+  * convert: warn if the filesystem is not mountable on the machine
+  * fixes:
+    * restore: proper mirror iteration on decompression error
+    * restore: make symlink messages less noisy
+    * check: handle holes at the begining or end of file
+    * fix xxhash output on big endian machines
+    * receive: fix lookup of subvolume by uuid in case it was already
+      received before
+  * other:
+    * new and updated tests
+    * add missing binaries in exported testsuite
+    * docs updates
+    * remove obsolete files
+    * move files to more appropriate directories
+    * fixes reported by valgrind
+    * many typos fixed
+
+btrfs-progs-5.5 (skipped)
+
+btrfs-progs-5.4.1 (2020-01-09)
+  * build: fix docbook5 build
+  * check: do extra verification of extent items, inode items and chunks
+  * qgroup: return ENOTCONN if quotas not running (needs updated kernel)
+  * other: various test fixups
+
+btrfs-progs-5.4 (2019-12-03)
+  * support new hash algorithms (kernel 5.5):
+    * mkfs.btrfs and btrfs-convert with --csum, crc32c, xxhash, sha256, blake2
+  * mkfs: support new raid1c3 and raid1c4 block group profiles (kernel 5.5)
+  * check:
+    * --repair delays start with a warning, can be skipped using --force
+    * enhanced detection of inode types from partial data, more options for
+      repair
+  * receive: fix quiet option
+  * image: speed up chunk loading
+  * fi usage:
+    * sort devices by id
+    * print ratio of used/total per block group type
+  * rescue zero-log: reset the log pointers directly, avoid reading some other
+    potentially damaged structures
+  * new make target install-static to install only static binaries/libraries
+  * other
+    * docs updates
+    * new tests
+    * cleanups and refactoring
+
+btrfs-progs-5.3.1 (2019-10-25)
+  * libbtrfs: fix link breakage due to missing symbols
+
+btrfs-progs-5.3 (2019-10-21)
+  * mkfs:
+    * new option to specify checksum algorithm (only crc32c)
+    * fix xattr enumeration
+  * dump-tree: BFS (breadth-first) traversal now default
+  * libbtrfsutil: remove stale BTRFS_DEV_REPLACE_ITEM_STATE_x defines
+  * ci: add support for gitlab
+  * other:
+    * preparatory work for more checksum algorithms
+    * docs update
+    * switch to docbook5 backend for asciidoc
+    * fix build on uClibc due to missing backtrace()
+    * lots of printf format fixups
+
+btrfs-progs-5.2.2 (2019-09-05)
+  * check:
+    * fix false report of wrong byte count for orphan inodes
+    * option -E was not handled correctly
+    * new check and repair for root item generation
+  * balance: check for full-balance before background fork
+  * mkfs: check that total device size does not overflow 16EiB
+  * dump-tree: print DEV_STATS key type
+  * other:
+    * new and updated tests
+    * doc fixups and updates
+
 btrfs-progs-5.2.1 (2019-07-26)
   * scrub status: fix ETA calculation after resume
   * check: fix crash when using -Q
@@ -140,6 +226,8 @@ btrfs-progs-4.19 (2018-11-03)
     * improved error handling
     * docs
     * new tests
+
+btrfs-progs-4.18 (skipped)
 
 btrfs-progs-4.17.1 (2018-08-06)
   * check:

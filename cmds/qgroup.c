@@ -45,34 +45,30 @@ static int _cmd_qgroup_assign(const struct cmd_struct *cmd, int assign,
 	struct btrfs_ioctl_qgroup_assign_args args;
 	DIR *dirstream = NULL;
 
-	if (assign) {
-		optind = 0;
-		while (1) {
-			enum { GETOPT_VAL_RESCAN = 256, GETOPT_VAL_NO_RESCAN };
-			static const struct option long_options[] = {
-				{ "rescan", no_argument, NULL,
-					GETOPT_VAL_RESCAN },
-				{ "no-rescan", no_argument, NULL,
-					GETOPT_VAL_NO_RESCAN },
-				{ NULL, 0, NULL, 0 }
-			};
-			int c = getopt_long(argc, argv, "", long_options, NULL);
+	optind = 0;
+	while (1) {
+		enum { GETOPT_VAL_RESCAN = 256, GETOPT_VAL_NO_RESCAN };
+		static const struct option long_options[] = {
+			{ "rescan", no_argument, NULL, GETOPT_VAL_RESCAN },
+			{ "no-rescan", no_argument, NULL, GETOPT_VAL_NO_RESCAN },
+			{ NULL, 0, NULL, 0 }
+		};
+		int c;
 
-			if (c < 0)
-				break;
-			switch (c) {
-			case GETOPT_VAL_RESCAN:
-				rescan = true;
-				break;
-			case GETOPT_VAL_NO_RESCAN:
-				rescan = false;
-				break;
-			default:
-				usage_unknown_option(cmd, argv);
-			}
+		c = getopt_long(argc, argv, "", long_options, NULL);
+		if (c < 0)
+			break;
+
+		switch (c) {
+		case GETOPT_VAL_RESCAN:
+			rescan = true;
+			break;
+		case GETOPT_VAL_NO_RESCAN:
+			rescan = false;
+			break;
+		default:
+			usage_unknown_option(cmd, argv);
 		}
-	} else {
-		clean_args_no_options(cmd, argc, argv);
 	}
 
 	if (check_argc_exact(argc - optind, 3))
@@ -98,7 +94,9 @@ static int _cmd_qgroup_assign(const struct cmd_struct *cmd, int assign,
 
 	ret = ioctl(fd, BTRFS_IOC_QGROUP_ASSIGN, &args);
 	if (ret < 0) {
-		error("unable to assign quota group: %m");
+		error("unable to assign quota group: %s",
+				errno == ENOTCONN ? "quota not enabled"
+						: strerror(errno));
 		close_file_or_dir(fd, dirstream);
 		return 1;
 	}
@@ -152,61 +150,13 @@ static int _cmd_qgroup_create(int create, int argc, char **argv)
 	ret = ioctl(fd, BTRFS_IOC_QGROUP_CREATE, &args);
 	close_file_or_dir(fd, dirstream);
 	if (ret < 0) {
-		error("unable to %s quota group: %m",
-			create ? "create":"destroy");
+		error("unable to %s quota group: %s",
+			create ? "create":"destroy",
+				errno == ENOTCONN ? "quota not enabled"
+						: strerror(errno));
 		return 1;
 	}
 	return 0;
-}
-
-static int parse_limit(const char *p, unsigned long long *s)
-{
-	char *endptr;
-	unsigned long long size;
-	unsigned long long CLEAR_VALUE = -1;
-
-	if (strcasecmp(p, "none") == 0) {
-		*s = CLEAR_VALUE;
-		return 1;
-	}
-
-	if (p[0] == '-')
-		return 0;
-
-	size = strtoull(p, &endptr, 10);
-	if (p == endptr)
-		return 0;
-
-	switch (*endptr) {
-	case 'T':
-	case 't':
-		size *= 1024;
-		/* fallthrough */
-	case 'G':
-	case 'g':
-		size *= 1024;
-		/* fallthrough */
-	case 'M':
-	case 'm':
-		size *= 1024;
-		/* fallthrough */
-	case 'K':
-	case 'k':
-		size *= 1024;
-		++endptr;
-		break;
-	case 0:
-		break;
-	default:
-		return 0;
-	}
-
-	if (*endptr)
-		return 0;
-
-	*s = size;
-
-	return 1;
 }
 
 static const char * const cmd_qgroup_assign_usage[] = {
@@ -226,8 +176,11 @@ static int cmd_qgroup_assign(const struct cmd_struct *cmd,
 static DEFINE_SIMPLE_COMMAND(qgroup_assign, "assign");
 
 static const char * const cmd_qgroup_remove_usage[] = {
-	"btrfs qgroup remove <src> <dst> <path>",
+	"btrfs qgroup remove [options] <src> <dst> <path>",
 	"Remove a child qgroup SRC from DST.",
+	"",
+	"--rescan       schedule qutoa rescan if needed",
+	"--no-rescan    don't schedule quota rescan",
 	NULL
 };
 
@@ -455,10 +408,10 @@ static int cmd_qgroup_limit(const struct cmd_struct *cmd, int argc, char **argv)
 	if (check_argc_min(argc - optind, 2))
 		return 1;
 
-	if (!parse_limit(argv[optind], &size)) {
-		error("invalid size argument: %s", argv[optind]);
-		return 1;
-	}
+	if (!strcasecmp(argv[optind], "none"))
+		size = -1ULL;
+	else
+		size = parse_size(argv[optind]);
 
 	memset(&args, 0, sizeof(args));
 	if (compressed)
@@ -497,7 +450,10 @@ static int cmd_qgroup_limit(const struct cmd_struct *cmd, int argc, char **argv)
 	ret = ioctl(fd, BTRFS_IOC_QGROUP_LIMIT, &args);
 	close_file_or_dir(fd, dirstream);
 	if (ret < 0) {
-		error("unable to limit requested quota group: %m");
+		error("unable to limit requested quota group: %s",
+				errno == ENOTCONN ? "quota not enabled"
+						: strerror(errno));
+
 		return 1;
 	}
 	return 0;

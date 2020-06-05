@@ -374,6 +374,10 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 			ratio = 1;
 		else if (flags & BTRFS_BLOCK_GROUP_RAID1)
 			ratio = 2;
+		else if (flags & BTRFS_BLOCK_GROUP_RAID1C3)
+			ratio = 3;
+		else if (flags & BTRFS_BLOCK_GROUP_RAID1C4)
+			ratio = 4;
 		else if (flags & BTRFS_BLOCK_GROUP_RAID5)
 			ratio = 0;
 		else if (flags & BTRFS_BLOCK_GROUP_RAID6)
@@ -502,8 +506,15 @@ exit:
  */
 static int cmp_device_info(const void *a, const void *b)
 {
-	return strcmp(((struct device_info *)a)->path,
-			((struct device_info *)b)->path);
+	const struct device_info *deva = a;
+	const struct device_info *devb = b;
+
+	if (deva->devid < devb->devid)
+		return -1;
+	if (deva->devid > devb->devid)
+		return 1;
+
+	return 0;
 }
 
 int dev_to_fsid(const char *dev, u8 *fsid)
@@ -654,6 +665,10 @@ static u64 calc_chunk_size(struct chunk_info *ci)
 		return ci->size / ci->num_stripes;
 	else if (ci->type & BTRFS_BLOCK_GROUP_RAID1)
 		return ci->size ;
+	else if (ci->type & BTRFS_BLOCK_GROUP_RAID1C3)
+		return ci->size;
+	else if (ci->type & BTRFS_BLOCK_GROUP_RAID1C4)
+		return ci->size;
 	else if (ci->type & BTRFS_BLOCK_GROUP_DUP)
 		return ci->size ;
 	else if (ci->type & BTRFS_BLOCK_GROUP_RAID5)
@@ -917,8 +932,10 @@ static void _cmd_filesystem_usage_linear(unsigned unit_mode,
 			r_mode,
 			pretty_size_mode(sargs->spaces[i].total_bytes,
 				unit_mode));
-		printf("Used:%s\n",
-			pretty_size_mode(sargs->spaces[i].used_bytes, unit_mode));
+		printf("Used:%s (%.2f%%)\n",
+			pretty_size_mode(sargs->spaces[i].used_bytes, unit_mode),
+			100.0f * sargs->spaces[i].used_bytes /
+			(sargs->spaces[i].total_bytes + 1));
 		print_chunk_device(flags, info_ptr, info_count,
 				device_info_ptr, device_info_count, unit_mode);
 		printf("\n");

@@ -126,6 +126,12 @@ the root helper).
 * `TEST_ARGS_CHECK` -- user-defined arguments to `btrfs check`, before the
   test-specific arguments
 
+* `TEST_ARGS_MKFS` -- user-defined arguments to `mkfs.btrfs`, before the
+  test-specific arguments
+
+* `TEST_ARGS_CONVERT` -- user-defined arguments to `btrfs-convert`, before the
+  test-specific arguments
+
 Multiple values can be separated by `,`.
 
 ### Permissions

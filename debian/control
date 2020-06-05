@@ -2,7 +2,7 @@ Source: btrfs-progs
 Section: admin
 Priority: optional
 Maintainer: Adam Borowski <kilobyte@angband.pl>
-Build-Depends: debhelper (>= 11),
+Build-Depends: debhelper-compat (= 12),
                e2fslibs-dev,
                pkg-config,
                libacl1-dev,
@@ -18,7 +18,7 @@ Build-Depends: debhelper (>= 11),
 	       python3-dev,
 	       python3-setuptools,
 	       dh-python,
-Standards-Version: 4.4.0
+Standards-Version: 4.5.0
 Rules-Requires-Root: no
 Homepage: http://btrfs.wiki.kernel.org/
 Vcs-Browser: https://salsa.debian.org/debian/btrfs-progs/tree/debian
@@ -28,11 +28,11 @@ Package: btrfs-progs
 Architecture: linux-any
 Multi-Arch: foreign
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Breaks: btrbk (<= 0.25.0)
+Breaks: btrbk (<= 0.25.0), libgcc-s1 (<< 10-20200211)
 Provides: btrfs-tools
 Suggests: duperemove
 Description: Checksumming Copy on Write Filesystem utilities
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .
@@ -47,7 +47,7 @@ Depends: ${misc:Depends}, ${shlibs:Depends}
 Replaces: btrfs-progs (<< 4.16.1-1)
 Breaks: btrfs-progs (<< 4.16.1-1)
 Description: Checksumming Copy on Write Filesystem utilities (runtime library)
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .
@@ -61,7 +61,7 @@ Depends: ${misc:Depends}, ${shlibs:Depends}, libbtrfs0 (= ${binary:Version})
 Replaces: btrfs-progs (<< 4.16.1-1)
 Breaks: btrfs-progs (<< 4.16.1-1)
 Description: Checksumming Copy on Write Filesystem utilities (development headers)
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .
@@ -72,8 +72,9 @@ Architecture: linux-any
 Multi-Arch: same
 Section: libs
 Depends: ${misc:Depends}, ${shlibs:Depends}
+Breaks: python3-btrfsutil (<< 5.5)
 Description: Checksumming Copy on Write Filesystem utilities (runtime util library)
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .
@@ -85,7 +86,7 @@ Multi-Arch: same
 Section: libdevel
 Depends: ${misc:Depends}, ${shlibs:Depends}, libbtrfsutil1 (= ${binary:Version})
 Description: Checksumming Copy on Write Filesystem utilities (util development headers)
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .

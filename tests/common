@@ -91,9 +91,25 @@ _get_spec_ins()
 			echo -n 4
 			return
 		fi
+		if [[ $2 =~ /mkfs.btrfs$ ]]; then
+			echo -n 3
+			return
+		fi
+		if [[ $2 =~ /btrfs-convert$ ]]; then
+			echo -n 3
+			return
+		fi
 	else
 		if [[ $1 =~ /btrfs$ ]]; then
 			echo -n 3
+			return
+		fi
+		if [[ $1 =~ /mkfs.btrfs$ ]]; then
+			echo -n 2
+			return
+		fi
+		if [[ $1 =~ /btrfs-convert$ ]]; then
+			echo -n 2
 			return
 		fi
 	fi
@@ -113,6 +129,8 @@ _cmd_spec()
 		fi
 		case "$1" in
 	  		check) echo -n "$TEST_ARGS_CHECK" ;;
+			*/mkfs.btrfs) echo -n "$TEST_ARGS_MKFS" ;;
+			*/btrfs-convert) echo -n "$TEST_ARGS_CONVERT" ;;
 		esac
 	fi
 }
@@ -129,16 +147,20 @@ run_check()
 {
 	local spec
 	local ins
-	local cmd
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
-	cmd=$(eval echo "\${$spec}")
 	spec=$(_cmd_spec "${@:$spec}")
 	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
 	echo "====== RUN CHECK $@" >> "$RESULTS" 2>&1
 	if [[ $TEST_LOG =~ tty ]]; then echo "CMD: $@" > /dev/tty; fi
-	if [ "$1" = 'root_helper' ]; then
+
+	# If the command is `root_helper` or mount/umount, don't call INSTRUMENT
+	# as most profiling tool like valgrind can't handle setuid/setgid/setcap
+	# which mount normally has.
+	# And since mount/umount is only called with run_check(), we don't need
+	# to do the same check on other run_*() functions.
+	if [ "$1" = 'root_helper' -o "$1" = 'mount' -o "$1" = 'umount' ]; then
 		"$@" >> "$RESULTS" 2>&1 || _fail "failed: $@"
 	else
 		$INSTRUMENT "$@" >> "$RESULTS" 2>&1 || _fail "failed: $@"
@@ -151,11 +173,9 @@ run_check_stdout()
 {
 	local spec
 	local ins
-	local cmd
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
-	cmd=$(eval echo "\${$spec}")
 	spec=$(_cmd_spec "${@:$spec}")
 	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
 	echo "====== RUN CHECK $@" >> "$RESULTS" 2>&1
@@ -177,12 +197,10 @@ run_mayfail()
 {
 	local spec
 	local ins
-	local cmd
 	local ret
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
-	cmd=$(eval echo "\${$spec}")
 	spec=$(_cmd_spec "${@:$spec}")
 	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
 	echo "====== RUN MAYFAIL $@" >> "$RESULTS" 2>&1
@@ -204,13 +222,58 @@ run_mayfail()
 	fi
 }
 
+# Same as run_mayfail but does not fail the test if it's handled gracefully by
+# the caller, unexpected failure like segfault or abort will exit forcibly,
+# output is logged
+#
+# NOTE: we don't use pipefail to avoid disturbing the rest of the caller
+# script, so here we use a temporary output file.  Pipes are not supported,
+# store the output to a variable for further processing.
+run_mayfail_stdout()
+{
+	local spec
+	local ins
+	local ret
+
+	tmp_output=$(mktemp --tmpdir btrfs-progs-test--mayfail-stdtout.XXXXXX)
+
+	ins=$(_get_spec_ins "$@")
+	spec=$(($ins-1))
+	spec=$(_cmd_spec "${@:$spec}")
+	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
+	echo "====== RUN MAYFAIL $@" >> "$RESULTS" 2>&1
+	if [[ $TEST_LOG =~ tty ]]; then echo "CMD(mayfail): $@" > /dev/tty; fi
+	if [ "$1" = 'root_helper' ]; then
+		"$@" 2>&1 > "$tmp_output"
+	else
+		$INSTRUMENT "$@" 2>&1 > "$tmp_output"
+	fi
+	ret=$?
+
+	cat "$tmp_output" >> "$RESULTS"
+	cat "$tmp_output"
+	rm -- "$tmp_output"
+
+	if [ "$ret" != 0 ]; then
+		echo "failed (ignored, ret=$ret): $@" >> "$RESULTS"
+		if [ "$ret" == 139 ]; then
+			_fail "mayfail: returned code 139 (SEGFAULT), not ignored"
+		elif [ "$ret" == 134 ]; then
+			_fail "mayfail: returned code 134 (SIGABRT), not ignored"
+		fi
+		return "$ret"
+	fi
+	# return the command code and let the caller decide what to do based
+	# on the stdout
+	return "$ret"
+}
+
 # first argument is error message to print if it fails, otherwise
 # same as run_check but expects the command to fail, output is logged
 run_mustfail()
 {
 	local spec
 	local ins
-	local cmd
 	local msg
 
 	msg="$1"
@@ -223,7 +286,6 @@ run_mustfail()
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
-	cmd=$(eval echo "\${$spec}")
 	spec=$(_cmd_spec "${@:$spec}")
 	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
 	echo "====== RUN MUSTFAIL $@" >> "$RESULTS" 2>&1
@@ -252,7 +314,6 @@ run_mustfail_stdout()
 {
 	local spec
 	local ins
-	local cmd
 	local msg
 	local ret
 	local tmp_output
@@ -269,7 +330,6 @@ run_mustfail_stdout()
 
 	ins=$(_get_spec_ins "$@")
 	spec=$(($ins-1))
-	cmd=$(eval echo "\${$spec}")
 	spec=$(_cmd_spec "${@:$spec}")
 	set -- "${@:1:$(($ins-1))}" $spec "${@: $ins}"
 	echo "====== RUN MUSTFAIL $@" >> "$RESULTS" 2>&1
@@ -297,13 +357,19 @@ run_mustfail_stdout()
 
 check_prereq()
 {
-	if [ "$1" = "btrfs-corrupt-block" -o "$1" = "fssum" ]; then
+	# Internal tools for testing, not shipped with the package
+	case "$1" in
+	btrfs-corrupt-block|btrfs-find-root|btrfs-select-super|fssum)
 		if ! [ -f "$INTERNAL_BIN/$1" ]; then
 			_fail "Failed prerequisites: $INTERNAL_BIN/$1";
 		fi
-	elif ! [ -f "$TOP/$1" ]; then
-		_fail "Failed prerequisites: $TOP/$1";
-	fi
+		;;
+	*)
+		if ! [ -f "$TOP/$1" ]; then
+			_fail "Failed prerequisites: $TOP/$1";
+		fi
+		;;
+	esac
 }
 
 check_global_prereq()
@@ -312,6 +378,26 @@ check_global_prereq()
 	if [ $? -ne 0 ]; then
 		_fail "Failed system wide prerequisities: $1";
 	fi
+}
+
+# Check if dmsetup and targets passed as arguments are available, and skip the
+# test if they aren't
+check_dm_target_support()
+{
+	setup_root_helper
+
+	which dmsetup &> /dev/null
+	if [ $? -ne 0 ]; then
+		_not_run "This test requires dmsetup tool";
+	fi
+
+	for target in "$@"; do
+		$SUDO_HELPER modprobe "dm-$target" >/dev/null 2>&1
+		$SUDO_HELPER dmsetup targets 2>&1 | grep -q "^$target"
+		if [ $? -ne 0 ]; then
+			_not_run "This test requires dm-$target support"
+		fi
+	done
 }
 
 check_image()
@@ -323,7 +409,7 @@ check_image()
 	"$TOP/btrfs" check "$image" >> "$RESULTS" 2>&1
 	[ $? -eq 0 ] && _fail "btrfs check should have detected corruption"
 
-	run_check "$TOP/btrfs" check --repair "$image"
+	run_check "$TOP/btrfs" check --repair --force "$image"
 	run_check "$TOP/btrfs" check "$image"
 }
 
@@ -713,6 +799,8 @@ init_env()
 	if [ "$TEST_ENABLE_OVERRIDE" = 'true' -a -n "$RESULTS" ]; then
 		echo "INCLUDE common.local" >> "$RESULTS"
 		echo "  check: $TEST_ARGS_CHECK" >> "$RESULTS"
+		echo "  mkfs: $TEST_ARGS_MKFS" >> "$RESULTS"
+		echo "  convert: $TEST_ARGS_CONVERT" >> "$RESULTS"
 	fi
 }
 init_env

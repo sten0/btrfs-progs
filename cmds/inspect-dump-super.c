@@ -32,19 +32,17 @@
 #include "kernel-lib/list.h"
 #include "common/utils.h"
 #include "cmds/commands.h"
-#include "kernel-lib/crc32c.h"
+#include "crypto/crc32c.h"
 #include "common/help.h"
 
-static int check_csum_sblock(void *sb, int csum_size)
+static int check_csum_sblock(void *sb, int csum_size, u16 csum_type)
 {
 	u8 result[BTRFS_CSUM_SIZE];
-	u32 crc = ~(u32)0;
 
-	crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE,
-				crc, BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
-	btrfs_csum_final(crc, result);
+	btrfs_csum_data(csum_type, (u8 *)sb + BTRFS_CSUM_SIZE,
+			result, BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
 
-	return !memcmp(sb, &result, csum_size);
+	return !memcmp(sb, result, csum_size);
 }
 
 static void print_sys_chunk_array(struct btrfs_super_block *sb)
@@ -229,7 +227,8 @@ static struct readable_flag_entry incompat_flags_array[] = {
 	DEF_INCOMPAT_FLAG_ENTRY(RAID56),
 	DEF_INCOMPAT_FLAG_ENTRY(SKINNY_METADATA),
 	DEF_INCOMPAT_FLAG_ENTRY(NO_HOLES),
-	DEF_INCOMPAT_FLAG_ENTRY(METADATA_UUID)
+	DEF_INCOMPAT_FLAG_ENTRY(METADATA_UUID),
+	DEF_INCOMPAT_FLAG_ENTRY(RAID1C34),
 };
 static const int incompat_flags_num = sizeof(incompat_flags_array) /
 				      sizeof(struct readable_flag_entry);
@@ -313,6 +312,19 @@ static void print_readable_super_flag(u64 flag)
 				     super_flags_num, BTRFS_SUPER_FLAG_SUPP);
 }
 
+static bool is_valid_csum_type(u16 csum_type)
+{
+	switch (csum_type) {
+	case BTRFS_CSUM_TYPE_CRC32:
+	case BTRFS_CSUM_TYPE_XXHASH:
+	case BTRFS_CSUM_TYPE_SHA256:
+	case BTRFS_CSUM_TYPE_BLAKE2:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static void dump_superblock(struct btrfs_super_block *sb, int full)
 {
 	int i;
@@ -328,15 +340,11 @@ static void dump_superblock(struct btrfs_super_block *sb, int full)
 	csum_type = btrfs_super_csum_type(sb);
 	csum_size = BTRFS_CSUM_SIZE;
 	printf("csum_type\t\t%hu (", csum_type);
-	if (csum_type >= ARRAY_SIZE(btrfs_csum_sizes)) {
+	if (!is_valid_csum_type(csum_type)) {
 		printf("INVALID");
 	} else {
-		if (csum_type == BTRFS_CSUM_TYPE_CRC32) {
-			printf("crc32c");
-			csum_size = btrfs_csum_sizes[csum_type];
-		} else {
-			printf("unknown");
-		}
+		printf("%s", btrfs_super_csum_name(csum_type));
+		csum_size = btrfs_super_csum_size(sb);
 	}
 	printf(")\n");
 	printf("csum_size\t\t%llu\n", (unsigned long long)csum_size);
@@ -344,10 +352,9 @@ static void dump_superblock(struct btrfs_super_block *sb, int full)
 	printf("csum\t\t\t0x");
 	for (i = 0, p = sb->csum; i < csum_size; i++)
 		printf("%02x", p[i]);
-	if (csum_type != BTRFS_CSUM_TYPE_CRC32 ||
-	    csum_size != btrfs_csum_sizes[BTRFS_CSUM_TYPE_CRC32])
+	if (!is_valid_csum_type(csum_type))
 		printf(" [UNKNOWN CSUM TYPE OR SIZE]");
-	else if (check_csum_sblock(sb, csum_size))
+	else if (check_csum_sblock(sb, csum_size, csum_type))
 		printf(" [match]");
 	else
 		printf(" [DON'T MATCH]");

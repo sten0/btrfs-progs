@@ -1,4 +1,4 @@
-Btrfs-progs [![build status](https://travis-ci.org/kdave/btrfs-progs.svg?branch=devel)](https://travis-ci.org/kdave/btrfs-progs) [![coverity status](https://scan.coverity.com/projects/617/badge.svg)](https://scan.coverity.com/projects/btrfs-progs)
+Btrfs-progs [![build status](https://travis-ci.org/kdave/btrfs-progs.svg?branch=devel)](https://travis-ci.org/kdave/btrfs-progs) [![coverity status](https://scan.coverity.com/projects/617/badge.svg)](https://scan.coverity.com/projects/btrfs-progs) [![gitlab CI/CD](https://gitlab.com/kdave/btrfs-progs)](https://gitlab.com/kdave/btrfs-progs/badges/devel/build.svg)
 ===========
 
 Userspace utilities to manage btrfs filesystems.
@@ -90,6 +90,20 @@ code rules in the previous section is not necessary. GitHub pull requests are
 OK, patches could be sent to me directly and not required to be also in the
 mailinglist. Pointing out typos via IRC also works, although might get
 accidentally lost in the noise.
+
+Third-party sources
+-------------------
+
+Build dependencies are listed in [INSTALL](INSTALL). Implementation of checksum/hash
+functions is provided by copies of the respective sources to avoid adding
+dependencies that would make deployments in rescure or limited environments
+harder. The implementations are portable and not optimized for speed nor
+accelerated.
+
+* CRC32C: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/
+* XXHASH: https://github.com/Cyan4973/xxHash
+* SHA256: https://tools.ietf.org/html/rfc4634
+* BLAKE2: https://github.com/BLAKE2/BLAKE2
 
 References
 ----------

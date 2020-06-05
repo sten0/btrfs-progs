@@ -47,8 +47,6 @@
 #define BLOCK_GROUP_METADATA	(1U << 2)
 #define BLOCK_GROUP_SYSTEM	(1U << 4)
 
-#define BLOCK_GROUP_DIRTY 	(1U)
-
 /*
  * The extent buffer bitmap operations are done with byte granularity instead of
  * word granularity for two reasons:
@@ -149,6 +147,8 @@ struct extent_buffer *find_first_extent_buffer(struct extent_io_tree *tree,
 struct extent_buffer *alloc_extent_buffer(struct btrfs_fs_info *fs_info,
 					  u64 bytenr, u32 blocksize);
 struct extent_buffer *btrfs_clone_extent_buffer(struct extent_buffer *src);
+struct extent_buffer *alloc_dummy_extent_buffer(struct btrfs_fs_info *fs_info,
+						u64 bytenr, u32 blocksize);
 void free_extent_buffer(struct extent_buffer *eb);
 void free_extent_buffer_nocache(struct extent_buffer *eb);
 int read_extent_from_disk(struct extent_buffer *eb,

@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include "kernel-lib/crc32c.h"
+#include "crypto/crc32c.h"
 #include "common/utils.h"
 
 void print_usage(int status)
@@ -52,7 +52,7 @@ int main(int argc, char **argv)
 			length = atol(optarg);
 			break;
 		case 'c':
-			sscanf(optarg, "%li", &checksum);
+			sscanf(optarg, "%lu", &checksum);
 			loop = 1;
 			break;
 		case 's':

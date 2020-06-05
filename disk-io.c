@@ -29,11 +29,12 @@
 #include "disk-io.h"
 #include "volumes.h"
 #include "transaction.h"
-#include "kernel-lib/crc32c.h"
+#include "crypto/crc32c.h"
 #include "common/utils.h"
 #include "print-tree.h"
 #include "common/rbtree-utils.h"
 #include "common/device-scan.h"
+#include "crypto/hash.h"
 
 /* specified errno for check_tree_block */
 #define BTRFS_BAD_BYTENR		(-1)
@@ -128,7 +129,7 @@ static void print_tree_block_error(struct btrfs_fs_info *fs_info,
 			eb->start, btrfs_header_bytenr(eb));
 		break;
 	case BTRFS_BAD_LEVEL:
-		fprintf(stderr, "bad level, %u > %u\n",
+		fprintf(stderr, "bad level, %u > %d\n",
 			btrfs_header_level(eb), BTRFS_MAX_LEVEL);
 		break;
 	case BTRFS_BAD_NRITEMS:
@@ -138,34 +139,45 @@ static void print_tree_block_error(struct btrfs_fs_info *fs_info,
 	}
 }
 
-u32 btrfs_csum_data(char *data, u32 seed, size_t len)
+int btrfs_csum_data(u16 csum_type, const u8 *data, u8 *out, size_t len)
 {
-	return crc32c(seed, data, len);
-}
+	memset(out, 0, BTRFS_CSUM_SIZE);
 
-void btrfs_csum_final(u32 crc, u8 *result)
-{
-	put_unaligned_le32(~crc, result);
+	switch (csum_type) {
+	case BTRFS_CSUM_TYPE_CRC32:
+		return hash_crc32c(data, len, out);
+	case BTRFS_CSUM_TYPE_XXHASH:
+		return hash_xxhash(data, len, out);
+	case BTRFS_CSUM_TYPE_SHA256:
+		return hash_sha256(data, len, out);
+	case BTRFS_CSUM_TYPE_BLAKE2:
+		return hash_blake2b(data, len, out);
+	default:
+		fprintf(stderr, "ERROR: unknown csum type: %d\n", csum_type);
+		ASSERT(0);
+	}
+
+	return -1;
 }
 
 static int __csum_tree_block_size(struct extent_buffer *buf, u16 csum_size,
-				  int verify, int silent)
+				  int verify, int silent, u16 csum_type)
 {
 	u8 result[BTRFS_CSUM_SIZE];
 	u32 len;
-	u32 crc = ~(u32)0;
 
 	len = buf->len - BTRFS_CSUM_SIZE;
-	crc = crc32c(crc, buf->data + BTRFS_CSUM_SIZE, len);
-	btrfs_csum_final(crc, result);
+	btrfs_csum_data(csum_type, (u8 *)buf->data + BTRFS_CSUM_SIZE,
+			result, len);
 
 	if (verify) {
 		if (memcmp_extent_buffer(buf, result, 0, csum_size)) {
+			/* FIXME: format */
 			if (!silent)
 				printk("checksum verify failed on %llu found %08X wanted %08X\n",
 				       (unsigned long long)buf->start,
-				       *((u32 *)result),
-				       *((u32*)(char *)buf->data));
+				       result[0],
+				       buf->data[0]);
 			return 1;
 		}
 	} else {
@@ -174,24 +186,27 @@ static int __csum_tree_block_size(struct extent_buffer *buf, u16 csum_size,
 	return 0;
 }
 
-int csum_tree_block_size(struct extent_buffer *buf, u16 csum_size, int verify)
+int csum_tree_block_size(struct extent_buffer *buf, u16 csum_size, int verify,
+			 u16 csum_type)
 {
-	return __csum_tree_block_size(buf, csum_size, verify, 0);
+	return __csum_tree_block_size(buf, csum_size, verify, 0, csum_type);
 }
 
-int verify_tree_block_csum_silent(struct extent_buffer *buf, u16 csum_size)
+int verify_tree_block_csum_silent(struct extent_buffer *buf, u16 csum_size,
+				  u16 csum_type)
 {
-	return __csum_tree_block_size(buf, csum_size, 1, 1);
+	return __csum_tree_block_size(buf, csum_size, 1, 1, csum_type);
 }
 
 int csum_tree_block(struct btrfs_fs_info *fs_info,
 		    struct extent_buffer *buf, int verify)
 {
-	u16 csum_size =
-		btrfs_super_csum_size(fs_info->super_copy);
+	u16 csum_size = btrfs_super_csum_size(fs_info->super_copy);
+	u16 csum_type = btrfs_super_csum_type(fs_info->super_copy);
+
 	if (verify && fs_info->suppress_check_block_errors)
-		return verify_tree_block_csum_silent(buf, csum_size);
-	return csum_tree_block_size(buf, csum_size, verify);
+		return verify_tree_block_csum_silent(buf, csum_size, csum_type);
+	return csum_tree_block_size(buf, csum_size, verify, csum_type);
 }
 
 struct extent_buffer *btrfs_find_tree_block(struct btrfs_fs_info *fs_info,
@@ -472,20 +487,40 @@ int write_and_map_eb(struct btrfs_fs_info *fs_info, struct extent_buffer *eb)
 	length = eb->len;
 	ret = btrfs_map_block(fs_info, WRITE, eb->start, &length,
 			      &multi, 0, &raid_map);
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to map bytenr %llu length %u: %m",
+			eb->start, eb->len);
+		goto out;
+	}
 
 	if (raid_map) {
 		ret = write_raid56_with_parity(fs_info, eb, multi,
 					       length, raid_map);
-		BUG_ON(ret);
+		if (ret < 0) {
+			errno = -ret;
+			error(
+		"failed to write raid56 stripe for bytenr %llu length %llu: %m",
+				eb->start, length);
+			goto out;
+		}
 	} else while (dev_nr < multi->num_stripes) {
-		BUG_ON(ret);
 		eb->fd = multi->stripes[dev_nr].dev->fd;
 		eb->dev_bytenr = multi->stripes[dev_nr].physical;
 		multi->stripes[dev_nr].dev->total_ios++;
 		dev_nr++;
 		ret = write_extent_to_disk(eb);
-		BUG_ON(ret);
+		if (ret < 0) {
+			errno = -ret;
+			error(
+"failed to write bytenr %llu length %u devid %llu dev_bytenr %llu: %m",
+				eb->start, eb->len,
+				multi->stripes[dev_nr].dev->devid,
+				eb->dev_bytenr);
+			goto out;
+		}
 	}
+out:
 	kfree(raid_map);
 	kfree(multi);
 	return 0;
@@ -779,9 +814,10 @@ struct btrfs_fs_info *btrfs_new_fs_info(int writable, u64 sb_bytenr)
 
 	extent_io_tree_init(&fs_info->extent_cache);
 	extent_io_tree_init(&fs_info->free_space_cache);
-	extent_io_tree_init(&fs_info->block_group_cache);
 	extent_io_tree_init(&fs_info->pinned_extents);
 	extent_io_tree_init(&fs_info->extent_ins);
+
+	fs_info->block_group_cache_tree = RB_ROOT;
 	fs_info->excluded_extents = NULL;
 
 	fs_info->fs_root_tree = RB_ROOT;
@@ -814,7 +850,7 @@ int btrfs_check_fs_compatibility(struct btrfs_super_block *sb,
 		   ~BTRFS_FEATURE_INCOMPAT_SUPP;
 	if (features) {
 		printk("couldn't open because of unsupported "
-		       "option features (%Lx).\n",
+		       "option features (%llx).\n",
 		       (unsigned long long)features);
 		return -ENOTSUP;
 	}
@@ -836,7 +872,7 @@ int btrfs_check_fs_compatibility(struct btrfs_super_block *sb,
 		}
 		if (features & ~BTRFS_FEATURE_COMPAT_RO_SUPP) {
 			printk("couldn't open RDWR because of unsupported "
-			       "option features (%Lx).\n",
+			       "option features (0x%llx)\n",
 			       (unsigned long long)features);
 			return -ENOTSUP;
 		}
@@ -874,9 +910,11 @@ static int setup_root_or_create_block(struct btrfs_fs_info *fs_info,
 
 	ret = find_and_setup_root(root, fs_info, objectid, info_root);
 	if (ret) {
-		printk("Couldn't setup %s tree\n", str);
-		if (!(flags & OPEN_CTREE_PARTIAL))
+		if (!(flags & OPEN_CTREE_PARTIAL)) {
+			error("could not setup %s tree", str);
 			return -EIO;
+		}
+		warning("could not setup %s tree, skipping it", str);
 		/*
 		 * Need a blank node here just so we don't screw up in the
 		 * million of places that assume a root has a valid ->node
@@ -983,14 +1021,17 @@ int btrfs_setup_all_roots(struct btrfs_fs_info *fs_info, u64 root_tree_bytenr,
 	fs_info->last_trans_committed = generation;
 	if (extent_buffer_uptodate(fs_info->extent_root->node) &&
 	    !(flags & OPEN_CTREE_NO_BLOCK_GROUPS)) {
-		ret = btrfs_read_block_groups(fs_info->tree_root);
+		ret = btrfs_read_block_groups(fs_info);
 		/*
 		 * If we don't find any blockgroups (ENOENT) we're either
 		 * restoring or creating the filesystem, where it's expected,
 		 * anything else is error
 		 */
-		if (ret != -ENOENT)
-			return -EIO;
+		if (ret < 0 && ret != -ENOENT) {
+			errno = -ret;
+			error("failed to read block groups: %m");
+			return ret;
+		}
 	}
 
 	key.objectid = BTRFS_FS_TREE_OBJECTID;
@@ -1047,7 +1088,6 @@ void btrfs_cleanup_all_caches(struct btrfs_fs_info *fs_info)
 	free_mapping_cache_tree(&fs_info->mapping_tree.cache_tree);
 	extent_io_tree_cleanup(&fs_info->extent_cache);
 	extent_io_tree_cleanup(&fs_info->free_space_cache);
-	extent_io_tree_cleanup(&fs_info->block_group_cache);
 	extent_io_tree_cleanup(&fs_info->pinned_extents);
 	extent_io_tree_cleanup(&fs_info->extent_ins);
 }
@@ -1178,6 +1218,8 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, const char *path,
 		fs_info->ignore_fsid_mismatch = 1;
 	if (flags & OPEN_CTREE_IGNORE_CHUNK_TREE_ERROR)
 		fs_info->ignore_chunk_tree_error = 1;
+	if (flags & OPEN_CTREE_HIDE_NAMES)
+		fs_info->hide_names = 1;
 
 	if ((flags & OPEN_CTREE_RECOVER_SUPER)
 	     && (flags & OPEN_CTREE_TEMPORARY_SUPER)) {
@@ -1228,7 +1270,6 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, const char *path,
 		goto out_devices;
 	}
 
-	ASSERT(!memcmp(disk_super->fsid, fs_devices->fsid, BTRFS_FSID_SIZE));
 	ASSERT(!memcmp(disk_super->fsid, fs_devices->fsid, BTRFS_FSID_SIZE));
 	if (btrfs_fs_incompat(fs_info, METADATA_UUID))
 		ASSERT(!memcmp(disk_super->metadata_uuid,
@@ -1351,7 +1392,6 @@ struct btrfs_root *open_ctree_fd(int fp, const char *path, u64 sb_bytenr,
 int btrfs_check_super(struct btrfs_super_block *sb, unsigned sbflags)
 {
 	u8 result[BTRFS_CSUM_SIZE];
-	u32 crc;
 	u16 csum_type;
 	int csum_size;
 	u8 *metadata_uuid;
@@ -1366,16 +1406,14 @@ int btrfs_check_super(struct btrfs_super_block *sb, unsigned sbflags)
 	}
 
 	csum_type = btrfs_super_csum_type(sb);
-	if (csum_type >= ARRAY_SIZE(btrfs_csum_sizes)) {
+	if (csum_type >= btrfs_super_num_csums()) {
 		error("unsupported checksum algorithm %u", csum_type);
 		return -EIO;
 	}
-	csum_size = btrfs_csum_sizes[csum_type];
+	csum_size = btrfs_super_csum_size(sb);
 
-	crc = ~(u32)0;
-	crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE, crc,
-			      BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
-	btrfs_csum_final(crc, result);
+	btrfs_csum_data(csum_type, (u8 *)sb + BTRFS_CSUM_SIZE,
+			result, BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
 
 	if (memcmp(result, sb->csum, csum_size)) {
 		error("superblock checksum mismatch");
@@ -1611,8 +1649,9 @@ static int write_dev_supers(struct btrfs_fs_info *fs_info,
 			    struct btrfs_device *device)
 {
 	u64 bytenr;
-	u32 crc;
+	u8 result[BTRFS_CSUM_SIZE];
 	int i, ret;
+	u16 csum_type = btrfs_super_csum_type(sb);
 
 	/*
 	 * We need to write super block after all metadata written.
@@ -1627,10 +1666,9 @@ static int write_dev_supers(struct btrfs_fs_info *fs_info,
 	}
 	if (fs_info->super_bytenr != BTRFS_SUPER_INFO_OFFSET) {
 		btrfs_set_super_bytenr(sb, fs_info->super_bytenr);
-		crc = ~(u32)0;
-		crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE, crc,
-				      BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
-		btrfs_csum_final(crc, &sb->csum[0]);
+		btrfs_csum_data(csum_type, (u8 *)sb + BTRFS_CSUM_SIZE, result,
+				BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
+		memcpy(&sb->csum[0], result, BTRFS_CSUM_SIZE);
 
 		/*
 		 * super_copy is BTRFS_SUPER_INFO_SIZE bytes and is
@@ -1663,10 +1701,9 @@ static int write_dev_supers(struct btrfs_fs_info *fs_info,
 
 		btrfs_set_super_bytenr(sb, bytenr);
 
-		crc = ~(u32)0;
-		crc = btrfs_csum_data((char *)sb + BTRFS_CSUM_SIZE, crc,
+		btrfs_csum_data(csum_type, (u8 *)sb + BTRFS_CSUM_SIZE, result,
 				      BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
-		btrfs_csum_final(crc, &sb->csum[0]);
+		memcpy(&sb->csum[0], result, BTRFS_CSUM_SIZE);
 
 		/*
 		 * super_copy is BTRFS_SUPER_INFO_SIZE bytes and is

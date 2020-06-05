@@ -45,7 +45,7 @@
 #include "common/rbtree-utils.h"
 #include "mkfs/common.h"
 #include "mkfs/rootdir.h"
-#include "kernel-lib/crc32c.h"
+#include "crypto/crc32c.h"
 #include "common/fsfeatures.h"
 #include "common/box.h"
 
@@ -337,10 +337,12 @@ static void print_usage(int ret)
 	printf("Usage: mkfs.btrfs [options] dev [ dev ... ]\n");
 	printf("Options:\n");
 	printf("  allocation profiles:\n");
-	printf("\t-d|--data PROFILE       data profile, raid0, raid1, raid5, raid6, raid10, dup or single\n");
+	printf("\t-d|--data PROFILE       data profile, raid0, raid1, raid1c3, raid1c4, raid5, raid6, raid10, dup or single\n");
 	printf("\t-m|--metadata PROFILE   metadata profile, values like for data profile\n");
 	printf("\t-M|--mixed              mix metadata and data together\n");
 	printf("  features:\n");
+	printf("\t--csum TYPE\n");
+	printf("\t--checksum TYPE         checksum algorithm to use (default: crc32c)\n");
 	printf("\t-n|--nodesize SIZE      size of btree nodes\n");
 	printf("\t-s|--sectorsize SIZE    data block size (may not be mountable by current kernel)\n");
 	printf("\t-O|--features LIST      comma separated list of filesystem features (use '-O list-all' to list features)\n");
@@ -368,6 +370,10 @@ static u64 parse_profile(const char *s)
 		return BTRFS_BLOCK_GROUP_RAID0;
 	} else if (strcasecmp(s, "raid1") == 0) {
 		return BTRFS_BLOCK_GROUP_RAID1;
+	} else if (strcasecmp(s, "raid1c3") == 0) {
+		return BTRFS_BLOCK_GROUP_RAID1C3;
+	} else if (strcasecmp(s, "raid1c4") == 0) {
+		return BTRFS_BLOCK_GROUP_RAID1C4;
 	} else if (strcasecmp(s, "raid5") == 0) {
 		return BTRFS_BLOCK_GROUP_RAID5;
 	} else if (strcasecmp(s, "raid6") == 0) {
@@ -832,15 +838,20 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	u64 features = BTRFS_MKFS_DEFAULT_FEATURES;
 	struct mkfs_allocation allocation = { 0 };
 	struct btrfs_mkfs_config mkfs_cfg;
+	enum btrfs_csum_type csum_type = BTRFS_CSUM_TYPE_CRC32;
 
 	crc32c_optimization_init();
 
 	while(1) {
 		int c;
-		enum { GETOPT_VAL_SHRINK = 257 };
+		enum { GETOPT_VAL_SHRINK = 257, GETOPT_VAL_CHECKSUM };
 		static const struct option long_options[] = {
 			{ "alloc-start", required_argument, NULL, 'A'},
 			{ "byte-count", required_argument, NULL, 'b' },
+			{ "csum", required_argument, NULL,
+				GETOPT_VAL_CHECKSUM },
+			{ "checksum", required_argument, NULL,
+				GETOPT_VAL_CHECKSUM },
 			{ "force", no_argument, NULL, 'f' },
 			{ "leafsize", required_argument, NULL, 'l' },
 			{ "label", required_argument, NULL, 'L'},
@@ -937,6 +948,9 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 				break;
 			case GETOPT_VAL_SHRINK:
 				shrink_rootdir = true;
+				break;
+			case GETOPT_VAL_CHECKSUM:
+				csum_type = parse_csum_type(optarg);
 				break;
 			case GETOPT_VAL_HELP:
 			default:
@@ -1041,6 +1055,11 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	if ((data_profile | metadata_profile) &
 	    (BTRFS_BLOCK_GROUP_RAID5 | BTRFS_BLOCK_GROUP_RAID6)) {
 		features |= BTRFS_FEATURE_INCOMPAT_RAID56;
+	}
+
+	if ((data_profile | metadata_profile) &
+	    (BTRFS_BLOCK_GROUP_RAID1C3 | BTRFS_BLOCK_GROUP_RAID1C4)) {
+		features |= BTRFS_FEATURE_INCOMPAT_RAID1C34;
 	}
 
 	if (btrfs_check_nodesize(nodesize, sectorsize,
@@ -1169,6 +1188,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		warning("metadata has lower redundancy than data!\n");
 	}
 
+	mkfs_cfg.csum_type = BTRFS_CSUM_TYPE_CRC32;
 	mkfs_cfg.label = label;
 	memcpy(mkfs_cfg.fs_uuid, fs_uuid, sizeof(mkfs_cfg.fs_uuid));
 	mkfs_cfg.num_bytes = dev_block_count;
@@ -1176,6 +1196,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	mkfs_cfg.sectorsize = sectorsize;
 	mkfs_cfg.stripesize = stripesize;
 	mkfs_cfg.features = features;
+	mkfs_cfg.csum_type = csum_type;
 
 	ret = make_btrfs(fd, &mkfs_cfg);
 	if (ret) {
@@ -1268,7 +1289,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 					sectorsize, sectorsize, sectorsize);
 		if (ret) {
 			error("unable to add %s to filesystem: %d", file, ret);
-			goto out;
+			goto error;
 		}
 		if (verbose >= 2) {
 			struct btrfs_device *device;
@@ -1357,7 +1378,9 @@ raid_groups:
 			pretty_size(allocation.system));
 		printf("SSD detected:       %s\n", ssd ? "yes" : "no");
 		btrfs_parse_features_to_string(features_buf, features);
-		printf("Incompat features:  %s", features_buf);
+		printf("Incompat features:  %s\n", features_buf);
+		printf("Checksum:           %s",
+		       btrfs_super_csum_name(mkfs_cfg.csum_type));
 		printf("\n");
 
 		list_all_devices(root);

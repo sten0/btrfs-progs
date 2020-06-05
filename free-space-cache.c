@@ -22,7 +22,7 @@
 #include "transaction.h"
 #include "disk-io.h"
 #include "extent_io.h"
-#include "kernel-lib/crc32c.h"
+#include "crypto/crc32c.h"
 #include "kernel-lib/bitops.h"
 #include "common/internal.h"
 #include "common/utils.h"
@@ -213,7 +213,7 @@ static int io_ctl_check_crc(struct io_ctl *io_ctl, int index)
 	io_ctl_map_page(io_ctl, 0);
 	crc = crc32c(crc, io_ctl->orig + offset,
 			io_ctl->root->fs_info->sectorsize - offset);
-	btrfs_csum_final(crc, (u8 *)&crc);
+	put_unaligned_le32(~crc, (u8 *)&crc);
 	if (val != crc) {
 		printk("btrfs: csum mismatch on free space cache\n");
 		io_ctl_unmap_page(io_ctl);
@@ -436,7 +436,7 @@ int load_free_space_cache(struct btrfs_fs_info *fs_info,
 {
 	struct btrfs_free_space_ctl *ctl = block_group->free_space_ctl;
 	struct btrfs_path *path;
-	u64 used = btrfs_block_group_used(&block_group->item);
+	u64 used = block_group->used;
 	int ret = 0;
 	u64 bg_free;
 	s64 diff;

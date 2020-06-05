@@ -36,9 +36,9 @@
 #include "disk-io.h"
 #include "volumes.h"
 #include "transaction.h"
-#include "kernel-lib/crc32c.h"
+#include "crypto/crc32c.h"
 #include "common/utils.h"
-#include "btrfsck.h"
+#include "check/common.h"
 #include "cmds/commands.h"
 #include "cmds/rescue.h"
 
@@ -47,6 +47,7 @@ struct recover_control {
 	int yes;
 
 	u16 csum_size;
+	u16 csum_type;
 	u32 sectorsize;
 	u32 nodesize;
 	u64 generation;
@@ -767,7 +768,8 @@ static int scan_one_device(void *dev_scan_struct)
 			continue;
 		}
 
-		if (verify_tree_block_csum_silent(buf, rc->csum_size)) {
+		if (verify_tree_block_csum_silent(buf, rc->csum_size,
+						  rc->csum_type)) {
 			bytenr += rc->sectorsize;
 			continue;
 		}
@@ -1082,7 +1084,7 @@ err:
 	return ret;
 }
 
-static int block_group_free_all_extent(struct btrfs_root *root,
+static int block_group_free_all_extent(struct btrfs_trans_handle *trans,
 				       struct block_group_record *bg)
 {
 	struct btrfs_block_group_cache *cache;
@@ -1090,7 +1092,7 @@ static int block_group_free_all_extent(struct btrfs_root *root,
 	u64 start;
 	u64 end;
 
-	info = root->fs_info;
+	info = trans->fs_info;
 	cache = btrfs_lookup_block_group(info, bg->objectid);
 	if (!cache)
 		return -ENOENT;
@@ -1098,11 +1100,11 @@ static int block_group_free_all_extent(struct btrfs_root *root,
 	start = cache->key.objectid;
 	end = start + cache->key.offset - 1;
 
-	set_extent_bits(&info->block_group_cache, start, end,
-			BLOCK_GROUP_DIRTY);
+	if (list_empty(&cache->dirty_list))
+		list_add_tail(&cache->dirty_list, &trans->dirty_bgs);
 	set_extent_dirty(&info->free_space_cache, start, end);
 
-	btrfs_set_block_group_used(&cache->item, 0);
+	cache->used = 0;
 
 	return 0;
 }
@@ -1122,7 +1124,7 @@ static int remove_chunk_extent_item(struct btrfs_trans_handle *trans,
 		if (ret)
 			return ret;
 
-		ret = block_group_free_all_extent(root, chunk->bg_rec);
+		ret = block_group_free_all_extent(trans, chunk->bg_rec);
 		if (ret)
 			return ret;
 	}
@@ -1530,6 +1532,7 @@ static int recover_prepare(struct recover_control *rc, const char *path)
 	rc->generation = btrfs_super_generation(sb);
 	rc->chunk_root_generation = btrfs_super_chunk_root_generation(sb);
 	rc->csum_size = btrfs_super_csum_size(sb);
+	rc->csum_type = btrfs_super_csum_type(sb);
 
 	/* if seed, the result of scanning below will be partial */
 	if (btrfs_super_flags(sb) & BTRFS_SUPER_FLAG_SEEDING) {
@@ -1579,6 +1582,10 @@ static int calc_num_stripes(u64 type)
 	else if (type & (BTRFS_BLOCK_GROUP_RAID1 |
 			 BTRFS_BLOCK_GROUP_DUP))
 		return 2;
+	else if (type & (BTRFS_BLOCK_GROUP_RAID1C3))
+		return 3;
+	else if (type & (BTRFS_BLOCK_GROUP_RAID1C4))
+		return 4;
 	else
 		return 1;
 }
@@ -1884,11 +1891,16 @@ static u64 calc_data_offset(struct btrfs_key *key,
 	return dev_offset + data_offset;
 }
 
-static int check_one_csum(int fd, u64 start, u32 len, u32 tree_csum)
+static int check_one_csum(int fd, u64 start, u32 len, u32 tree_csum,
+			  u16 csum_type)
 {
 	char *data;
 	int ret = 0;
-	u32 csum_result = ~(u32)0;
+	u8 result[BTRFS_CSUM_SIZE];
+	int csum_size = 0;
+	u8 expected_csum[BTRFS_CSUM_SIZE];
+
+	ASSERT(0);
 
 	data = malloc(len);
 	if (!data)
@@ -1899,9 +1911,9 @@ static int check_one_csum(int fd, u64 start, u32 len, u32 tree_csum)
 		goto out;
 	}
 	ret = 0;
-	csum_result = btrfs_csum_data(data, csum_result, len);
-	btrfs_csum_final(csum_result, (u8 *)&csum_result);
-	if (csum_result != tree_csum)
+	put_unaligned_le32(tree_csum, expected_csum);
+	btrfs_csum_data(csum_type, (u8 *)data, result, len);
+	if (memcmp(result, expected_csum, csum_size) != 0)
 		ret = 1;
 out:
 	free(data);
@@ -2099,7 +2111,8 @@ next_csum:
 						  devext->objectid, 1));
 
 		ret = check_one_csum(dev->fd, data_offset, blocksize,
-				     tree_csum);
+				     tree_csum,
+				     btrfs_super_csum_type(root->fs_info->super_copy));
 		if (ret < 0)
 			goto fail_out;
 		else if (ret > 0)

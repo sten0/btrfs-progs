@@ -67,16 +67,27 @@ static void print_dir_item(struct extent_buffer *eb, u32 size,
 		name_len = btrfs_dir_name_len(eb, di);
 		data_len = btrfs_dir_data_len(eb, di);
 		len = (name_len <= sizeof(namebuf))? name_len: sizeof(namebuf);
-		read_extent_buffer(eb, namebuf, (unsigned long)(di + 1), len);
 		printf("\t\ttransid %llu data_len %u name_len %u\n",
 				btrfs_dir_transid(eb, di),
 				data_len, name_len);
-		printf("\t\tname: %.*s\n", len, namebuf);
-		if (data_len) {
-			len = (data_len <= sizeof(namebuf))? data_len: sizeof(namebuf);
+		if (eb->fs_info && eb->fs_info->hide_names) {
+			printf("\t\tname: HIDDEN\n");
+		} else {
 			read_extent_buffer(eb, namebuf,
-				(unsigned long)(di + 1) + name_len, len);
-			printf("\t\tdata %.*s\n", len, namebuf);
+					(unsigned long)(di + 1), len);
+			printf("\t\tname: %.*s\n", len, namebuf);
+		}
+
+		if (data_len) {
+			len = (data_len <= sizeof(namebuf)) ? data_len :
+			      sizeof(namebuf);
+			if (eb->fs_info && eb->fs_info->hide_names) {
+				printf("\t\tdata HIDDEN\n");
+			} else {
+				read_extent_buffer(eb, namebuf,
+					(unsigned long)(di + 1) + name_len, len);
+				printf("\t\tdata %.*s\n", len, namebuf);
+			}
 		}
 		len = sizeof(*di) + name_len + data_len;
 		di = (struct btrfs_dir_item *)((char *)di + len);
@@ -101,12 +112,15 @@ static void print_inode_extref_item(struct extent_buffer *eb, u32 size,
 
 		len = (name_len <= sizeof(namebuf))? name_len: sizeof(namebuf);
 
-		read_extent_buffer(eb, namebuf, (unsigned long)(extref->name), len);
-
-		printf("\t\tindex %llu parent %llu namelen %u name: %.*s\n",
-		       (unsigned long long)index,
-		       (unsigned long long)parent_objid,
-		       name_len, len, namebuf);
+		printf("\t\tindex %llu parent %llu namelen %u ",
+				index, parent_objid, name_len);
+		if (eb->fs_info && eb->fs_info->hide_names) {
+			printf("name: HIDDEN\n");
+		} else {
+			read_extent_buffer(eb, namebuf,
+					(unsigned long)extref->name, len);
+			printf("name: %.*s\n", len, namebuf);
+		}
 
 		len = sizeof(*extref) + name_len;
 		extref = (struct btrfs_inode_extref *)((char *)extref + len);
@@ -127,9 +141,16 @@ static void print_inode_ref_item(struct extent_buffer *eb, u32 size,
 		name_len = btrfs_inode_ref_name_len(eb, ref);
 		index = btrfs_inode_ref_index(eb, ref);
 		len = (name_len <= sizeof(namebuf))? name_len: sizeof(namebuf);
-		read_extent_buffer(eb, namebuf, (unsigned long)(ref + 1), len);
-		printf("\t\tindex %llu namelen %u name: %.*s\n",
-		       (unsigned long long)index, name_len, len, namebuf);
+
+		printf("\t\tindex %llu namelen %u ",
+		       (unsigned long long)index, name_len);
+		if (eb->fs_info && eb->fs_info->hide_names) {
+			printf("name: HIDDEN\n");
+		} else {
+			read_extent_buffer(eb, namebuf,
+					(unsigned long)(ref + 1), len);
+			printf("name: %.*s\n", len, namebuf);
+		}
 		len = sizeof(*ref) + name_len;
 		ref = (struct btrfs_inode_ref *)((char *)ref + len);
 		cur += len;
@@ -161,6 +182,12 @@ static void bg_flags_to_str(u64 flags, char *ret)
 		break;
 	case BTRFS_BLOCK_GROUP_RAID1:
 		strcat(ret, "|RAID1");
+		break;
+	case BTRFS_BLOCK_GROUP_RAID1C3:
+		strcat(ret, "|RAID1C3");
+		break;
+	case BTRFS_BLOCK_GROUP_RAID1C4:
+		strcat(ret, "|RAID1C4");
 		break;
 	case BTRFS_BLOCK_GROUP_DUP:
 		strcat(ret, "|DUP");
@@ -472,7 +499,7 @@ void print_extent_item(struct extent_buffer *eb, int slot, int metadata)
 			printf("\t\textent data backref root ");
 			print_objectid(stdout,
 		(unsigned long long)btrfs_extent_data_ref_root(eb, dref), 0);
-			printf(" objectid %llu offset %lld count %u\n",
+			printf(" objectid %llu offset %llu count %u\n",
 			       (unsigned long long)btrfs_extent_data_ref_objectid(eb, dref),
 			       btrfs_extent_data_ref_offset(eb, dref),
 			       btrfs_extent_data_ref_count(eb, dref));
@@ -689,6 +716,12 @@ void print_key_type(FILE *stream, u64 objectid, u8 type)
 void print_objectid(FILE *stream, u64 objectid, u8 type)
 {
 	switch (type) {
+	case BTRFS_PERSISTENT_ITEM_KEY:
+		if (objectid == BTRFS_DEV_STATS_OBJECTID)
+			fprintf(stream, "DEV_STATS");
+		else
+			fprintf(stream, "%llu", (unsigned long long)objectid);
+		return;
 	case BTRFS_DEV_EXTENT_KEY:
 		/* device id */
 		fprintf(stream, "%llu", (unsigned long long)objectid);
@@ -705,6 +738,11 @@ void print_objectid(FILE *stream, u64 objectid, u8 type)
 
 	switch (objectid) {
 	case BTRFS_ROOT_TREE_OBJECTID:
+		/*
+		 * BTRFS_ROOT_TREE_OBJECTID and BTRFS_DEV_ITEMS_OBJECTID are
+		 * defined with the same value 1, we need to distinguish them
+		 * by the type.
+		 */
 		if (type == BTRFS_DEV_ITEM_KEY)
 			fprintf(stream, "DEV_ITEMS");
 		else
@@ -819,7 +857,7 @@ void btrfs_print_key(struct btrfs_disk_key *disk_key)
 		if (objectid == BTRFS_TREE_RELOC_OBJECTID)
 			print_objectid(stdout, offset, type);
 		else
-			printf("%lld", offset);
+			printf("%llu", offset);
 		printf(")");
 		break;
 	default:
@@ -966,7 +1004,7 @@ static void print_dev_stats(struct extent_buffer *eb,
 	if (known < size) {
 		printf("\t\tunknown stats item bytes %u", size - known);
 		for (i = BTRFS_DEV_STAT_VALUES_MAX; i * sizeof(__le64) < size; i++) {
-			printf("\t\tunknown item %u offset %zu value %llu\n",
+			printf("\t\tunknown item %d offset %zu value %llu\n",
 				i, i * sizeof(__le64),
 				btrfs_dev_stats_value(eb, stats, i));
 		}
@@ -1052,7 +1090,7 @@ static void print_qgroup_status(struct extent_buffer *eb, int slot)
 	memset(flags_str, 0, sizeof(flags_str));
 	qgroup_flags_to_str(btrfs_qgroup_status_flags(eb, qg_status),
 					flags_str);
-	printf("\t\tversion %llu generation %llu flags %s scan %lld\n",
+	printf("\t\tversion %llu generation %llu flags %s scan %llu\n",
 		(unsigned long long)btrfs_qgroup_status_version(eb, qg_status),
 		(unsigned long long)btrfs_qgroup_status_generation(eb, qg_status),
 		flags_str,
@@ -1174,7 +1212,7 @@ void btrfs_print_leaf(struct extent_buffer *eb)
 	header_flags_to_str(flags, flags_str);
 	nr = btrfs_header_nritems(eb);
 
-	printf("leaf %llu items %d free space %d generation %llu owner ",
+	printf("leaf %llu items %u free space %d generation %llu owner ",
 		(unsigned long long)btrfs_header_bytenr(eb), nr,
 		btrfs_leaf_free_space(eb),
 		(unsigned long long)btrfs_header_generation(eb));
@@ -1219,9 +1257,9 @@ void btrfs_print_leaf(struct extent_buffer *eb)
 		type = btrfs_disk_key_type(&disk_key);
 		offset = btrfs_disk_key_offset(&disk_key);
 
-		printf("\titem %d ", i);
+		printf("\titem %u ", i);
 		btrfs_print_key(&disk_key);
-		printf(" itemoff %d itemsize %d\n",
+		printf(" itemoff %u itemsize %u\n",
 			btrfs_item_offset(eb, item),
 			btrfs_item_size(eb, item));
 
@@ -1478,7 +1516,7 @@ void btrfs_print_tree(struct extent_buffer *eb, bool follow, int traverse)
 		warning(
 		"node nr_items corrupted, has %u limit %u, continue anyway",
 			nr, BTRFS_NODEPTRS_PER_EXTENT_BUFFER(eb));
-	printf("node %llu level %d items %d free %u generation %llu owner ",
+	printf("node %llu level %d items %u free %u generation %llu owner ",
 	       (unsigned long long)eb->start,
 	        btrfs_header_level(eb), nr,
 		(u32)BTRFS_NODEPTRS_PER_EXTENT_BUFFER(eb) - nr,

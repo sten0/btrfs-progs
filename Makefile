@@ -3,7 +3,11 @@
 #   all		all main tools and the shared library
 #   static      build static binaries, requires static version of the libraries
 #   test        run the full testsuite
-#   install     install to default location (/usr/local)
+#   install     install binaries, shared libraries and header files to default
+#               location (/usr/local)
+#   install-static
+#               install the static binaries, static libraries and header files
+#               to default locationh (/usr/local)
 #   clean       clean built binaries (not the documentation)
 #   clean-all   clean as above, clean docs and generated files
 #
@@ -78,6 +82,9 @@ TOPDIR := .
 DISABLE_WARNING_FLAGS := $(call cc-disable-warning, format-truncation) \
 	$(call cc-disable-warning, address-of-packed-member)
 
+# Warnings that we want by default
+ENABLE_WARNING_FLAGS := $(call cc-option, -Wimplicit-fallthrough)
+
 # Common build flags
 CFLAGS = $(SUBST_CFLAGS) \
 	 $(CSTD) \
@@ -89,6 +96,7 @@ CFLAGS = $(SUBST_CFLAGS) \
 	 -I$(TOPDIR) \
 	 -I$(TOPDIR)/libbtrfsutil \
 	 $(DISABLE_WARNING_FLAGS) \
+	 $(ENABLE_WARNING_FLAGS) \
 	 $(EXTRAWARN_CFLAGS) \
 	 $(DEBUG_CFLAGS_INTERNAL) \
 	 $(EXTRA_CFLAGS)
@@ -131,16 +139,14 @@ CHECKER_FLAGS := -include $(check_defs) -D__CHECKER__ \
 	-D__CHECK_ENDIAN__ -Wbitwise -Wuninitialized -Wshadow -Wundef \
 	-U_FORTIFY_SOURCE -Wdeclaration-after-statement -Wdefault-bitfield-sign
 
-objects = ctree.o disk-io.o kernel-lib/radix-tree.o extent-tree.o print-tree.o \
-	  root-tree.o dir-item.o file-item.o inode-item.o inode-map.o \
-	  extent-cache.o extent_io.o volumes.o common/utils.o repair.o \
-	  qgroup.o free-space-cache.o kernel-lib/list_sort.o props.o \
-	  kernel-shared/ulist.o qgroup-verify.o backref.o common/string-table.o \
+objects = dir-item.o inode-map.o \
+	  qgroup.o kernel-lib/list_sort.o props.o \
+	  kernel-shared/ulist.o check/qgroup-verify.o backref.o common/string-table.o \
 	  common/task-utils.o \
-	  inode.o file.o find-root.o free-space-tree.o common/help.o send-dump.o \
-	  common/fsfeatures.o kernel-lib/tables.o kernel-lib/raid56.o transaction.o \
-	  delayed-ref.o common/format-output.o common/path-utils.o \
-	  common/device-utils.o common/device-scan.o
+	  inode.o file.o find-root.o common/help.o send-dump.o \
+	  common/fsfeatures.o \
+	  common/format-output.o \
+	  common/device-utils.o
 cmds_objects = cmds/subvolume.o cmds/filesystem.o cmds/device.o cmds/scrub.o \
 	       cmds/inspect.o cmds/balance.o cmds/send.o cmds/receive.o \
 	       cmds/quota.o cmds/qgroup.o cmds/replace.o check/main.o \
@@ -150,10 +156,18 @@ cmds_objects = cmds/subvolume.o cmds/filesystem.o cmds/device.o cmds/scrub.o \
 	       cmds/inspect-dump-super.o cmds/inspect-tree-stats.o cmds/filesystem-du.o \
 	       mkfs/common.o check/mode-common.o check/mode-lowmem.o
 libbtrfs_objects = send-stream.o send-utils.o kernel-lib/rbtree.o btrfs-list.o \
-		   kernel-lib/crc32c.o common/messages.o \
-		   uuid-tree.o utils-lib.o common/rbtree-utils.o
+		   kernel-lib/radix-tree.o extent-cache.o extent_io.o \
+		   crypto/crc32c.o common/messages.o \
+		   uuid-tree.o utils-lib.o common/rbtree-utils.o \
+		   ctree.o disk-io.o extent-tree.o kernel-shared/delayed-ref.o print-tree.o \
+		   free-space-cache.o root-tree.o volumes.o transaction.o \
+		   kernel-shared/free-space-tree.o repair.o inode-item.o file-item.o \
+		   kernel-lib/raid56.o kernel-lib/tables.o \
+		   common/device-scan.o common/path-utils.o \
+		   common/utils.o libbtrfsutil/subvolume.o libbtrfsutil/stubs.o \
+		   crypto/hash.o crypto/xxhash.o crypto/sha224-256.o crypto/blake2b-ref.o
 libbtrfs_headers = send-stream.h send-utils.h send.h kernel-lib/rbtree.h btrfs-list.h \
-	       kernel-lib/crc32c.h kernel-lib/list.h kerncompat.h \
+	       crypto/crc32c.h kernel-lib/list.h kerncompat.h \
 	       kernel-lib/radix-tree.h kernel-lib/sizes.h kernel-lib/raid56.h \
 	       extent-cache.h extent_io.h ioctl.h ctree.h btrfsck.h version.h
 libbtrfsutil_major := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MAJOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
@@ -377,9 +391,15 @@ test-convert: btrfs btrfs-convert
 	$(Q)bash tests/convert-tests.sh
 
 test-check: test-fsck
+test-check-lowmem: test-fsck
 test-fsck: btrfs btrfs-image btrfs-corrupt-block mkfs.btrfs btrfstune
+ifneq ($(MAKECMDGOALS),test-check-lowmem)
 	@echo "    [TEST]   fsck-tests.sh"
 	$(Q)bash tests/fsck-tests.sh
+else
+	@echo "    [TEST]   fsck-tests.sh (mode=lowmem)"
+	$(Q)TEST_ENABLE_OVERRIDE=true TEST_ARGS_CHECK=--mode=lowmem bash tests/fsck-tests.sh
+endif
 
 test-misc: btrfs btrfs-image btrfs-corrupt-block mkfs.btrfs btrfstune fssum \
 		btrfs-find-root btrfs-select-super btrfs-convert
@@ -408,9 +428,9 @@ test-inst: all
 		$(MAKE) $(MAKEOPTS) DESTDIR=$$tmpdest install && \
 		$(RM) -rf -- $$tmpdest
 
-test: test-fsck test-mkfs test-misc test-cli test-convert test-fuzz
+test: test-check test-check-lowmem test-mkfs test-misc test-cli test-convert test-fuzz
 
-testsuite: btrfs-corrupt-block fssum
+testsuite: btrfs-corrupt-block btrfs-find-root btrfs-select-super fssum
 	@echo "Export tests as a package"
 	$(Q)cd tests && ./export-testsuite.sh
 
@@ -428,7 +448,7 @@ endif
 # NOTE: For static compiles, you need to have all the required libs
 # 	static equivalent available
 #
-static: $(progs_static)
+static: $(progs_static) $(libs_static)
 
 version.h: version.h.in configure.ac
 	@echo "    [SH]     $@"
@@ -444,16 +464,16 @@ kernel-lib/tables.c:
 	@echo "    [TABLE]  $@"
 	$(Q)./mktables > $@ || ($(RM) -f $@ && exit 1)
 
-libbtrfs.so.0.1: $(libbtrfs_objects)
+libbtrfs.so.0.1: $(libbtrfs_objects) libbtrfs.sym
 	@echo "    [LD]     $@"
-	$(Q)$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LIBBTRFS_LIBS) \
-		-shared -Wl,-soname,libbtrfs.so.0 -o $@
+	$(Q)$(CC) $(CFLAGS) $(filter %.o,$^) $(LDFLAGS) $(LIBBTRFS_LIBS) \
+		-shared -Wl,-soname,libbtrfs.so.0 -Wl,--version-script=libbtrfs.sym -o $@
 
 libbtrfs.a: $(libbtrfs_objects)
 	@echo "    [AR]     $@"
 	$(Q)$(AR) cr $@ $^
 
-libbtrfs.so.0 libbtrfs.so: libbtrfs.so.0.1
+libbtrfs.so.0 libbtrfs.so: libbtrfs.so.0.1 libbtrfs.sym
 	@echo "    [LN]     $@"
 	$(Q)$(LN_S) -f $< $@
 
@@ -461,10 +481,11 @@ libbtrfsutil/%.o: libbtrfsutil/%.c
 	@echo "    [CC]     $@"
 	$(Q)$(CC) $(LIBBTRFSUTIL_CFLAGS) -o $@ -c $< -o $@
 
-libbtrfsutil.so.$(libbtrfsutil_version): $(libbtrfsutil_objects)
+libbtrfsutil.so.$(libbtrfsutil_version): $(libbtrfsutil_objects) libbtrfsutil.sym
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(LIBBTRFSUTIL_CFLAGS) $(libbtrfsutil_objects) $(LIBBTRFSUTIL_LDFLAGS) \
-		-shared -Wl,-soname,libbtrfsutil.so.$(libbtrfsutil_major) -o $@
+		-shared -Wl,-soname,libbtrfsutil.so.$(libbtrfsutil_major) \
+		-Wl,--version-script=libbtrfsutil.sym -o $@
 
 libbtrfsutil.a: $(libbtrfsutil_objects)
 	@echo "    [AR]     $@"
@@ -579,15 +600,15 @@ quick-test: quick-test.o $(objects) $(libs)
 	@echo "    [LD]     $@"
 	$(Q)$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-ioctl-test.o: ioctl-test.c ioctl.h kerncompat.h ctree.h
+ioctl-test.o: tests/ioctl-test.c ioctl.h kerncompat.h ctree.h
 	@echo "    [CC]   $@"
 	$(Q)$(CC) $(CFLAGS) -c $< -o $@
 
-ioctl-test-32.o: ioctl-test.c ioctl.h kerncompat.h ctree.h
+ioctl-test-32.o: tests/ioctl-test.c ioctl.h kerncompat.h ctree.h
 	@echo "    [CC32]   $@"
 	$(Q)$(CC) $(CFLAGS) -m32 -c $< -o $@
 
-ioctl-test-64.o: ioctl-test.c ioctl.h kerncompat.h ctree.h
+ioctl-test-64.o: tests/ioctl-test.c ioctl.h kerncompat.h ctree.h
 	@echo "    [CC64]   $@"
 	$(Q)$(CC) $(CFLAGS) -m64 -c $< -o $@
 
@@ -615,17 +636,18 @@ test-ioctl: ioctl-test ioctl-test-32 ioctl-test-64
 	$(Q)./ioctl-test-32 > ioctl-test-32.log
 	$(Q)./ioctl-test-64 > ioctl-test-64.log
 
-library-test: library-test.c libbtrfs.so
+library-test: tests/library-test.c libbtrfs.so
 	@echo "    [TEST PREP]  $@"$(eval TMPD=$(shell mktemp -d))
 	$(Q)mkdir -p $(TMPD)/include/btrfs && \
 	cp $(libbtrfs_headers) $(TMPD)/include/btrfs && \
+	cp libbtrfs.so.0.1 $(TMPD) && \
 	cd $(TMPD) && $(CC) -I$(TMPD)/include -o $@ $(addprefix $(ABSTOPDIR)/,$^) -Wl,-rpath=$(ABSTOPDIR) -lbtrfs
 	@echo "    [TEST RUN]   $@"
-	$(Q)cd $(TMPD) && ./$@
+	$(Q)cd $(TMPD) && LD_PRELOAD=libbtrfs.so.0.1 ./$@
 	@echo "    [TEST CLEAN] $@"
 	$(Q)$(RM) -rf -- $(TMPD)
 
-library-test.static: library-test.c $(libs_static)
+library-test.static: tests/library-test.c $(libs_static)
 	@echo "    [TEST PREP]  $@"$(eval TMPD=$(shell mktemp -d))
 	$(Q)mkdir -p $(TMPD)/include/btrfs && \
 	cp $(libbtrfs_headers) $(TMPD)/include/btrfs && \
@@ -635,9 +657,13 @@ library-test.static: library-test.c $(libs_static)
 	@echo "    [TEST CLEAN] $@"
 	$(Q)$(RM) -rf -- $(TMPD)
 
-fssum: tests/fssum.c tests/sha224-256.c
+fssum: tests/fssum.c crypto/sha224-256.c
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+hash-speedtest: crypto/hash-speedtest.c $(objects) $(libs_static)
+	@echo "    [LD]     $@"
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 test-build: test-build-pre test-build-real
 
@@ -688,6 +714,7 @@ clean: $(CLEANDIRS)
 		convert/*.o convert/*.o.d \
 		mkfs/*.o mkfs/*.o.d check/*.o check/*.o.d \
 		cmds/*.o cmds/*.o.d common/*.o common/*.o.d \
+		crypto/*.o crypto/*.o.d \
 	      ioctl-test quick-test library-test library-test-static \
               mktables btrfs.static mkfs.btrfs.static fssum \
 	      btrfs.box btrfs.box.static \
@@ -753,6 +780,10 @@ install-static: $(progs_static) $(INSTALLDIRS)
 	$(INSTALL) $(progs_static) $(DESTDIR)$(bindir)
 	# btrfsck is a link to btrfs in the src tree, make it so for installed file as well
 	$(LN_S) -f btrfs.static $(DESTDIR)$(bindir)/btrfsck.static
+	$(INSTALL) -m755 -d $(DESTDIR)$(libdir)
+	$(INSTALL) $(libs_static) $(DESTDIR)$(libdir)
+	$(INSTALL) -m755 -d $(DESTDIR)$(incdir)/btrfs
+	$(INSTALL) -m644 $(libbtrfs_headers) $(DESTDIR)$(incdir)/btrfs
 
 $(INSTALLDIRS):
 	@echo "Making install in $(patsubst install-%,%,$@)"

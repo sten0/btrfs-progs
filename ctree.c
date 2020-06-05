@@ -38,6 +38,38 @@ static int balance_node_right(struct btrfs_trans_handle *trans,
 			      struct extent_buffer *dst_buf,
 			      struct extent_buffer *src_buf);
 
+static const struct btrfs_csum {
+	u16 size;
+	const char name[14];
+} btrfs_csums[] = {
+	[BTRFS_CSUM_TYPE_CRC32]		= {  4, "crc32c" },
+	[BTRFS_CSUM_TYPE_XXHASH]	= {  8, "xxhash64" },
+	[BTRFS_CSUM_TYPE_SHA256]	= { 32, "sha256" },
+	[BTRFS_CSUM_TYPE_BLAKE2]	= { 32, "blake2" },
+};
+
+u16 btrfs_super_csum_size(const struct btrfs_super_block *sb)
+{
+	const u16 csum_type = btrfs_super_csum_type(sb);
+
+	return btrfs_csums[csum_type].size;
+}
+
+const char *btrfs_super_csum_name(u16 csum_type)
+{
+	return btrfs_csums[csum_type].name;
+}
+
+size_t btrfs_super_num_csums(void)
+{
+	return ARRAY_SIZE(btrfs_csums);
+}
+
+u16 btrfs_csum_type_size(u16 csum_type)
+{
+	return btrfs_csums[csum_type].size;
+}
+
 inline void btrfs_init_path(struct btrfs_path *p)
 {
 	memset(p, 0, sizeof(*p));
@@ -2540,7 +2572,7 @@ int btrfs_extend_item(struct btrfs_root *root, struct btrfs_path *path,
 	BUG_ON(slot < 0);
 	if (slot >= nritems) {
 		btrfs_print_leaf(leaf);
-		printk("slot %d too large, nritems %d\n", slot, nritems);
+		printk("slot %d too large, nritems %u\n", slot, nritems);
 		BUG_ON(1);
 	}
 
@@ -2631,7 +2663,7 @@ int btrfs_insert_empty_items(struct btrfs_trans_handle *trans,
 
 		if (old_data < data_end) {
 			btrfs_print_leaf(leaf);
-			printk("slot %d old_data %d data_end %d\n",
+			printk("slot %d old_data %u data_end %u\n",
 			       slot, old_data, data_end);
 			BUG_ON(1);
 		}

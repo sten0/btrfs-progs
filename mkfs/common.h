@@ -23,7 +23,7 @@
 #define __BTRFS_MKFS_COMMON_H__
 
 #include "kerncompat.h"
-#include "common-defs.h"
+#include "common/defs.h"
 
 #define BTRFS_MKFS_SYSTEM_GROUP_SIZE SZ_4M
 #define BTRFS_MKFS_SMALL_VOLUME_SIZE SZ_1G
@@ -53,6 +53,8 @@ struct btrfs_mkfs_config {
 	u64 features;
 	/* Size of the filesystem in bytes */
 	u64 num_bytes;
+	/* checksum algorithm to use */
+	enum btrfs_csum_type csum_type;
 
 	/* Output fields, set during creation */
 

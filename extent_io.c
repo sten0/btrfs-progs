@@ -622,6 +622,7 @@ static struct extent_buffer *__alloc_extent_buffer(struct btrfs_fs_info *info,
 	eb->tree = &info->extent_cache;
 	INIT_LIST_HEAD(&eb->recow);
 	INIT_LIST_HEAD(&eb->lru);
+	memset_extent_buffer(eb, 0, 0, blocksize);
 
 	return eb;
 }
@@ -763,6 +764,32 @@ struct extent_buffer *alloc_extent_buffer(struct btrfs_fs_info *fs_info,
 			trim_extent_buffer_cache(tree);
 	}
 	return eb;
+}
+
+/*
+ * Allocate a dummy extent buffer which won't be inserted into extent buffer
+ * cache.
+ *
+ * This mostly allows super block read write using existing eb infrastructure
+ * without pulluting the eb cache.
+ *
+ * This is especially important to avoid injecting eb->start == SZ_64K, as
+ * fuzzed image could have invalid tree bytenr covers super block range,
+ * and cause ref count underflow.
+ */
+struct extent_buffer *alloc_dummy_extent_buffer(struct btrfs_fs_info *fs_info,
+						u64 bytenr, u32 blocksize)
+{
+	struct extent_buffer *ret;
+
+	ret = __alloc_extent_buffer(fs_info, bytenr, blocksize);
+	if (!ret)
+		return NULL;
+
+	ret->tree = NULL;
+	ret->flags |= EXTENT_BUFFER_DUMMY;
+
+	return ret;
 }
 
 int read_extent_from_disk(struct extent_buffer *eb,

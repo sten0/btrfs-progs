@@ -21,7 +21,6 @@
 #include "common/messages.h"
 #include "disk-io.h"
 #include "backref.h"
-#include "hash.h"
 #include "common/internal.h"
 #include "common/utils.h"
 #include "volumes.h"
@@ -522,7 +521,7 @@ static int avoid_extents_overwrite(struct btrfs_fs_info *fs_info)
 	}
 
 	printf(
-	"Try to exclude all metadata blcoks and extents, it may be slow\n");
+	"Try to exclude all metadata blocks and extents, it may be slow\n");
 	ret = exclude_metadata_blocks(fs_info);
 out:
 	if (ret) {
@@ -735,7 +734,7 @@ static int repair_tree_block_ref(struct btrfs_root *root,
 		}
 		btrfs_mark_buffer_dirty(eb);
 		printf("Added an extent item [%llu %u]\n", bytenr, node_size);
-		btrfs_update_block_group(extent_root, bytenr, node_size, 1, 0);
+		btrfs_update_block_group(trans, bytenr, node_size, 1, 0);
 
 		nrefs->refs[level] = 0;
 		nrefs->full_backref[level] =
@@ -1550,6 +1549,35 @@ static int lowmem_delete_corrupted_dir_item(struct btrfs_root *root,
 	return ret;
 }
 
+static int try_repair_imode(struct btrfs_root *root, u64 ino)
+{
+	struct btrfs_inode_item *iitem;
+	struct btrfs_path path;
+	struct btrfs_key key;
+	int ret;
+
+	key.objectid = ino;
+	key.type = BTRFS_INODE_ITEM_KEY;
+	key.offset = 0;
+	btrfs_init_path(&path);
+
+	ret = btrfs_search_slot(NULL, root, &key, &path, 0, 0);
+	if (ret > 0)
+		ret = -ENOENT;
+	if (ret < 0)
+		goto out;
+	iitem = btrfs_item_ptr(path.nodes[0], path.slots[0],
+			       struct btrfs_inode_item);
+	if (!is_valid_imode(btrfs_inode_mode(path.nodes[0], iitem))) {
+		ret = repair_imode_common(root, &path);
+	} else {
+		ret = -ENOTTY;
+	}
+out:
+	btrfs_release_path(&path);
+	return ret;
+}
+
 /*
  * Call repair_inode_item_missing and repair_ternary_lowmem to repair
  *
@@ -1572,6 +1600,16 @@ static int repair_dir_item(struct btrfs_root *root, struct btrfs_key *di_key,
 		ret = repair_inode_item_missing(root, ino, filetype);
 		if (!ret)
 			err &= ~(INODE_ITEM_MISMATCH | INODE_ITEM_MISSING);
+	}
+
+	if (err & INODE_ITEM_MISMATCH) {
+		/*
+		 * INODE_ITEM mismatch can be caused by bad imode, so check if
+		 * it's a bad imode, then repair if possible.
+		 */
+		ret = try_repair_imode(root, ino);
+		if (!ret)
+			err &= ~INODE_ITEM_MISMATCH;
 	}
 
 	if (err & ~(INODE_ITEM_MISMATCH | INODE_ITEM_MISSING)) {
@@ -1990,7 +2028,8 @@ static int check_file_extent_inline(struct btrfs_root *root,
  * Return 0 if no error occurred.
  */
 static int check_file_extent(struct btrfs_root *root, struct btrfs_path *path,
-			     unsigned int nodatasum, u64 *size, u64 *end)
+			     unsigned int nodatasum, u64 isize, u64 *size,
+			     u64 *end)
 {
 	struct btrfs_file_extent_item *fi;
 	struct btrfs_key fkey;
@@ -2002,6 +2041,8 @@ static int check_file_extent(struct btrfs_root *root, struct btrfs_path *path,
 	u64 csum_found;		/* In byte size, sectorsize aligned */
 	u64 search_start;	/* Logical range start we search for csum */
 	u64 search_len;		/* Logical range len we search for csum */
+	u64 gen;
+	u64 super_gen;
 	unsigned int extent_type;
 	unsigned int is_hole;
 	int slot = path->slots[0];
@@ -2028,12 +2069,21 @@ static int check_file_extent(struct btrfs_root *root, struct btrfs_path *path,
 		return check_file_extent_inline(root, path, size, end);
 
 	/* Check REG_EXTENT/PREALLOC_EXTENT */
+	gen = btrfs_file_extent_generation(node, fi);
 	disk_bytenr = btrfs_file_extent_disk_bytenr(node, fi);
 	disk_num_bytes = btrfs_file_extent_disk_num_bytes(node, fi);
 	extent_num_bytes = btrfs_file_extent_num_bytes(node, fi);
 	extent_offset = btrfs_file_extent_offset(node, fi);
 	compressed = btrfs_file_extent_compression(node, fi);
 	is_hole = (disk_bytenr == 0) && (disk_num_bytes == 0);
+	super_gen = btrfs_super_generation(root->fs_info->super_copy);
+
+	if (gen > super_gen + 1) {
+		error(
+		"invalid file extent generation, have %llu expect (0, %llu]",
+			gen, super_gen + 1);
+		err |= INVALID_GENERATION;
+	}
 
 	/*
 	 * Check EXTENT_DATA csum
@@ -2102,7 +2152,7 @@ static int check_file_extent(struct btrfs_root *root, struct btrfs_path *path,
 	}
 
 	/* Check EXTENT_DATA hole */
-	if (!no_holes && *end != fkey.offset) {
+	if (!no_holes && (fkey.offset < isize) && (*end != fkey.offset)) {
 		if (repair)
 			ret = punch_extent_hole(root, path, fkey.objectid,
 						*end, fkey.offset - *end);
@@ -2115,7 +2165,12 @@ static int check_file_extent(struct btrfs_root *root, struct btrfs_path *path,
 		}
 	}
 
-	*end = fkey.offset + extent_num_bytes;
+	/*
+	 * Don't update extent end beyond rounded up isize. As holes
+	 * after isize is not considered as missing holes.
+	 */
+	*end = min(round_up(isize, root->fs_info->sectorsize),
+		   fkey.offset + extent_num_bytes);
 	if (!is_hole)
 		*size += extent_num_bytes;
 
@@ -2472,6 +2527,58 @@ static bool has_orphan_item(struct btrfs_root *root, u64 ino)
 	return false;
 }
 
+static int repair_inode_gen_lowmem(struct btrfs_root *root,
+				   struct btrfs_path *path)
+{
+	struct btrfs_trans_handle *trans;
+	struct btrfs_inode_item *ii;
+	struct btrfs_key key;
+	u64 transid;
+	int ret;
+
+	trans = btrfs_start_transaction(root, 1);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		errno = -ret;
+		error("failed to start transaction for inode gen repair: %m");
+		return ret;
+	}
+	transid = trans->transid;
+	btrfs_item_key_to_cpu(path->nodes[0], &key, path->slots[0]);
+	ASSERT(key.type == BTRFS_INODE_ITEM_KEY);
+
+	btrfs_release_path(path);
+
+	ret = btrfs_search_slot(trans, root, &key, path, 0, 1);
+	if (ret > 0) {
+		ret = -ENOENT;
+		error("no inode item found for ino %llu", key.objectid);
+		goto error;
+	}
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to find inode item for ino %llu: %m", key.objectid);
+		goto error;
+	}
+	ii = btrfs_item_ptr(path->nodes[0], path->slots[0],
+			    struct btrfs_inode_item);
+	btrfs_set_inode_generation(path->nodes[0], ii, trans->transid);
+	btrfs_mark_buffer_dirty(path->nodes[0]);
+	ret = btrfs_commit_transaction(trans, root);
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to commit transaction: %m");
+		goto error;
+	}
+	printf("resetting inode generation to %llu for ino %llu\n",
+		transid, key.objectid);
+	return ret;
+
+error:
+	btrfs_abort_transaction(trans, ret);
+	return ret;
+}
+
 /*
  * Check INODE_ITEM and related ITEMs (the same inode number)
  * 1. check link count
@@ -2487,6 +2594,7 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 	struct btrfs_inode_item *ii;
 	struct btrfs_key key;
 	struct btrfs_key last_key;
+	struct btrfs_super_block *super = root->fs_info->super_copy;
 	u64 inode_id;
 	u32 mode;
 	u64 flags;
@@ -2497,6 +2605,8 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 	u64 refs = 0;
 	u64 extent_end = 0;
 	u64 extent_size = 0;
+	u64 generation;
+	u64 gen_uplimit;
 	unsigned int dir;
 	unsigned int nodatasum;
 	bool is_orphan = false;
@@ -2519,6 +2629,7 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 		return err;
 	}
 
+	is_orphan = has_orphan_item(root, inode_id);
 	ii = btrfs_item_ptr(node, slot, struct btrfs_inode_item);
 	isize = btrfs_inode_size(node, ii);
 	nbytes = btrfs_inode_nbytes(node, ii);
@@ -2526,6 +2637,7 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 	flags = btrfs_inode_flags(node, ii);
 	dir = imode_to_type(mode) == BTRFS_FT_DIR;
 	nlink = btrfs_inode_nlink(node, ii);
+	generation = btrfs_inode_generation(node, ii);
 	nodatasum = btrfs_inode_flags(node, ii) & BTRFS_INODE_NODATASUM;
 
 	if (!is_valid_imode(mode)) {
@@ -2539,6 +2651,25 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 		}
 	}
 
+	if (btrfs_super_log_root(super) != 0 &&
+	    root->objectid == BTRFS_TREE_LOG_OBJECTID)
+		gen_uplimit = btrfs_super_generation(super) + 1;
+	else
+		gen_uplimit = btrfs_super_generation(super);
+
+	if (generation > gen_uplimit) {
+		error(
+	"invalid inode generation for ino %llu, have %llu expect [0, %llu)",
+		      inode_id, generation, gen_uplimit);
+		if (repair) {
+			ret = repair_inode_gen_lowmem(root, path);
+			if (ret < 0)
+				err |= INVALID_GENERATION;
+		} else {
+			err |= INVALID_GENERATION;
+		}
+
+	}
 	if (S_ISLNK(mode) &&
 	    flags & (BTRFS_INODE_IMMUTABLE | BTRFS_INODE_APPEND)) {
 		err |= INODE_FLAGS_ERROR;
@@ -2600,7 +2731,7 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 					root->objectid, inode_id, key.objectid,
 					key.offset);
 			}
-			ret = check_file_extent(root, path, nodatasum,
+			ret = check_file_extent(root, path, nodatasum, isize,
 						&extent_size, &extent_end);
 			err |= ret;
 			break;
@@ -2672,19 +2803,22 @@ out:
 		"root %llu INODE[%llu] nlink(%llu) not equal to inode_refs(%llu)",
 				      root->objectid, inode_id, nlink, refs);
 			}
-		} else if (!nlink) {
-			is_orphan = has_orphan_item(root, inode_id);
-			if (!is_orphan && repair)
+		} else if (!nlink && !is_orphan) {
+			if (repair)
 				ret = repair_inode_orphan_item_lowmem(root,
 							      path, inode_id);
-			if (!is_orphan && (!repair || ret)) {
+			if (!repair || ret) {
 				err |= ORPHAN_ITEM;
 				error("root %llu INODE[%llu] is orphan item",
 				      root->objectid, inode_id);
 			}
 		}
 
-		if (nbytes != extent_size) {
+		/*
+		 * For orphan inode, updating nbytes/size is just a waste of
+		 * time, so skip such repair and don't report them as error.
+		 */
+		if (nbytes != extent_size && !is_orphan) {
 			if (repair) {
 				ret = repair_inode_nbytes_lowmem(root, path,
 							 inode_id, extent_size);
@@ -3123,7 +3257,7 @@ static int repair_extent_data_item(struct btrfs_root *root,
 		ret = delete_item(root, pathp);
 		if (!ret)
 			err = 0;
-		goto out;
+		goto out_no_release;
 	}
 
 	/* now repair only adds backref */
@@ -3174,8 +3308,8 @@ static int repair_extent_data_item(struct btrfs_root *root,
 		btrfs_set_extent_flags(eb, ei, BTRFS_EXTENT_FLAG_DATA);
 
 		btrfs_mark_buffer_dirty(eb);
-		ret = btrfs_update_block_group(extent_root, disk_bytenr,
-					       num_bytes, 1, 0);
+		ret = btrfs_update_block_group(trans, disk_bytenr, num_bytes,
+					       1, 0);
 		btrfs_release_path(&path);
 	}
 
@@ -3198,6 +3332,7 @@ out:
 	if (trans)
 		btrfs_commit_transaction(trans, root);
 	btrfs_release_path(&path);
+out_no_release:
 	if (ret)
 		error("can't repair root %llu extent data item[%llu %llu]",
 		      root->objectid, disk_bytenr, num_bytes);
@@ -4034,8 +4169,10 @@ static int check_extent_item(struct btrfs_fs_info *fs_info,
 	u64 parent;
 	u64 num_bytes;
 	u64 root_objectid;
+	u64 gen;
 	u64 owner;
 	u64 owner_offset;
+	u64 super_gen;
 	int metadata = 0;
 	int level;
 	struct btrfs_key key;
@@ -4065,6 +4202,14 @@ static int check_extent_item(struct btrfs_fs_info *fs_info,
 
 	ei = btrfs_item_ptr(eb, slot, struct btrfs_extent_item);
 	flags = btrfs_extent_flags(eb, ei);
+	gen = btrfs_extent_generation(eb, ei);
+	super_gen = btrfs_super_generation(fs_info->super_copy);
+	if (gen > super_gen + 1) {
+		error(
+		"invalid generation for extent %llu, have %llu expect (0, %llu]",
+			key.objectid, gen, super_gen + 1);
+		err |= INVALID_GENERATION;
+	}
 
 	if (flags & BTRFS_EXTENT_FLAG_TREE_BLOCK)
 		metadata = 1;
@@ -4957,6 +5102,7 @@ static int check_btrfs_root(struct btrfs_root *root, int check_all)
 	struct btrfs_path path;
 	struct node_refs nrefs;
 	struct btrfs_root_item *root_item = &root->root_item;
+	u64 super_generation = btrfs_super_generation(root->fs_info->super_copy);
 	int ret;
 	int level;
 	int err = 0;
@@ -4978,6 +5124,22 @@ static int check_btrfs_root(struct btrfs_root *root, int check_all)
 	level = btrfs_header_level(root->node);
 	btrfs_init_path(&path);
 
+	if (btrfs_root_generation(root_item) > super_generation + 1) {
+		error(
+	"invalid root generation for root %llu, have %llu expect (0, %llu)",
+		      root->root_key.objectid, btrfs_root_generation(root_item),
+		      super_generation + 1);
+		err |= INVALID_GENERATION;
+		if (repair) {
+			root->node->flags |= EXTENT_BAD_TRANSID;
+			ret = recow_extent_buffer(root, root->node);
+			if (!ret) {
+				printf("Reset generation for root %llu\n",
+					root->root_key.objectid);
+				err &= ~INVALID_GENERATION;
+			}
+		}
+	}
 	if (btrfs_root_refs(root_item) > 0 ||
 	    btrfs_disk_key_objectid(&root_item->drop_progress) == 0) {
 		path.nodes[level] = root->node;

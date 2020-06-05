@@ -204,6 +204,9 @@ static const char * const cmd_inspect_dump_tree_usage[] = {
 	"-t|--tree <tree_id>    print only tree with the given id (string or number)",
 	"--follow               use with -b, to show all children tree blocks of <block_num>",
 	"--noscan               do not scan the devices from the filesystem, use only the listed ones",
+	"--bfs                  breadth-first traversal of the trees, print nodes, then leaves (default)",
+	"--dfs                  depth-first traversal of the trees",
+	"--hide-names           hide filenames/subvolume/xattrs and other name references",
 	NULL
 };
 
@@ -328,7 +331,7 @@ static int cmd_inspect_dump_tree(const struct cmd_struct *cmd,
 	while (1) {
 		int c;
 		enum { GETOPT_VAL_FOLLOW = 256, GETOPT_VAL_DFS, GETOPT_VAL_BFS,
-		       GETOPT_VAL_NOSCAN};
+		       GETOPT_VAL_NOSCAN, GETOPT_VAL_HIDE_NAMES };
 		static const struct option long_options[] = {
 			{ "extents", no_argument, NULL, 'e'},
 			{ "device", no_argument, NULL, 'd'},
@@ -341,6 +344,7 @@ static int cmd_inspect_dump_tree(const struct cmd_struct *cmd,
 			{ "bfs", no_argument, NULL, GETOPT_VAL_BFS },
 			{ "dfs", no_argument, NULL, GETOPT_VAL_DFS },
 			{ "noscan", no_argument, NULL, GETOPT_VAL_NOSCAN },
+			{ "hide-names", no_argument, NULL, GETOPT_VAL_HIDE_NAMES },
 			{ NULL, 0, NULL, 0 }
 		};
 
@@ -407,6 +411,9 @@ static int cmd_inspect_dump_tree(const struct cmd_struct *cmd,
 			break;
 		case GETOPT_VAL_NOSCAN:
 			open_ctree_flags |= OPEN_CTREE_NO_DEVICES;
+			break;
+		case GETOPT_VAL_HIDE_NAMES:
+			open_ctree_flags |= OPEN_CTREE_HIDE_NAMES;
 			break;
 		default:
 			usage_unknown_option(cmd, argv);
