@@ -666,9 +666,9 @@ static int generic_bin_search(struct extent_buffer *eb, unsigned long p,
  * leaves vs nodes
  */
 int btrfs_bin_search(struct extent_buffer *eb, const struct btrfs_key *key,
-		     int level, int *slot)
+		     int *slot)
 {
-	if (level == 0)
+	if (btrfs_header_level(eb) == 0)
 		return generic_bin_search(eb,
 					  offsetof(struct btrfs_leaf, items),
 					  sizeof(struct btrfs_item),
@@ -1172,9 +1172,6 @@ int btrfs_search_slot(struct btrfs_trans_handle *trans,
 	lowest_level = p->lowest_level;
 	WARN_ON(lowest_level && ins_len > 0);
 	WARN_ON(p->nodes[0] != NULL);
-	/*
-	WARN_ON(!mutex_is_locked(&root->fs_info->fs_mutex));
-	*/
 again:
 	b = root->node;
 	extent_buffer_get(b);
@@ -1199,7 +1196,7 @@ again:
 		ret = check_block(fs_info, p, level);
 		if (ret)
 			return -1;
-		ret = btrfs_bin_search(b, key, level, &slot);
+		ret = btrfs_bin_search(b, key, &slot);
 		if (level != 0) {
 			if (ret && slot > 0)
 				slot -= 1;

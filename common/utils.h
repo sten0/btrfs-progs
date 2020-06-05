@@ -137,4 +137,7 @@ u64 rand_u64(void);
 unsigned int rand_range(unsigned int upper);
 void init_rand_seed(u64 seed);
 
+char *btrfs_test_for_multiple_profiles(int fd);
+int btrfs_warn_multiple_profiles(int fd);
+
 #endif

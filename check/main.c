@@ -38,7 +38,7 @@
 #include "free-space-cache.h"
 #include "kernel-shared/free-space-tree.h"
 #include "common/rbtree-utils.h"
-#include "backref.h"
+#include "kernel-shared/backref.h"
 #include "kernel-shared/ulist.h"
 #include "common/help.h"
 #include "check/common.h"
@@ -4924,7 +4924,17 @@ static int add_pending(struct cache_tree *pending,
 	ret = add_cache_extent(seen, bytenr, size);
 	if (ret)
 		return ret;
-	add_cache_extent(pending, bytenr, size);
+	ret = add_cache_extent(pending, bytenr, size);
+	if (ret) {
+		struct cache_extent *entry;
+
+		entry = lookup_cache_extent(seen, bytenr, size);
+		if (entry && entry->start == bytenr && entry->size == size) {
+			remove_cache_extent(seen, entry);
+			free(entry);
+		}
+		return ret;
+	}
 	return 0;
 }
 
@@ -6468,7 +6478,7 @@ static int run_next_block(struct btrfs_root *root,
 		 * technically unreferenced and don't need to be worried about.
 		 */
 		if (ri != NULL && ri->drop_level && level > ri->drop_level) {
-			ret = btrfs_bin_search(buf, &ri->drop_key, level, &i);
+			ret = btrfs_bin_search(buf, &ri->drop_key, &i);
 			if (ret && i > 0)
 				i--;
 		}

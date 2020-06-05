@@ -38,7 +38,7 @@
 #include <btrfs/extent_io.h>
 #include <btrfs/ioctl.h>
 #include <btrfs/sizes.h>
-#include "btrfs/crc32c.h"
+#include <btrfs/crc32c.h>
 #endif /* BTRFS_FLAT_INCLUDES */
 
 struct btrfs_root;
@@ -1176,7 +1176,6 @@ struct btrfs_fs_info {
 
 	struct btrfs_trans_handle *running_transaction;
 	struct btrfs_super_block *super_copy;
-	struct mutex fs_mutex;
 
 	u64 super_bytenr;
 	u64 total_pinned;
@@ -2660,7 +2659,7 @@ int btrfs_search_slot_for_read(struct btrfs_root *root,
                                struct btrfs_path *p, int find_higher,
                                int return_any);
 int btrfs_bin_search(struct extent_buffer *eb, const struct btrfs_key *key,
-		     int level, int *slot);
+		     int *slot);
 int btrfs_find_item(struct btrfs_root *fs_root, struct btrfs_path *found_path,
 		u64 iobjectid, u64 ioff, u8 key_type,
 		struct btrfs_key *found_key);

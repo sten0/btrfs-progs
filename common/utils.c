@@ -1710,3 +1710,169 @@ void print_all_devices(struct list_head *devices)
 		print_device_info(dev, "\t");
 	printf("\n");
 }
+
+static int bit_count(u64 x)
+{
+	int ret = 0;
+
+	while (x) {
+		if (x & 1)
+			ret++;
+		x >>= 1;
+	}
+	return ret;
+}
+
+static char *sprint_profiles(u64 profiles)
+{
+	int i;
+	int maxlen = 1;
+	char *ptr;
+
+	if (bit_count(profiles) <= 1)
+		return NULL;
+
+	for (i = 0; i < BTRFS_NR_RAID_TYPES; i++)
+		maxlen += strlen(btrfs_raid_array[i].raid_name) + 2;
+
+	ptr = calloc(1, maxlen);
+	if (!ptr)
+		return NULL;
+
+	if (profiles & BTRFS_AVAIL_ALLOC_BIT_SINGLE)
+		strcat(ptr, btrfs_raid_array[BTRFS_RAID_SINGLE].raid_name);
+
+	for (i = 0; i < BTRFS_NR_RAID_TYPES; i++) {
+		if (!(btrfs_raid_array[i].bg_flag & profiles))
+			continue;
+
+		if (ptr[0])
+			strcat(ptr, ", ");
+		strcat(ptr, btrfs_raid_array[i].raid_name);
+	}
+
+	return ptr;
+}
+
+static int btrfs_get_string_for_multiple_profiles(int fd, char **data_ret,
+		char **metadata_ret, char **mixed_ret, char **system_ret,
+		char **types_ret)
+{
+	int ret;
+	int i;
+	struct btrfs_ioctl_space_args *sargs;
+	u64 data_profiles = 0;
+	u64 metadata_profiles = 0;
+	u64 system_profiles = 0;
+	u64 mixed_profiles = 0;
+	const u64 mixed_profile_fl = BTRFS_BLOCK_GROUP_METADATA |
+		BTRFS_BLOCK_GROUP_DATA;
+
+	ret = get_df(fd, &sargs);
+	if (ret < 0)
+		return -1;
+
+	for (i = 0; i < sargs->total_spaces; i++) {
+		u64 flags = sargs->spaces[i].flags;
+
+		if (!(flags & BTRFS_BLOCK_GROUP_PROFILE_MASK))
+			flags |= BTRFS_AVAIL_ALLOC_BIT_SINGLE;
+
+		if ((flags & mixed_profile_fl) == mixed_profile_fl)
+			mixed_profiles |= flags;
+		else if (flags & BTRFS_BLOCK_GROUP_DATA)
+			data_profiles |= flags;
+		else if (flags & BTRFS_BLOCK_GROUP_METADATA)
+			metadata_profiles |= flags;
+		else if (flags & BTRFS_BLOCK_GROUP_SYSTEM)
+			system_profiles |= flags;
+	}
+	free(sargs);
+
+	data_profiles &= BTRFS_EXTENDED_PROFILE_MASK;
+	system_profiles &= BTRFS_EXTENDED_PROFILE_MASK;
+	mixed_profiles &= BTRFS_EXTENDED_PROFILE_MASK;
+	metadata_profiles &= BTRFS_EXTENDED_PROFILE_MASK;
+
+	*data_ret = sprint_profiles(data_profiles);
+	*metadata_ret = sprint_profiles(metadata_profiles);
+	*mixed_ret = sprint_profiles(mixed_profiles);
+	*system_ret = sprint_profiles(system_profiles);
+
+	if (types_ret) {
+		*types_ret = calloc(1, 64);
+		if (!*types_ret)
+			goto out;
+		if (*data_ret)
+			strcat(*types_ret, "data");
+		if (*metadata_ret) {
+			if ((*types_ret)[0])
+				strcat(*types_ret, ", ");
+			strcat(*types_ret, "metadata");
+		}
+		if (*mixed_ret) {
+			if ((*types_ret)[0])
+				strcat(*types_ret, ", ");
+			strcat(*types_ret, "data+metadata");
+		}
+		if (*system_ret) {
+			if ((*types_ret)[0])
+				strcat(*types_ret, ", ");
+			strcat(*types_ret, "system");
+		}
+	}
+
+out:
+	return *data_ret || *metadata_ret || *mixed_ret || *system_ret;
+}
+
+/*
+ * Return string containing coma separated list of block group types that
+ * contain multiple profiles. The return value must be freed by the caller.
+ */
+char *btrfs_test_for_multiple_profiles(int fd)
+{
+	char *data, *metadata, *system, *mixed, *types;
+
+	btrfs_get_string_for_multiple_profiles(fd, &data, &metadata, &mixed,
+			&system, &types);
+	free(data);
+	free(metadata);
+	free(mixed);
+	free(system);
+
+	return types;
+}
+
+int btrfs_warn_multiple_profiles(int fd)
+{
+	int ret;
+	char *data_prof, *mixed_prof, *metadata_prof, *system_prof;
+
+	ret = btrfs_get_string_for_multiple_profiles(fd, &data_prof,
+			&metadata_prof, &mixed_prof, &system_prof, NULL);
+
+	if (ret != 1)
+		return ret;
+
+	fprintf(stderr,
+		"WARNING: Multiple block group profiles detected, see 'man btrfs(5)'.\n");
+	if (data_prof)
+		fprintf(stderr, "WARNING:   Data: %s\n", data_prof);
+
+	if (metadata_prof)
+		fprintf(stderr, "WARNING:   Metadata: %s\n", metadata_prof);
+
+	if (mixed_prof)
+		fprintf(stderr, "WARNING:   Data+Metadata: %s\n", mixed_prof);
+
+	if (system_prof)
+		fprintf(stderr, "WARNING:   System: %s\n", system_prof);
+
+	free(data_prof);
+	free(metadata_prof);
+	free(mixed_prof);
+	free(system_prof);
+
+	return 1;
+}

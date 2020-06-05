@@ -111,6 +111,7 @@ static int cmd_filesystem_df(const struct cmd_struct *cmd,
 		error("get_df failed: %m");
 	}
 
+	btrfs_warn_multiple_profiles(fd);
 	close_file_or_dir(fd, dirstream);
 	return !!ret;
 }

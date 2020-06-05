@@ -143,6 +143,7 @@ static int cmd_device_add(const struct cmd_struct *cmd,
 	}
 
 error_out:
+	btrfs_warn_multiple_profiles(fdmnt);
 	close_file_or_dir(fdmnt, dirstream);
 	return !!ret;
 }
@@ -225,6 +226,7 @@ static int _cmd_device_remove(const struct cmd_struct *cmd,
 		}
 	}
 
+	btrfs_warn_multiple_profiles(fdmnt);
 	close_file_or_dir(fdmnt, dirstream);
 	return !!ret;
 }
@@ -659,6 +661,7 @@ static int cmd_device_usage(const struct cmd_struct *cmd, int argc, char **argv)
 		}
 
 		ret = _cmd_device_usage(fd, argv[i], unit_mode);
+		btrfs_warn_multiple_profiles(fd);
 		close_file_or_dir(fd, dirstream);
 
 		if (ret)

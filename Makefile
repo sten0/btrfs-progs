@@ -95,6 +95,7 @@ CFLAGS = $(SUBST_CFLAGS) \
 	 -fPIC \
 	 -I$(TOPDIR) \
 	 -I$(TOPDIR)/libbtrfsutil \
+	 $(CRYPTO_CFLAGS) \
 	 $(DISABLE_WARNING_FLAGS) \
 	 $(ENABLE_WARNING_FLAGS) \
 	 $(EXTRAWARN_CFLAGS) \
@@ -121,8 +122,11 @@ LIBBTRFSUTIL_LDFLAGS = $(SUBST_LDFLAGS) \
 		       $(DEBUG_LDFLAGS_INTERNAL) \
 		       $(EXTRA_LDFLAGS)
 
-LIBS = $(LIBS_BASE)
-LIBBTRFS_LIBS = $(LIBS_BASE)
+# Default implementation
+CRYPTO_OBJECTS =
+
+LIBS = $(LIBS_BASE) $(LIBS_CRYPTO)
+LIBBTRFS_LIBS = $(LIBS_BASE) $(LIBS_CRYPTO)
 
 # Static compilation flags
 STATIC_CFLAGS = $(CFLAGS) -ffunction-sections -fdata-sections
@@ -141,8 +145,8 @@ CHECKER_FLAGS := -include $(check_defs) -D__CHECKER__ \
 
 objects = dir-item.o inode-map.o \
 	  qgroup.o kernel-lib/list_sort.o props.o \
-	  kernel-shared/ulist.o check/qgroup-verify.o backref.o common/string-table.o \
-	  common/task-utils.o \
+	  kernel-shared/ulist.o check/qgroup-verify.o kernel-shared/backref.o \
+	  common/string-table.o common/task-utils.o \
 	  inode.o file.o find-root.o common/help.o send-dump.o \
 	  common/fsfeatures.o \
 	  common/format-output.o \
@@ -165,7 +169,7 @@ libbtrfs_objects = send-stream.o send-utils.o kernel-lib/rbtree.o btrfs-list.o \
 		   kernel-lib/raid56.o kernel-lib/tables.o \
 		   common/device-scan.o common/path-utils.o \
 		   common/utils.o libbtrfsutil/subvolume.o libbtrfsutil/stubs.o \
-		   crypto/hash.o crypto/xxhash.o crypto/sha224-256.o crypto/blake2b-ref.o
+		   crypto/hash.o crypto/xxhash.o $(CRYPTO_OBJECTS)
 libbtrfs_headers = send-stream.h send-utils.h send.h kernel-lib/rbtree.h btrfs-list.h \
 	       crypto/crc32c.h kernel-lib/list.h kerncompat.h \
 	       kernel-lib/radix-tree.h kernel-lib/sizes.h kernel-lib/raid56.h \
@@ -289,6 +293,11 @@ btrfs_convert_cflags = -DBTRFSCONVERT_EXT2=$(BTRFSCONVERT_EXT2)
 btrfs_convert_cflags += -DBTRFSCONVERT_REISERFS=$(BTRFSCONVERT_REISERFS)
 btrfs_fragments_libs = -lgd -lpng -ljpeg -lfreetype
 cmds_restore_cflags = -DBTRFSRESTORE_ZSTD=$(BTRFSRESTORE_ZSTD)
+
+ifeq ($(CRYPTOPROVIDER_BUILTIN),1)
+CRYPTO_OBJECTS = crypto/sha224-256.o crypto/blake2b-ref.o
+CRYPTO_CFLAGS = -DCRYPTOPROVIDER_BUILTIN=1
+endif
 
 CHECKER_FLAGS += $(btrfs_convert_cflags)
 
