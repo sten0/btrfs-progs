@@ -1,3 +1,9 @@
+btrfs-progs (5.6-1~bpo10+1) buster-backports; urgency=medium
+
+  * Rebuild for buster-backports.
+
+ -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 05 Jun 2020 11:27:24 -0400
+
 btrfs-progs (5.6-1) unstable; urgency=medium
 
   * New upstream release.
