@@ -217,15 +217,24 @@ paths are provided as the actual device nodes may not be discovered by the
 system at that point.
 
 *discard*::
+*discard=sync*::
+*discard=async*::
 *nodiscard*::
-(default: off)
+(default: off, async support since: 5.6)
 +
 Enable discarding of freed file blocks.  This is useful for SSD devices, thinly
 provisioned LUNs, or virtual machine images; however, every storage layer must
-support discard for it to work. if the backing device does not support
-asynchronous queued TRIM, then this operation can severely degrade performance,
+support discard for it to work.
++
+In the synchronous mode ('sync' or without option value), lack of asynchronous
+queued TRIM on the backing device TRIM can severely degrade performance,
 because a synchronous TRIM operation will be attempted instead. Queued TRIM
 requires newer than SATA revision 3.1 chipsets and devices.
++
+The asynchronous mode ('async') gathers extents in larger chunks before sending
+them to the devices for TRIM. The overhead and performance impact should be
+negligible compared to the previous mode and it's supposed to be the preferred
+mode if needed.
 +
 If it is not necessary to immediately discard freed blocks, then the `fstrim`
 tool can be used to discard all free blocks in a batch. Scheduling a TRIM
@@ -302,12 +311,12 @@ it possible to reach it. In such case, this mount option will help.
 Alternatively, files with high inode numbers can be copied to a new subvolume
 which will effectively start the inode numbers from the beginning again.
 
-*logreplay*::
 *nologreplay*::
-(default: on, even read-only)
+(default: off, even read-only)
 +
-Enable/disable log replay at mount time. See also 'treelog'.
-Note that 'nologreplay' is the same as 'norecovery'.
+The tree-log contains pending updates to the filesystem until the full commit.
+The log is replayed on next mount, this can be disabled by this option.  See
+also 'treelog'.  Note that 'nologreplay' is the same as 'norecovery'.
 +
 WARNING: currently, the tree log is replayed even with a read-only mount! To
 disable that behaviour, mount also with 'nologreplay'.
@@ -590,6 +599,11 @@ increased hardlink limit per file in a directory to 65536, older kernels
 supported a varying number of hardlinks depending on the sum of all file name
 sizes that can be stored into one metadata block
 
+*free_space_tree*::
+(since: 4.5)
++
+free space representation using a dedicated b-tree, successor of v1 space cache
+
 *metadata_uuid*::
 (since: 5.0)
 +
@@ -620,6 +634,11 @@ fragmented, which means worse performance
 improved representation of file extents where holes are not explicitly
 stored as an extent, saves a few percent of metadata if sparse files are used
 
+*raid1c34*::
+(since: 5.5)
++
+extended RAID1 mode with copies on 3 or 4 devices respectively
+
 *raid56*::
 (since: 3.9)
 +
@@ -635,6 +654,13 @@ ordinary directory. Note that this feature only depends on the kernel version.
 (since: 3.10)
 +
 reduced-size metadata for extent references, saves a few percent of metadata
+
+*supported_checksums*::
+(since: 5.5)
++
+list of checksum algorithms supported by the kernel module, the respective
+modules or built-in implementing the algorithms need to be present to mount
+the filesystem
 
 SWAPFILE SUPPORT
 ~~~~~~~~~~~~~~~~
@@ -764,14 +790,34 @@ BOOTLOADER SUPPORT
 GRUB2 (https://www.gnu.org/software/grub) has the most advanced support of
 booting from BTRFS with respect to features.
 
+U-boot (https://www.denx.de/wiki/U-Boot/) has decent support for booting but
+not all BTRFS features are implemented, check the documentation.
+
 EXTLINUX (from the https://syslinux.org project) can boot but does not support
 all features. Please check the upstream documentation before you use it.
+
+The first 1MiB on each device is unused with the exception of primary
+superblock that is on the offset 64KiB and spans 4KiB.
 
 
 FILE ATTRIBUTES
 ---------------
-The btrfs filesystem supports setting the following file attributes using the
-`chattr`(1) utility:
+The btrfs filesystem supports setting file attributes or flags. Note there are
+old and new interfaces, with confusing names. The following list should clarify
+that:
+
+* 'attributes': `chattr`(1) or `lsattr`(1) utilities (the ioctls are
+FS_IOC_GETFLAGS and FS_IOC_SETFLAGS), due to the ioctl names the attributes are
+also called flags
+* 'xflags': to distinguish from the previous, it's extended flags, with tunable
+bits similar to the attributes but extensible and new bits will be added in the
+future (the ioctls are FS_IOC_FSGETXATTR and FS_IOC_FSSETXATTR but they are not
+related to extended attributes that are also called xattrs), there's no standard
+tool to change the bits, there's support in `xfs_io`(8) as command *xfs_io -c
+chattr*
+
+ATTRIBUTES
+~~~~~~~~~~
 
 *a*::
 'append only', new writes are always written at the end of the file
@@ -787,7 +833,7 @@ directory attributes.
 When set on a directory, all newly created files will inherit this attribute.
 
 *C*::
-'no copy-on-write', file modifications are done in-place
+'no copy-on-write', file data modifications are done in-place
 +
 When set on a directory, all newly created files will inherit this attribute.
 +
@@ -818,6 +864,27 @@ When set on a directory, all newly created files will inherit this attribute.
 
 No other attributes are supported.  For the complete list please refer to the
 `chattr`(1) manual page.
+
+XFLAGS
+~~~~~~
+
+There's overlap of letters assigned to the bits with the attributes, this list
+refers to what `xfs_io`(8) provides:
+
+*i*::
+'immutable', same as the attribute
+
+*a*::
+'append only', same as the attribute
+
+*s*::
+'synchronous updates', same as the atribute 'S'
+
+*A*::
+'no atime updates', same as the attribute
+
+*d*::
+'no dump', same as the attribute
 
 
 CONTROL DEVICE

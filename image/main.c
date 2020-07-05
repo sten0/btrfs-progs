@@ -103,6 +103,7 @@ struct mdrestore_struct {
 	struct rb_root physical_tree;
 	struct list_head list;
 	struct list_head overlapping_chunks;
+	struct btrfs_super_block *original_super;
 	size_t num_items;
 	u32 nodesize;
 	u64 devid;
@@ -1085,6 +1086,12 @@ static int update_super(struct mdrestore_struct *mdres, u8 *buffer)
 	u8 *ptr, *write_ptr;
 	int old_num_stripes;
 
+	/* No need to fix, use all data as is */
+	if (btrfs_super_num_devices(mdres->original_super) == 1) {
+		new_array_size = btrfs_super_sys_array_size(super);
+		goto finish;
+	}
+
 	write_ptr = ptr = super->sys_chunk_array;
 	array_size = btrfs_super_sys_array_size(super);
 
@@ -1135,6 +1142,7 @@ static int update_super(struct mdrestore_struct *mdres, u8 *buffer)
 		cur += btrfs_chunk_item_size(old_num_stripes);
 	}
 
+finish:
 	if (mdres->clear_space_cache)
 		btrfs_set_super_cache_generation(super, 0);
 
@@ -1203,6 +1211,8 @@ static int fixup_chunk_tree_block(struct mdrestore_struct *mdres,
 	u64 bytenr = async->start;
 	int i;
 
+	if (btrfs_super_num_devices(mdres->original_super) == 1)
+		return 0;
 	if (size_left % mdres->nodesize)
 		return 0;
 
@@ -1373,6 +1383,8 @@ static void *restore_worker(void *data)
 
 		if (!mdres->multi_devices) {
 			if (async->start == BTRFS_SUPER_INFO_OFFSET) {
+				memcpy(mdres->original_super, outbuf,
+				       BTRFS_SUPER_INFO_SIZE);
 				if (mdres->old_restore) {
 					update_super_old(outbuf);
 				} else {
@@ -1474,6 +1486,7 @@ static void mdrestore_destroy(struct mdrestore_struct *mdres, int num_threads)
 
 	pthread_cond_destroy(&mdres->cond);
 	pthread_mutex_destroy(&mdres->mutex);
+	free(mdres->original_super);
 }
 
 static int mdrestore_init(struct mdrestore_struct *mdres,
@@ -1499,6 +1512,10 @@ static int mdrestore_init(struct mdrestore_struct *mdres,
 	mdres->clear_space_cache = 0;
 	mdres->last_physical_offset = 0;
 	mdres->alloced_chunks = 0;
+
+	mdres->original_super = malloc(BTRFS_SUPER_INFO_SIZE);
+	if (!mdres->original_super)
+		return -ENOMEM;
 
 	if (!num_threads)
 		return 0;
@@ -2341,7 +2358,7 @@ again:
 static void fixup_block_groups(struct btrfs_trans_handle *trans)
 {
 	struct btrfs_fs_info *fs_info = trans->fs_info;
-	struct btrfs_block_group_cache *bg;
+	struct btrfs_block_group *bg;
 	struct btrfs_mapping_tree *map_tree = &fs_info->mapping_tree;
 	struct cache_extent *ce;
 	struct map_lookup *map;
@@ -2483,6 +2500,66 @@ out:
 	return ret;
 }
 
+static int iter_tree_blocks(struct btrfs_fs_info *fs_info,
+			    struct extent_buffer *eb, bool pin)
+{
+	void (*func)(struct btrfs_fs_info *fs_info, u64 bytenr, u64 num_bytes);
+	int nritems;
+	int level;
+	int i;
+	int ret;
+
+	if (pin)
+		func = btrfs_pin_extent;
+	else
+		func = btrfs_unpin_extent;
+
+	func(fs_info, eb->start, eb->len);
+
+	level = btrfs_header_level(eb);
+	nritems = btrfs_header_nritems(eb);
+	if (level == 0)
+		return 0;
+
+	for (i = 0; i < nritems; i++) {
+		u64 bytenr;
+		struct extent_buffer *tmp;
+
+		if (level == 0) {
+			struct btrfs_root_item *ri;
+			struct btrfs_key key;
+
+			btrfs_item_key_to_cpu(eb, &key, i);
+			if (key.type != BTRFS_ROOT_ITEM_KEY)
+				continue;
+			ri = btrfs_item_ptr(eb, i, struct btrfs_root_item);
+			bytenr = btrfs_disk_root_bytenr(eb, ri);
+			tmp = read_tree_block(fs_info, bytenr, 0);
+			if (!extent_buffer_uptodate(tmp)) {
+				error("unable to read log root block");
+				return -EIO;
+			}
+			ret = iter_tree_blocks(fs_info, tmp, pin);
+			free_extent_buffer(tmp);
+			if (ret)
+				return ret;
+		} else {
+			bytenr = btrfs_node_blockptr(eb, i);
+			tmp = read_tree_block(fs_info, bytenr, 0);
+			if (!extent_buffer_uptodate(tmp)) {
+				error("unable to read log root block");
+				return -EIO;
+			}
+			ret = iter_tree_blocks(fs_info, tmp, pin);
+			free_extent_buffer(tmp);
+			if (ret)
+				return ret;
+		}
+	}
+
+	return 0;
+}
+
 static int fixup_chunks_and_devices(struct btrfs_fs_info *fs_info,
 			 struct mdrestore_struct *mdres, int out_fd)
 {
@@ -2499,6 +2576,8 @@ static int fixup_chunks_and_devices(struct btrfs_fs_info *fs_info,
 		return PTR_ERR(trans);
 	}
 
+	if (btrfs_super_log_root(fs_info->super_copy) && fs_info->log_root_tree)
+		iter_tree_blocks(fs_info, fs_info->log_root_tree->node, true);
 	fixup_block_groups(trans);
 	ret = fixup_dev_extents(trans);
 	if (ret < 0)
@@ -2513,6 +2592,8 @@ static int fixup_chunks_and_devices(struct btrfs_fs_info *fs_info,
 		error("unable to commit transaction: %d", ret);
 		return ret;
 	}
+	if (btrfs_super_log_root(fs_info->super_copy) && fs_info->log_root_tree)
+		iter_tree_blocks(fs_info, fs_info->log_root_tree->node, false);
 	return 0;
 error:
 	errno = -ret;
@@ -2606,7 +2687,8 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 	}
 	ret = wait_for_worker(&mdrestore);
 
-	if (!ret && !multi_devices && !old_restore) {
+	if (!ret && !multi_devices && !old_restore &&
+	    btrfs_super_num_devices(mdrestore.original_super) != 1) {
 		struct btrfs_root *root;
 		struct stat st;
 

@@ -239,11 +239,11 @@ static int update_nodes_refs(struct btrfs_root *root, u64 bytenr,
  * according to @cache.
  */
 static int modify_block_group_cache(struct btrfs_fs_info *fs_info,
-		    struct btrfs_block_group_cache *block_group, int cache)
+		    struct btrfs_block_group *block_group, int cache)
 {
 	struct extent_io_tree *free_space_cache = &fs_info->free_space_cache;
-	u64 start = block_group->key.objectid;
-	u64 end = start + block_group->key.offset;
+	u64 start = block_group->start;
+	u64 end = start + block_group->length;
 
 	if (cache && !block_group->cached) {
 		block_group->cached = 1;
@@ -269,7 +269,7 @@ static int modify_block_groups_cache(struct btrfs_fs_info *fs_info, u64 flags,
 	struct btrfs_root *root = fs_info->extent_root;
 	struct btrfs_key key;
 	struct btrfs_path path;
-	struct btrfs_block_group_cache *bg_cache;
+	struct btrfs_block_group *bg_cache;
 	struct btrfs_block_group_item *bi;
 	struct btrfs_block_group_item bg_item;
 	struct extent_buffer *eb;
@@ -301,7 +301,7 @@ static int modify_block_groups_cache(struct btrfs_fs_info *fs_info, u64 flags,
 		bi = btrfs_item_ptr(eb, slot, struct btrfs_block_group_item);
 		read_extent_buffer(eb, &bg_item, (unsigned long)bi,
 				   sizeof(bg_item));
-		if (btrfs_block_group_flags(&bg_item) & flags)
+		if (btrfs_stack_block_group_flags(&bg_item) & flags)
 			modify_block_group_cache(fs_info, bg_cache, cache);
 
 		ret = btrfs_next_item(root, &path);
@@ -367,7 +367,7 @@ out:
 static int force_cow_in_new_chunk(struct btrfs_fs_info *fs_info,
 				  u64 *start_ret)
 {
-	struct btrfs_block_group_cache *bg;
+	struct btrfs_block_group *bg;
 	u64 start;
 	u64 nbytes;
 	u64 alloc_profile;
@@ -460,7 +460,7 @@ static int is_chunk_almost_full(struct btrfs_fs_info *fs_info, u64 start)
 	total = key.offset;
 	bi = btrfs_item_ptr(eb, slot, struct btrfs_block_group_item);
 	read_extent_buffer(eb, &bg_item, (unsigned long)bi, sizeof(bg_item));
-	used = btrfs_block_group_used(&bg_item);
+	used = btrfs_stack_block_group_used(&bg_item);
 
 	/*
 	 * if the free space in the chunk is less than %10 of total,
@@ -3561,8 +3561,8 @@ static int check_block_group_item(struct btrfs_fs_info *fs_info,
 	btrfs_item_key_to_cpu(eb, &bg_key, slot);
 	bi = btrfs_item_ptr(eb, slot, struct btrfs_block_group_item);
 	read_extent_buffer(eb, &bg_item, (unsigned long)bi, sizeof(bg_item));
-	used = btrfs_block_group_used(&bg_item);
-	bg_flags = btrfs_block_group_flags(&bg_item);
+	used = btrfs_stack_block_group_used(&bg_item);
+	bg_flags = btrfs_stack_block_group_flags(&bg_item);
 
 	chunk_key.objectid = BTRFS_FIRST_CHUNK_TREE_OBJECTID;
 	chunk_key.type = BTRFS_CHUNK_ITEM_KEY;
@@ -4500,22 +4500,62 @@ next:
 }
 
 /*
+ * Find the block group item with @bytenr, @len and @type
+ *
+ * Return 0 if found.
+ * Return -ENOENT if not found.
+ * Return <0 for fatal error.
+ */
+static int find_block_group_item(struct btrfs_fs_info *fs_info,
+				 struct btrfs_path *path, u64 bytenr, u64 len,
+				 u64 type)
+{
+	struct btrfs_block_group_item bgi;
+	struct btrfs_key key;
+	int ret;
+
+	key.objectid = bytenr;
+	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+	key.offset = len;
+
+	ret = btrfs_search_slot(NULL, fs_info->extent_root, &key, path, 0, 0);
+	if (ret < 0)
+		return ret;
+	if (ret > 0) {
+		ret = -ENOENT;
+		error("chunk [%llu %llu) doesn't have related block group item",
+		      bytenr, bytenr + len);
+		goto out;
+	}
+	read_extent_buffer(path->nodes[0], &bgi,
+			btrfs_item_ptr_offset(path->nodes[0], path->slots[0]),
+			sizeof(bgi));
+	if (btrfs_stack_block_group_flags(&bgi) != type) {
+		error(
+"chunk [%llu %llu) type mismatch with block group, block group has 0x%llx chunk has %llx",
+		      bytenr, bytenr + len, btrfs_stack_block_group_flags(&bgi),
+		      type);
+		ret = -EUCLEAN;
+	}
+
+out:
+	btrfs_release_path(path);
+	return ret;
+}
+
+/*
  * Check a chunk item.
  * Including checking all referred dev_extents and block group
  */
 static int check_chunk_item(struct btrfs_fs_info *fs_info,
 			    struct extent_buffer *eb, int slot)
 {
-	struct btrfs_root *extent_root = fs_info->extent_root;
 	struct btrfs_root *dev_root = fs_info->dev_root;
 	struct btrfs_path path;
 	struct btrfs_key chunk_key;
-	struct btrfs_key bg_key;
 	struct btrfs_key devext_key;
 	struct btrfs_chunk *chunk;
 	struct extent_buffer *leaf;
-	struct btrfs_block_group_item *bi;
-	struct btrfs_block_group_item bg_item;
 	struct btrfs_dev_extent *ptr;
 	u64 length;
 	u64 chunk_end;
@@ -4542,31 +4582,11 @@ static int check_chunk_item(struct btrfs_fs_info *fs_info,
 	}
 	type = btrfs_chunk_type(eb, chunk);
 
-	bg_key.objectid = chunk_key.offset;
-	bg_key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
-	bg_key.offset = length;
-
 	btrfs_init_path(&path);
-	ret = btrfs_search_slot(NULL, extent_root, &bg_key, &path, 0, 0);
-	if (ret) {
-		error(
-		"chunk[%llu %llu) did not find the related block group item",
-			chunk_key.offset, chunk_end);
+	ret = find_block_group_item(fs_info, &path, chunk_key.offset, length,
+				    type);
+	if (ret < 0)
 		err |= REFERENCER_MISSING;
-	} else{
-		leaf = path.nodes[0];
-		bi = btrfs_item_ptr(leaf, path.slots[0],
-				    struct btrfs_block_group_item);
-		read_extent_buffer(leaf, &bg_item, (unsigned long)bi,
-				   sizeof(bg_item));
-		if (btrfs_block_group_flags(&bg_item) != type) {
-			error(
-"chunk[%llu %llu) related block group item flags mismatch, wanted: %llu, have: %llu",
-				chunk_key.offset, chunk_end, type,
-				btrfs_block_group_flags(&bg_item));
-			err |= REFERENCER_MISSING;
-		}
-	}
 
 	num_stripes = btrfs_chunk_num_stripes(eb, chunk);
 	stripe_len = btrfs_stripe_length(fs_info, eb, chunk);
