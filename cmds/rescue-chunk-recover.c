@@ -194,8 +194,7 @@ static struct btrfs_chunk *create_chunk_item(struct chunk_record *record)
 	return ret;
 }
 
-static void init_recover_control(struct recover_control *rc, int verbose,
-		int yes)
+static void init_recover_control(struct recover_control *rc, int yes)
 {
 	memset(rc, 0, sizeof(struct recover_control));
 	cache_tree_init(&rc->chunk);
@@ -208,7 +207,7 @@ static void init_recover_control(struct recover_control *rc, int verbose,
 	INIT_LIST_HEAD(&rc->rebuild_chunks);
 	INIT_LIST_HEAD(&rc->unrepaired_chunks);
 
-	rc->verbose = verbose;
+	rc->verbose = bconf.verbose;
 	rc->yes = yes;
 	pthread_mutex_init(&rc->rc_lock, NULL);
 }
@@ -635,12 +634,12 @@ bg_check:
 	l = path.nodes[0];
 	slot = path.slots[0];
 	bg_ptr = btrfs_item_ptr(l, slot, struct btrfs_block_group_item);
-	if (chunk->type_flags != btrfs_disk_block_group_flags(l, bg_ptr)) {
+	if (chunk->type_flags != btrfs_block_group_flags(l, bg_ptr)) {
 		if (rc->verbose)
 			fprintf(stderr,
 				"Chunk[%llu, %llu]'s type(%llu) is different with Block Group's type(%llu)\n",
 				chunk->offset, chunk->length, chunk->type_flags,
-				btrfs_disk_block_group_flags(l, bg_ptr));
+				btrfs_block_group_flags(l, bg_ptr));
 		btrfs_release_path(&path);
 		return -ENOENT;
 	}
@@ -1087,7 +1086,7 @@ err:
 static int block_group_free_all_extent(struct btrfs_trans_handle *trans,
 				       struct block_group_record *bg)
 {
-	struct btrfs_block_group_cache *cache;
+	struct btrfs_block_group *cache;
 	struct btrfs_fs_info *info;
 	u64 start;
 	u64 end;
@@ -1097,8 +1096,8 @@ static int block_group_free_all_extent(struct btrfs_trans_handle *trans,
 	if (!cache)
 		return -ENOENT;
 
-	start = cache->key.objectid;
-	end = start + cache->key.offset - 1;
+	start = cache->start;
+	end = start + cache->length - 1;
 
 	if (list_empty(&cache->dirty_list))
 		list_add_tail(&cache->dirty_list, &trans->dirty_bgs);
@@ -1358,9 +1357,9 @@ static int __insert_block_group(struct btrfs_trans_handle *trans,
 	struct btrfs_key key;
 	int ret = 0;
 
-	btrfs_set_block_group_used(&bg_item, used);
-	btrfs_set_block_group_chunk_objectid(&bg_item, used);
-	btrfs_set_block_group_flags(&bg_item, chunk_rec->type_flags);
+	btrfs_set_stack_block_group_used(&bg_item, used);
+	btrfs_set_stack_block_group_chunk_objectid(&bg_item, used);
+	btrfs_set_stack_block_group_flags(&bg_item, chunk_rec->type_flags);
 	key.objectid = chunk_rec->offset;
 	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
 	key.offset = chunk_rec->length;
@@ -2319,14 +2318,14 @@ static void validate_rebuild_chunks(struct recover_control *rc)
 /*
  * Return 0 when successful, < 0 on error and > 0 if aborted by user
  */
-int btrfs_recover_chunk_tree(const char *path, int verbose, int yes)
+int btrfs_recover_chunk_tree(const char *path, int yes)
 {
 	int ret = 0;
 	struct btrfs_root *root = NULL;
 	struct btrfs_trans_handle *trans;
 	struct recover_control rc;
 
-	init_recover_control(&rc, verbose, yes);
+	init_recover_control(&rc, yes);
 
 	ret = recover_prepare(&rc, path);
 	if (ret) {

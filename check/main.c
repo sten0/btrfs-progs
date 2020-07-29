@@ -38,7 +38,7 @@
 #include "free-space-cache.h"
 #include "kernel-shared/free-space-tree.h"
 #include "common/rbtree-utils.h"
-#include "backref.h"
+#include "kernel-shared/backref.h"
 #include "kernel-shared/ulist.h"
 #include "common/help.h"
 #include "check/common.h"
@@ -4541,7 +4541,7 @@ static struct data_backref *alloc_data_backref(struct extent_record *rec,
 /* Check if the type of extent matches with its chunk */
 static void check_extent_type(struct extent_record *rec)
 {
-	struct btrfs_block_group_cache *bg_cache;
+	struct btrfs_block_group *bg_cache;
 
 	bg_cache = btrfs_lookup_first_block_group(global_info, rec->start);
 	if (!bg_cache)
@@ -4924,7 +4924,17 @@ static int add_pending(struct cache_tree *pending,
 	ret = add_cache_extent(seen, bytenr, size);
 	if (ret)
 		return ret;
-	add_cache_extent(pending, bytenr, size);
+	ret = add_cache_extent(pending, bytenr, size);
+	if (ret) {
+		struct cache_extent *entry;
+
+		entry = lookup_cache_extent(seen, bytenr, size);
+		if (entry && entry->start == bytenr && entry->size == size) {
+			remove_cache_extent(seen, entry);
+			free(entry);
+		}
+		return ret;
+	}
 	return 0;
 }
 
@@ -5232,7 +5242,7 @@ btrfs_new_block_group_record(struct extent_buffer *leaf, struct btrfs_key *key,
 	rec->offset = key->offset;
 
 	ptr = btrfs_item_ptr(leaf, slot, struct btrfs_block_group_item);
-	rec->flags = btrfs_disk_block_group_flags(leaf, ptr);
+	rec->flags = btrfs_block_group_flags(leaf, ptr);
 
 	INIT_LIST_HEAD(&rec->list);
 
@@ -5443,7 +5453,7 @@ out:
 }
 
 static int check_cache_range(struct btrfs_root *root,
-			     struct btrfs_block_group_cache *cache,
+			     struct btrfs_block_group *cache,
 			     u64 offset, u64 bytes)
 {
 	struct btrfs_free_space *entry;
@@ -5455,7 +5465,7 @@ static int check_cache_range(struct btrfs_root *root,
 	for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++) {
 		bytenr = btrfs_sb_offset(i);
 		ret = btrfs_rmap_block(root->fs_info,
-				       cache->key.objectid, bytenr,
+				       cache->start, bytenr,
 				       &logical, &nr, &stripe_len);
 		if (ret)
 			return ret;
@@ -5537,7 +5547,7 @@ static int check_cache_range(struct btrfs_root *root,
 }
 
 static int verify_space_cache(struct btrfs_root *root,
-			      struct btrfs_block_group_cache *cache)
+			      struct btrfs_block_group *cache)
 {
 	struct btrfs_path path;
 	struct extent_buffer *leaf;
@@ -5547,7 +5557,7 @@ static int verify_space_cache(struct btrfs_root *root,
 
 	root = root->fs_info->extent_root;
 
-	last = max_t(u64, cache->key.objectid, BTRFS_SUPER_INFO_OFFSET);
+	last = max_t(u64, cache->start, BTRFS_SUPER_INFO_OFFSET);
 
 	btrfs_init_path(&path);
 	key.objectid = last;
@@ -5569,7 +5579,7 @@ static int verify_space_cache(struct btrfs_root *root,
 		}
 		leaf = path.nodes[0];
 		btrfs_item_key_to_cpu(leaf, &key, path.slots[0]);
-		if (key.objectid >= cache->key.offset + cache->key.objectid)
+		if (key.objectid >= cache->start + cache->length)
 			break;
 		if (key.type != BTRFS_EXTENT_ITEM_KEY &&
 		    key.type != BTRFS_METADATA_ITEM_KEY) {
@@ -5597,10 +5607,9 @@ static int verify_space_cache(struct btrfs_root *root,
 		path.slots[0]++;
 	}
 
-	if (last < cache->key.objectid + cache->key.offset)
+	if (last < cache->start + cache->length)
 		ret = check_cache_range(root, cache, last,
-					cache->key.objectid +
-					cache->key.offset - last);
+					cache->start + cache->length - last);
 
 out:
 	btrfs_release_path(&path);
@@ -5617,7 +5626,7 @@ out:
 
 static int check_space_cache(struct btrfs_root *root)
 {
-	struct btrfs_block_group_cache *cache;
+	struct btrfs_block_group *cache;
 	u64 start = BTRFS_SUPER_INFO_OFFSET + BTRFS_SUPER_INFO_SIZE;
 	int ret;
 	int error = 0;
@@ -5628,7 +5637,7 @@ static int check_space_cache(struct btrfs_root *root)
 		if (!cache)
 			break;
 
-		start = cache->key.objectid + cache->key.offset;
+		start = cache->start + cache->length;
 		if (!cache->free_space_ctl) {
 			if (btrfs_init_free_space_ctl(cache,
 						root->fs_info->sectorsize)) {
@@ -5669,7 +5678,7 @@ static int check_space_cache(struct btrfs_root *root)
 		ret = verify_space_cache(root, cache);
 		if (ret) {
 			fprintf(stderr, "cache appears valid but isn't %llu\n",
-				cache->key.objectid);
+				cache->start);
 			error++;
 		}
 	}
@@ -5903,6 +5912,7 @@ static int check_csums(struct btrfs_root *root)
 	struct btrfs_path path;
 	struct extent_buffer *leaf;
 	struct btrfs_key key;
+	u64 last_data_end = 0;
 	u64 offset = 0, num_bytes = 0;
 	u16 csum_size = btrfs_super_csum_size(root->fs_info->super_copy);
 	int errors = 0;
@@ -5962,6 +5972,13 @@ static int check_csums(struct btrfs_root *root)
 			continue;
 		}
 
+		if (key.offset < last_data_end) {
+			error(
+	"csum overlap, current bytenr=%llu prev_end=%llu, eb=%llu slot=%u",
+				key.offset, last_data_end, leaf->start,
+				path.slots[0]);
+			errors++;
+		}
 		data_len = (btrfs_item_size_nr(leaf, path.slots[0]) /
 			      csum_size) * root->fs_info->sectorsize;
 		if (!verify_csum)
@@ -5992,6 +6009,7 @@ skip_csum_check:
 			num_bytes = 0;
 		}
 		num_bytes += data_len;
+		last_data_end = key.offset + data_len;
 		path.slots[0]++;
 	}
 
@@ -6468,7 +6486,7 @@ static int run_next_block(struct btrfs_root *root,
 		 * technically unreferenced and don't need to be worried about.
 		 */
 		if (ri != NULL && ri->drop_level && level > ri->drop_level) {
-			ret = btrfs_bin_search(buf, &ri->drop_key, level, &i);
+			ret = btrfs_bin_search(buf, &ri->drop_key, &i);
 			if (ret && i > 0)
 				i--;
 		}
@@ -8909,7 +8927,7 @@ static int btrfs_fsck_reinit_root(struct btrfs_trans_handle *trans,
 
 static int reset_block_groups(struct btrfs_fs_info *fs_info)
 {
-	struct btrfs_block_group_cache *cache;
+	struct btrfs_block_group *cache;
 	struct btrfs_path path;
 	struct extent_buffer *leaf;
 	struct btrfs_chunk *chunk;
@@ -8970,7 +8988,7 @@ static int reset_block_groups(struct btrfs_fs_info *fs_info)
 		if (!cache)
 			break;
 		cache->cached = 1;
-		start = cache->key.objectid + cache->key.offset;
+		start = cache->start + cache->length;
 	}
 
 	btrfs_release_path(&path);
@@ -9155,18 +9173,22 @@ again:
 	 */
 	while (1) {
 		struct btrfs_block_group_item bgi;
-		struct btrfs_block_group_cache *cache;
+		struct btrfs_block_group *cache;
+		struct btrfs_key key;
 
 		cache = btrfs_lookup_first_block_group(fs_info, start);
 		if (!cache)
 			break;
-		start = cache->key.objectid + cache->key.offset;
-		btrfs_set_block_group_used(&bgi, cache->used);
-		btrfs_set_block_group_chunk_objectid(&bgi,
+		start = cache->start + cache->length;
+		btrfs_set_stack_block_group_used(&bgi, cache->used);
+		btrfs_set_stack_block_group_chunk_objectid(&bgi,
 					BTRFS_FIRST_CHUNK_TREE_OBJECTID);
-		btrfs_set_block_group_flags(&bgi, cache->flags);
-		ret = btrfs_insert_item(trans, fs_info->extent_root,
-					&cache->key, &bgi, sizeof(bgi));
+		btrfs_set_stack_block_group_flags(&bgi, cache->flags);
+		key.objectid = cache->start;
+		key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+		key.offset = cache->length;
+		ret = btrfs_insert_item(trans, fs_info->extent_root, &key,
+					&bgi, sizeof(bgi));
 		if (ret) {
 			fprintf(stderr, "Error adding block group\n");
 			return ret;
@@ -9803,7 +9825,7 @@ out:
 static int clear_free_space_cache(struct btrfs_fs_info *fs_info)
 {
 	struct btrfs_trans_handle *trans;
-	struct btrfs_block_group_cache *bg_cache;
+	struct btrfs_block_group *bg_cache;
 	u64 current = 0;
 	int ret = 0;
 
@@ -9815,7 +9837,7 @@ static int clear_free_space_cache(struct btrfs_fs_info *fs_info)
 		ret = btrfs_clear_free_space_cache(fs_info, bg_cache);
 		if (ret < 0)
 			return ret;
-		current = bg_cache->key.objectid + bg_cache->key.offset;
+		current = bg_cache->start + bg_cache->length;
 	}
 
 	/* Don't forget to set cache_generation to -1 */
@@ -9952,7 +9974,7 @@ static int cmd_check(const struct cmd_struct *cmd, int argc, char **argv)
 	int clear_space_cache = 0;
 	int qgroup_report = 0;
 	int qgroups_repaired = 0;
-	int qgroup_report_ret;
+	int qgroup_verify_ret;
 	unsigned ctree_flags = OPEN_CTREE_EXCLUSIVE;
 	int force = 0;
 
@@ -10209,8 +10231,8 @@ static int cmd_check(const struct cmd_struct *cmd, int argc, char **argv)
 		       uuidbuf);
 		ret = qgroup_verify_all(info);
 		err |= !!ret;
-		if (ret == 0)
-			err |= !!report_qgroups(1);
+		if (ret >= 0)
+			report_qgroups(1);
 		goto close_out;
 	}
 	if (subvolid) {
@@ -10296,20 +10318,27 @@ static int cmd_check(const struct cmd_struct *cmd, int argc, char **argv)
 			err = !!ret;
 			errno = -ret;
 			error("failed to repair root items: %m");
-			goto close_out;
-		}
-		if (repair) {
-			fprintf(stderr, "Fixed %d roots.\n", ret);
-			ret = 0;
-		} else if (ret > 0) {
-			fprintf(stderr,
+			/*
+			 * For repair, if we can't repair root items, it's
+			 * fatal.  But for non-repair, it's pretty rare to hit
+			 * such v3.17 era bug, we want to continue check.
+			 */
+			if (repair)
+				goto close_out;
+			err |= 1;
+		} else {
+			if (repair) {
+				fprintf(stderr, "Fixed %d roots.\n", ret);
+				ret = 0;
+			} else if (ret > 0) {
+				fprintf(stderr,
 				"Found %d roots with an outdated root item.\n",
-				ret);
-			fprintf(stderr,
+					ret);
+				fprintf(stderr,
 	"Please run a filesystem check with the option --repair to fix them.\n");
-			ret = 1;
-			err |= ret;
-			goto close_out;
+				ret = 1;
+				err |= ret;
+			}
 		}
 	} else {
 		fprintf(stderr, "[1/7] checking root items... skipped\n");
@@ -10444,21 +10473,21 @@ static int cmd_check(const struct cmd_struct *cmd, int argc, char **argv)
 			ctx.tp = TASK_QGROUPS;
 			task_start(ctx.info, &ctx.start_time, &ctx.item_count);
 		}
-		ret = qgroup_verify_all(info);
+		qgroup_verify_ret = qgroup_verify_all(info);
 		task_stop(ctx.info);
-		err |= !!ret;
-		if (ret) {
+		if (qgroup_verify_ret < 0) {
 			error("failed to check quota groups");
+			err |= !!qgroup_verify_ret;
 			goto out;
 		}
-		qgroup_report_ret = report_qgroups(0);
-		ret = repair_qgroups(info, &qgroups_repaired);
+		report_qgroups(0);
+		ret = repair_qgroups(info, &qgroups_repaired, false);
 		if (ret) {
 			error("failed to repair quota groups");
 			goto out;
 		}
-		if (qgroup_report_ret && (!qgroups_repaired || ret))
-			err |= !!qgroup_report_ret;
+		if (qgroup_verify_ret && (!qgroups_repaired || ret))
+			err |= !!qgroup_verify_ret;
 		ret = 0;
 	} else {
 		fprintf(stderr,

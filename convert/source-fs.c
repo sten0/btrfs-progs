@@ -90,7 +90,7 @@ int block_iterate_proc(u64 disk_block, u64 file_block,
 	u64 reserved_boundary;
 	int do_barrier;
 	struct btrfs_root *root = idata->root;
-	struct btrfs_block_group_cache *cache;
+	struct btrfs_block_group *cache;
 	u32 sectorsize = root->fs_info->sectorsize;
 	u64 bytenr = disk_block * sectorsize;
 
@@ -120,7 +120,7 @@ int block_iterate_proc(u64 disk_block, u64 file_block,
 		} else {
 			cache = btrfs_lookup_block_group(root->fs_info, bytenr);
 			BUG_ON(!cache);
-			bytenr = cache->key.objectid + cache->key.offset;
+			bytenr = cache->start + cache->length;
 		}
 
 		idata->first_block = file_block;

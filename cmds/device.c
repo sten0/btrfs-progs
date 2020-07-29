@@ -143,6 +143,7 @@ static int cmd_device_add(const struct cmd_struct *cmd,
 	}
 
 error_out:
+	btrfs_warn_multiple_profiles(fdmnt);
 	close_file_or_dir(fdmnt, dirstream);
 	return !!ret;
 }
@@ -225,6 +226,7 @@ static int _cmd_device_remove(const struct cmd_struct *cmd,
 		}
 	}
 
+	btrfs_warn_multiple_profiles(fdmnt);
 	close_file_or_dir(fdmnt, dirstream);
 	return !!ret;
 }
@@ -303,6 +305,9 @@ static const char * const cmd_device_scan_usage[] = {
 	" -d|--all-devices            enumerate and register all devices, use as a fallback",
 	"                             if blkid is not available",
 	" -u|--forget [<device>...]   unregister a given device or all stale devices if no path ",
+	HELPINFO_INSERT_GLOBALS,
+	HELPINFO_INSERT_VERBOSE,
+	HELPINFO_INSERT_QUIET,
 	NULL
 };
 
@@ -353,8 +358,8 @@ static int cmd_device_scan(const struct cmd_struct *cmd, int argc, char **argv)
 				error("cannot unregister devices: %m");
 			}
 		} else {
-			printf("Scanning for Btrfs filesystems\n");
-			ret = btrfs_scan_devices();
+			pr_verbose(-1, "Scanning for Btrfs filesystems\n");
+			ret = btrfs_scan_devices(1);
 			error_on(ret, "error %d while scanning", ret);
 			ret = btrfs_register_all_devices();
 			error_on(ret,
@@ -659,6 +664,7 @@ static int cmd_device_usage(const struct cmd_struct *cmd, int argc, char **argv)
 		}
 
 		ret = _cmd_device_usage(fd, argv[i], unit_mode);
+		btrfs_warn_multiple_profiles(fd);
 		close_file_or_dir(fd, dirstream);
 
 		if (ret)

@@ -88,6 +88,8 @@ static const char * const cmd_subvol_create_usage[] = {
 	"",
 	"-i <qgroupid>  add the newly created subvolume to a qgroup. This",
 	"               option can be given multiple times.",
+	HELPINFO_INSERT_GLOBALS,
+	HELPINFO_INSERT_QUIET,
 	NULL
 };
 
@@ -169,7 +171,7 @@ static int cmd_subvol_create(const struct cmd_struct *cmd,
 	if (fddst < 0)
 		goto out;
 
-	printf("Create subvolume '%s/%s'\n", dstdir, newname);
+	pr_verbose(MUST_LOG, "Create subvolume '%s/%s'\n", dstdir, newname);
 	if (inherit) {
 		struct btrfs_ioctl_vol_args_v2	args;
 
@@ -236,7 +238,10 @@ static const char * const cmd_subvol_delete_usage[] = {
 	"-c|--commit-after      wait for transaction commit at the end of the operation",
 	"-C|--commit-each       wait for transaction commit after deleting each subvolume",
 	"-i|--subvolid          subvolume id of the to be removed subvolume",
-	"-v|--verbose           verbose output of operations",
+	"-v|--verbose           deprecated, alias for global -v option",
+	HELPINFO_INSERT_GLOBALS,
+	HELPINFO_INSERT_VERBOSE,
+	HELPINFO_INSERT_QUIET,
 	NULL
 };
 
@@ -251,7 +256,6 @@ static int cmd_subvol_delete(const struct cmd_struct *cmd,
 	char	*dupvname = NULL;
 	char	*path = NULL;
 	DIR	*dirstream = NULL;
-	int verbose = 0;
 	int commit_mode = 0;
 	u8 fsid[BTRFS_FSID_SIZE];
 	u64 subvolid = 0;
@@ -287,7 +291,7 @@ static int cmd_subvol_delete(const struct cmd_struct *cmd,
 			subvolid = arg_strtou64(optarg);
 			break;
 		case 'v':
-			verbose++;
+			bconf_be_verbose();
 			break;
 		default:
 			usage_unknown_option(cmd, argv);
@@ -301,11 +305,9 @@ static int cmd_subvol_delete(const struct cmd_struct *cmd,
 	if (subvolid > 0 && check_argc_exact(argc - optind, 1))
 		return 1;
 
-	if (verbose > 0) {
-		printf("Transaction commit: %s\n",
-			!commit_mode ? "none (default)" :
-			commit_mode == COMMIT_AFTER ? "at the end" : "after each");
-	}
+	pr_verbose(1, "Transaction commit: %s\n",
+		   !commit_mode ? "none (default)" :
+		   commit_mode == COMMIT_AFTER ? "at the end" : "after each");
 
 	cnt = optind;
 
@@ -358,14 +360,15 @@ again:
 		goto out;
 	}
 
-	printf("Delete subvolume (%s): ",
-		commit_mode == COMMIT_EACH || (commit_mode == COMMIT_AFTER && cnt + 1 == argc)
-		? "commit" : "no-commit");
+	pr_verbose(MUST_LOG, "Delete subvolume (%s): ",
+		commit_mode == COMMIT_EACH ||
+		(commit_mode == COMMIT_AFTER && cnt + 1 == argc) ?
+		"commit" : "no-commit");
 
 	if (subvolid == 0)
-		printf("'%s/%s'\n", dname, vname);
+		pr_verbose(MUST_LOG, "'%s/%s'\n", dname, vname);
 	else
-		printf("'%s'\n", full_subvolpath);
+		pr_verbose(MUST_LOG, "'%s'\n", full_subvolpath);
 
 	if (subvolid == 0)
 		err = btrfs_util_delete_subvolume_fd(fd, vname, 0);
@@ -395,11 +398,9 @@ again:
 		}
 
 		if (add_seen_fsid(fsid, seen_fsid_hash, fd, dirstream) == 0) {
-			if (verbose > 0) {
-				uuid_unparse(fsid, uuidbuf);
-				printf("  new fs is found for '%s', fsid: %s\n",
-						path, uuidbuf);
-			}
+			uuid_unparse(fsid, uuidbuf);
+			pr_verbose(1, "  new fs is found for '%s', fsid: %s\n",
+				   path, uuidbuf);
 			/*
 			 * This is the first time a subvolume on this
 			 * filesystem is deleted, keep fd in order to issue
@@ -440,10 +441,11 @@ keep_fd:
 			"unable to do final sync after deletion: %m, fsid: %s",
 						uuidbuf);
 					ret = 1;
-				} else if (verbose > 0) {
+				} else {
 					uuid_unparse(seen->fsid, uuidbuf);
-					printf("final sync is done for fsid: %s\n",
-						uuidbuf);
+					pr_verbose(1,
+					   "final sync is done for fsid: %s\n",
+						   uuidbuf);
 				}
 				seen = seen->next;
 			}
@@ -669,6 +671,8 @@ static const char * const cmd_subvol_snapshot_usage[] = {
 	"-r             create a readonly snapshot",
 	"-i <qgroupid>  add the newly created snapshot to a qgroup. This",
 	"               option can be given multiple times.",
+	HELPINFO_INSERT_GLOBALS,
+	HELPINFO_INSERT_QUIET,
 	NULL
 };
 
@@ -783,11 +787,13 @@ static int cmd_subvol_snapshot(const struct cmd_struct *cmd,
 
 	if (readonly) {
 		args.flags |= BTRFS_SUBVOL_RDONLY;
-		printf("Create a readonly snapshot of '%s' in '%s/%s'\n",
-		       subvol, dstdir, newname);
+		pr_verbose(MUST_LOG,
+			   "Create a readonly snapshot of '%s' in '%s/%s'\n",
+			   subvol, dstdir, newname);
 	} else {
-		printf("Create a snapshot of '%s' in '%s/%s'\n",
-		       subvol, dstdir, newname);
+		pr_verbose(MUST_LOG,
+			   "Create a snapshot of '%s' in '%s/%s'\n",
+			   subvol, dstdir, newname);
 	}
 
 	args.fd = fd;
@@ -973,8 +979,8 @@ static const char * const cmd_subvol_show_usage[] = {
 	"btrfs subvolume show [options] <path>",
 	"Show more information about the subvolume (UUIDs, generations, times, snapshots)",
 	"",
-	"-r|--rootid   rootid of the subvolume",
-	"-u|--uuid     uuid of the subvolume",
+	"-r|--rootid        rootid of the subvolume",
+	"-u|--uuid          uuid of the subvolume",
 	HELPINFO_UNITS_SHORT_LONG,
 	"",
 	"If no option is specified, subvolume at <path> will be shown, otherwise",

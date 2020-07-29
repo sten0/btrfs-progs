@@ -86,12 +86,11 @@ wait for transaction commit at the end of the operation.
 -C|--commit-each::::
 wait for transaction commit after deleting each subvolume.
 +
--v|--verbose::::
-verbose output of operations.
-+
 -i|--subvolid <subvolid>::::
 subvolume id to be removed instead of the <path> that should point to the
 filesystem with the subvolume
+-v|--verbose::::
+(deprecated) alias for global '-v' option
 
 *find-new* <subvolume> <last_gen>::
 List the recently modified files in a subvolume, after <last_gen> generation.
@@ -232,6 +231,20 @@ are completed, but do not wait for subvolumes deleted in the meantime.
 +
 -s <N>::::
 sleep N seconds between checks (default: 1)
+
+EXAMPLES
+--------
+
+.Deleting a subvolume
+====
+If we want to delete a subvolume called `foo` from a btrfs volume mounted at
+`/mnt/bar` we could run the following:
+
+[source,bash]
+----
+btrfs subvolume delete /mnt/bar/foo
+----
+====
 
 EXIT STATUS
 -----------

@@ -202,7 +202,7 @@ static int create_image_file_range(struct btrfs_trans_handle *trans,
 				      u32 convert_flags)
 {
 	struct cache_extent *cache;
-	struct btrfs_block_group_cache *bg_cache;
+	struct btrfs_block_group *bg_cache;
 	u64 len = *ret_len;
 	u64 disk_bytenr;
 	int i;
@@ -300,13 +300,13 @@ static int create_image_file_range(struct btrfs_trans_handle *trans,
 		if (!(bg_cache->flags & BTRFS_BLOCK_GROUP_DATA)) {
 			error(
 	"data bytenr %llu is covered by non-data block group %llu flags 0x%llu",
-			      bytenr, bg_cache->key.objectid, bg_cache->flags);
+			      bytenr, bg_cache->start, bg_cache->flags);
 			return -EINVAL;
 		}
 
 		/* The extent should never cross block group boundary */
-		len = min_t(u64, len, bg_cache->key.objectid +
-			    bg_cache->key.offset - bytenr);
+		len = min_t(u64, len, bg_cache->start + bg_cache->length -
+				bytenr);
 	}
 
 	if (len != round_down(len, root->fs_info->sectorsize)) {
@@ -669,6 +669,8 @@ static int calculate_available_space(struct btrfs_convert_context *cctx)
 			cur_off = cache->start;
 		cur_len = max(cache->start + cache->size - cur_off,
 			      min_stripe_size);
+		/* data chunks should never exceed device boundary */
+		cur_len = min(cctx->total_bytes - cur_off, cur_len);
 		ret = add_merge_cache_extent(data_chunks, cur_off, cur_len);
 		if (ret < 0)
 			goto out;
@@ -1152,7 +1154,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		error("unable to open %s: %m", devname);
 		goto fail;
 	}
-	btrfs_parse_features_to_string(features_buf, features);
+	btrfs_parse_fs_features_to_string(features_buf, features);
 	if (features == BTRFS_MKFS_DEFAULT_FEATURES)
 		strcat(features_buf, " (default)");
 
@@ -1817,7 +1819,7 @@ int BOX_MAIN(convert)(int argc, char *argv[])
 				if (features & ~BTRFS_CONVERT_ALLOWED_FEATURES) {
 					char buf[64];
 
-					btrfs_parse_features_to_string(buf,
+					btrfs_parse_fs_features_to_string(buf,
 						features & ~BTRFS_CONVERT_ALLOWED_FEATURES);
 					error("features not allowed for convert: %s",
 						buf);

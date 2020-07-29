@@ -28,6 +28,7 @@ Package: btrfs-progs
 Architecture: linux-any
 Multi-Arch: foreign
 Depends: ${misc:Depends}, ${shlibs:Depends}
+# backports will want the Breaks:libcc-s1 below
 Breaks: btrbk (<= 0.25.0), libgcc-s1 (<< 10-20200211)
 Provides: btrfs-tools
 Suggests: duperemove
