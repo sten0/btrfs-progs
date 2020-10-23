@@ -39,7 +39,7 @@
 #include <sys/xattr.h>
 #include <uuid/uuid.h>
 
-#include "ctree.h"
+#include "kernel-shared/ctree.h"
 #include "ioctl.h"
 #include "cmds/commands.h"
 #include "common/utils.h"
@@ -47,9 +47,9 @@
 #include "btrfs-list.h"
 
 #include "send.h"
-#include "send-stream.h"
-#include "send-utils.h"
-#include "send-dump.h"
+#include "common/send-stream.h"
+#include "common/send-utils.h"
+#include "cmds/receive-dump.h"
 #include "common/help.h"
 #include "common/path-utils.h"
 

@@ -41,10 +41,10 @@ global:
 	rb_prev;
 	rb_replace_node;
 
-	/* send-stream.h */
+	/* common/send-stream.h */
 	btrfs_read_and_process_send_stream;
 
-	/* send-utils.h */
+	/* common/send-utils.h */
 	subvol_uuid_search;
 	subvol_uuid_search2;
 	subvol_uuid_search_add;

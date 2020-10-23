@@ -22,8 +22,8 @@
 #include <limits.h>
 #include <sys/stat.h>
 #include <stdbool.h>
-#include "disk-io.h"
-#include "transaction.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/transaction.h"
 #include "common/utils.h"
 #include "kernel-lib/bitops.h"
 #include "convert/common.h"
@@ -82,7 +82,7 @@ static int reiserfs_open_fs(struct btrfs_convert_context *cxt, const char *name)
 	cxt->fs_data = fs;
 	cxt->blocksize = fs->fs_blocksize;
 	cxt->block_count = get_sb_block_count(fs->fs_ondisk_sb);
-	cxt->total_bytes = cxt->blocksize * cxt->block_count;
+	cxt->total_bytes = (u64)cxt->block_count * cxt->blocksize;
 	cxt->volume_name = strndup(fs->fs_ondisk_sb->s_label, 16);
 	cxt->first_data_block = 0;
 	cxt->inodes_count = reiserfs_count_objectids(fs);

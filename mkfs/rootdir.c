@@ -25,16 +25,16 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <ftw.h>
-#include "ctree.h"
-#include "volumes.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/volumes.h"
 #include "common/internal.h"
-#include "disk-io.h"
+#include "kernel-shared/disk-io.h"
 #include "common/messages.h"
-#include "transaction.h"
+#include "kernel-shared/transaction.h"
 #include "common/utils.h"
 #include "mkfs/rootdir.h"
 #include "mkfs/common.h"
-#include "send-utils.h"
+#include "common/send-utils.h"
 
 static u32 fs_block_size;
 

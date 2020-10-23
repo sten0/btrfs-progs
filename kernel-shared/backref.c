@@ -17,11 +17,11 @@
  */
 
 #include "kerncompat.h"
-#include "ctree.h"
-#include "disk-io.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/disk-io.h"
 #include "kernel-shared/backref.h"
 #include "kernel-shared/ulist.h"
-#include "transaction.h"
+#include "kernel-shared/transaction.h"
 #include "common/internal.h"
 
 #define pr_debug(...) do { } while (0)

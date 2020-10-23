@@ -23,8 +23,8 @@
 #include <limits.h>
 #include <errno.h>
 
-#include "ctree.h"
-#include "send-utils.h"
+#include "kernel-shared/ctree.h"
+#include "common/send-utils.h"
 #include "ioctl.h"
 #include "btrfs-list.h"
 

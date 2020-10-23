@@ -30,11 +30,11 @@
 #include <sys/wait.h>
 
 #include "kerncompat.h"
-#include "ctree.h"
+#include "kernel-shared/ctree.h"
 #include "ioctl.h"
 #include "common/utils.h"
-#include "volumes.h"
-#include "disk-io.h"
+#include "kernel-shared/volumes.h"
+#include "kernel-shared/disk-io.h"
 
 #include "cmds/commands.h"
 #include "common/help.h"

@@ -16,10 +16,10 @@
  * Boston, MA 021110-1307, USA.
  */
 
-#include "ctree.h"
-#include "transaction.h"
-#include "disk-io.h"
-#include "print-tree.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/transaction.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/print-tree.h"
 
 int btrfs_find_last_root(struct btrfs_root *root, u64 objectid,
 			struct btrfs_root_item *item, struct btrfs_key *key)

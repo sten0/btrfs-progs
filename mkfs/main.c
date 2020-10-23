@@ -32,10 +32,11 @@
 #include <uuid/uuid.h>
 #include <ctype.h>
 #include <blkid/blkid.h>
-#include "ctree.h"
-#include "disk-io.h"
-#include "volumes.h"
-#include "transaction.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/free-space-tree.h"
+#include "kernel-shared/volumes.h"
+#include "kernel-shared/transaction.h"
 #include "common/utils.h"
 #include "common/path-utils.h"
 #include "common/device-utils.h"
@@ -1144,19 +1145,30 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	* For mixed groups defaults are single/single.
 	*/
 	if (!mixed) {
+		u64 tmp;
+
 		if (!metadata_profile_opt) {
 			if (dev_cnt == 1 && ssd && verbose)
 				printf("Detected a SSD, turning off metadata "
 				"duplication.  Mkfs with -m dup if you want to "
 				"force metadata duplication.\n");
 
-			metadata_profile = (dev_cnt > 1) ?
-					BTRFS_BLOCK_GROUP_RAID1 : (ssd) ?
-					0: BTRFS_BLOCK_GROUP_DUP;
+			if (dev_cnt > 1) {
+				tmp = BTRFS_MKFS_DEFAULT_META_MULTI_DEVICE;
+			} else {
+				if (ssd)
+					tmp = BTRFS_MKFS_DEFAULT_META_ONE_DEVICE_SSD;
+				else
+					tmp = BTRFS_MKFS_DEFAULT_META_ONE_DEVICE;
+			}
+			metadata_profile = tmp;
 		}
 		if (!data_profile_opt) {
-			data_profile = (dev_cnt > 1) ?
-				BTRFS_BLOCK_GROUP_RAID0 : 0; /* raid0 or single */
+			if (dev_cnt > 1)
+				tmp = BTRFS_MKFS_DEFAULT_DATA_MULTI_DEVICE;
+			else
+				tmp = BTRFS_MKFS_DEFAULT_DATA_ONE_DEVICE;
+			data_profile = tmp;
 		}
 	} else {
 		u32 best_nodesize = max_t(u32, sysconf(_SC_PAGESIZE), sectorsize);
@@ -1481,6 +1493,13 @@ raid_groups:
 		ret = setup_quota_root(fs_info);
 		if (ret < 0) {
 			error("failed to initialize quota: %d (%m)", ret);
+			goto out;
+		}
+	}
+	if (runtime_features & BTRFS_RUNTIME_FEATURE_FREE_SPACE_TREE) {
+		ret = btrfs_create_free_space_tree(fs_info);
+		if (ret < 0) {
+			error("failed to create free space tree: %d (%m)", ret);
 			goto out;
 		}
 	}

@@ -23,13 +23,13 @@
 #include "kerncompat.h"
 #include "kernel-lib/radix-tree.h"
 #include "kernel-lib/rbtree.h"
-#include "ctree.h"
-#include "disk-io.h"
-#include "print-tree.h"
-#include "transaction.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/print-tree.h"
+#include "kernel-shared/transaction.h"
 #include "crypto/crc32c.h"
-#include "volumes.h"
-#include "free-space-cache.h"
+#include "kernel-shared/volumes.h"
+#include "kernel-shared/free-space-cache.h"
 #include "kernel-shared/free-space-tree.h"
 #include "common/utils.h"
 
@@ -1921,7 +1921,7 @@ static int __free_extent(struct btrfs_trans_handle *trans,
 		btrfs_fs_incompat(extent_root->fs_info, SKINNY_METADATA);
 
 	if (trans->fs_info->free_extent_hook) {
-		trans->fs_info->free_extent_hook(trans->fs_info, bytenr, num_bytes,
+		trans->fs_info->free_extent_hook(bytenr, num_bytes,
 						parent, root_objectid, owner_objectid,
 						owner_offset, refs_to_drop);
 

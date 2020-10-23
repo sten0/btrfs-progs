@@ -35,7 +35,7 @@
 #include "ioctl.h"
 #include "qgroup.h"
 
-#include "ctree.h"
+#include "kernel-shared/ctree.h"
 #include "cmds/commands.h"
 #include "common/utils.h"
 #include "btrfs-list.h"
@@ -264,6 +264,7 @@ static int cmd_subvol_delete(const struct cmd_struct *cmd,
 	struct seen_fsid *seen_fsid_hash[SEEN_FSID_HASH_SIZE] = { NULL, };
 	enum { COMMIT_AFTER = 1, COMMIT_EACH = 2 };
 	enum btrfs_util_error err;
+	uint64_t default_subvol_id = 0, target_subvol_id = 0;
 
 	optind = 0;
 	while (1) {
@@ -360,6 +361,32 @@ again:
 		goto out;
 	}
 
+	err = btrfs_util_get_default_subvolume_fd(fd, &default_subvol_id);
+	if (err) {
+		warning("cannot read default subvolume id: %m");
+		default_subvol_id = 0;
+	}
+
+	if (subvolid > 0) {
+		target_subvol_id = subvolid;
+	} else {
+		err = btrfs_util_subvolume_id(path, &target_subvol_id);
+		if (err) {
+			ret = 1;
+			goto out;
+		}
+	}
+
+	if (target_subvol_id == default_subvol_id) {
+		warning("not deleting default subvolume id %llu '%s%s%s'",
+				(u64)default_subvol_id,
+				(subvolid == 0 ? dname	: ""),
+				(subvolid == 0 ? "/"	: ""),
+				(subvolid == 0 ? vname	: full_subvolpath));
+		ret = 1;
+		goto out;
+	}
+
 	pr_verbose(MUST_LOG, "Delete subvolume (%s): ",
 		commit_mode == COMMIT_EACH ||
 		(commit_mode == COMMIT_AFTER && cnt + 1 == argc) ?
@@ -375,7 +402,11 @@ again:
 	else
 		err = btrfs_util_delete_subvolume_by_id_fd(fd, subvolid);
 	if (err) {
+		int saved_errno = errno;
+
 		error_btrfs_util(err);
+		if (saved_errno == EPERM)
+			warning("deletion failed with EPERM, send may be in progress");
 		ret = 1;
 		goto out;
 	}

@@ -32,9 +32,9 @@
 #include "common/messages.h"
 #include "common/utils.h"
 #include "common/defs.h"
-#include "ctree.h"
-#include "volumes.h"
-#include "disk-io.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/volumes.h"
+#include "kernel-shared/disk-io.h"
 #include "ioctl.h"
 
 static int btrfs_scan_done = 0;

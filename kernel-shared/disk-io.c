@@ -25,13 +25,13 @@
 #include <uuid/uuid.h>
 #include "kerncompat.h"
 #include "kernel-lib/radix-tree.h"
-#include "ctree.h"
-#include "disk-io.h"
-#include "volumes.h"
-#include "transaction.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/volumes.h"
+#include "kernel-shared/transaction.h"
 #include "crypto/crc32c.h"
 #include "common/utils.h"
-#include "print-tree.h"
+#include "kernel-shared/print-tree.h"
 #include "common/rbtree-utils.h"
 #include "common/device-scan.h"
 #include "crypto/hash.h"
@@ -1003,10 +1003,15 @@ int btrfs_setup_all_roots(struct btrfs_fs_info *fs_info, u64 root_tree_bytenr,
 		ret = find_and_setup_root(root, fs_info, BTRFS_FREE_SPACE_TREE_OBJECTID,
 					  fs_info->free_space_root);
 		if (ret) {
+			free(fs_info->free_space_root);
+			fs_info->free_space_root = NULL;
 			printk("Couldn't read free space tree\n");
 			return -EIO;
 		}
 		fs_info->free_space_root->track_dirty = 1;
+	} else {
+		free(fs_info->free_space_root);
+		fs_info->free_space_root = NULL;
 	}
 
 	ret = find_and_setup_log_root(root, fs_info, sb);

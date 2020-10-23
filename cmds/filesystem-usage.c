@@ -26,11 +26,11 @@
 
 #include "common/utils.h"
 #include "kerncompat.h"
-#include "ctree.h"
+#include "kernel-shared/ctree.h"
 #include "common/string-table.h"
 #include "cmds/filesystem-usage.h"
 #include "cmds/commands.h"
-#include "disk-io.h"
+#include "kernel-shared/disk-io.h"
 
 #include "version.h"
 #include "common/help.h"
