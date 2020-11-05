@@ -27,12 +27,12 @@
 #include <getopt.h>
 
 #include "kerncompat.h"
-#include "ctree.h"
-#include "disk-io.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/disk-io.h"
 #include "kernel-lib/list.h"
 #include "common/utils.h"
 #include "crypto/crc32c.h"
-#include "volumes.h"
+#include "kernel-shared/volumes.h"
 #include "cmds/commands.h"
 #include "cmds/rescue.h"
 

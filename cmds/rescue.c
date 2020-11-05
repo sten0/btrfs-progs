@@ -19,10 +19,10 @@
 #include "kerncompat.h"
 
 #include <getopt.h>
-#include "ctree.h"
-#include "volumes.h"
-#include "transaction.h"
-#include "disk-io.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/volumes.h"
+#include "kernel-shared/transaction.h"
+#include "kernel-shared/disk-io.h"
 #include "cmds/commands.h"
 #include "common/utils.h"
 #include "common/help.h"

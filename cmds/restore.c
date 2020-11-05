@@ -37,12 +37,12 @@
 #include <sys/types.h>
 #include <sys/xattr.h>
 
-#include "ctree.h"
-#include "disk-io.h"
-#include "print-tree.h"
-#include "transaction.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/print-tree.h"
+#include "kernel-shared/transaction.h"
 #include "kernel-lib/list.h"
-#include "volumes.h"
+#include "kernel-shared/volumes.h"
 #include "common/utils.h"
 #include "cmds/commands.h"
 #include "common/help.h"
@@ -413,7 +413,7 @@ again:
 			mirror_num++;
 			if (mirror_num > num_copies) {
 				ret = -1;
-				error("exhausted mirros trying to read (%d > %d)",
+				error("exhausted mirrors trying to read (%d > %d)",
 					mirror_num, num_copies);
 				goto out;
 			}

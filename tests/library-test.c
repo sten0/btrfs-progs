@@ -24,15 +24,15 @@
 #include "crypto/crc32c.h"
 #include "kernel-lib/list.h"
 #include "kernel-lib/sizes.h"
-#include "ctree.h"
-#include "extent_io.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/extent_io.h"
 #include "ioctl.h"
 #include "btrfs-list.h"
 #include "check/btrfsck.h"
-#include "extent-cache.h"
+#include "common/extent-cache.h"
 #include "send.h"
-#include "send-stream.h"
-#include "send-utils.h"
+#include "common/send-stream.h"
+#include "common/send-utils.h"
 #else
 /*
  * This needs to include headers the same way as an external program but must

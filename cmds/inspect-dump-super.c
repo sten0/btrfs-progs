@@ -22,9 +22,9 @@
 #include <errno.h>
 #include <getopt.h>
 
-#include "ctree.h"
-#include "disk-io.h"
-#include "print-tree.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/print-tree.h"
 #include "common/utils.h"
 #include "cmds/commands.h"
 #include "common/help.h"

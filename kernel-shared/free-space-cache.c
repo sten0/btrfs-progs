@@ -17,11 +17,11 @@
  */
 
 #include "kerncompat.h"
-#include "ctree.h"
-#include "free-space-cache.h"
-#include "transaction.h"
-#include "disk-io.h"
-#include "extent_io.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/free-space-cache.h"
+#include "kernel-shared/transaction.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/extent_io.h"
 #include "crypto/crc32c.h"
 #include "kernel-lib/bitops.h"
 #include "common/internal.h"

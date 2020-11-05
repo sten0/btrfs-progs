@@ -21,8 +21,8 @@
 #define __BTRFS_CHECK_COMMON_H__
 
 #include "kerncompat.h"
-#include "ctree.h"
-#include "extent-cache.h"
+#include "kernel-shared/ctree.h"
+#include "common/extent-cache.h"
 #include "kernel-lib/list.h"
 
 struct block_group_record {

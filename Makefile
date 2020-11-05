@@ -147,7 +147,7 @@ objects = kernel-shared/dir-item.o \
 	  qgroup.o kernel-lib/list_sort.o props.o \
 	  kernel-shared/ulist.o check/qgroup-verify.o kernel-shared/backref.o \
 	  common/string-table.o common/task-utils.o \
-	  inode.o file.o find-root.o common/help.o send-dump.o \
+	  kernel-shared/inode.o kernel-shared/file.o common/help.o cmds/receive-dump.o \
 	  common/fsfeatures.o \
 	  common/format-output.o \
 	  common/device-utils.o
@@ -159,22 +159,26 @@ cmds_objects = cmds/subvolume.o cmds/filesystem.o cmds/device.o cmds/scrub.o \
 	       cmds/property.o cmds/filesystem-usage.o cmds/inspect-dump-tree.o \
 	       cmds/inspect-dump-super.o cmds/inspect-tree-stats.o cmds/filesystem-du.o \
 	       mkfs/common.o check/mode-common.o check/mode-lowmem.o
-libbtrfs_objects = send-stream.o send-utils.o kernel-lib/rbtree.o btrfs-list.o \
-		   kernel-lib/radix-tree.o extent-cache.o extent_io.o \
+libbtrfs_objects = common/send-stream.o common/send-utils.o kernel-lib/rbtree.o btrfs-list.o \
+		   kernel-lib/radix-tree.o common/extent-cache.o kernel-shared/extent_io.o \
 		   crypto/crc32c.o common/messages.o \
-		   kernel-shared/uuid-tree.o utils-lib.o common/rbtree-utils.o \
-		   ctree.o disk-io.o extent-tree.o kernel-shared/delayed-ref.o print-tree.o \
-		   free-space-cache.o kernel-shared/root-tree.o volumes.o transaction.o \
+		   kernel-shared/uuid-tree.o common/utils-lib.o common/rbtree-utils.o \
+		   kernel-shared/ctree.o kernel-shared/disk-io.o \
+		   kernel-shared/extent-tree.o kernel-shared/delayed-ref.o \
+		   kernel-shared/print-tree.o \
+		   kernel-shared/free-space-cache.o kernel-shared/root-tree.o \
+		   kernel-shared/volumes.o kernel-shared/transaction.o \
 		   kernel-shared/free-space-tree.o repair.o kernel-shared/inode-item.o \
 		   kernel-shared/file-item.o \
 		   kernel-lib/raid56.o kernel-lib/tables.o \
 		   common/device-scan.o common/path-utils.o \
 		   common/utils.o libbtrfsutil/subvolume.o libbtrfsutil/stubs.o \
 		   crypto/hash.o crypto/xxhash.o $(CRYPTO_OBJECTS)
-libbtrfs_headers = send-stream.h send-utils.h send.h kernel-lib/rbtree.h btrfs-list.h \
+libbtrfs_headers = common/send-stream.h common/send-utils.h send.h kernel-lib/rbtree.h btrfs-list.h \
 	       crypto/crc32c.h kernel-lib/list.h kerncompat.h \
 	       kernel-lib/radix-tree.h kernel-lib/sizes.h kernel-lib/raid56.h \
-	       extent-cache.h extent_io.h ioctl.h ctree.h btrfsck.h version.h
+	       common/extent-cache.h kernel-shared/extent_io.h ioctl.h \
+	       kernel-shared/ctree.h btrfsck.h version.h
 libbtrfsutil_major := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MAJOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
 libbtrfsutil_minor := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MINOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
 libbtrfsutil_patch := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_PATCH ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
@@ -610,15 +614,15 @@ quick-test: quick-test.o $(objects) $(libs)
 	@echo "    [LD]     $@"
 	$(Q)$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-ioctl-test.o: tests/ioctl-test.c ioctl.h kerncompat.h ctree.h
+ioctl-test.o: tests/ioctl-test.c ioctl.h kerncompat.h kernel-shared/ctree.h
 	@echo "    [CC]   $@"
 	$(Q)$(CC) $(CFLAGS) -c $< -o $@
 
-ioctl-test-32.o: tests/ioctl-test.c ioctl.h kerncompat.h ctree.h
+ioctl-test-32.o: tests/ioctl-test.c ioctl.h kerncompat.h kernel-shared/ctree.h
 	@echo "    [CC32]   $@"
 	$(Q)$(CC) $(CFLAGS) -m32 -c $< -o $@
 
-ioctl-test-64.o: tests/ioctl-test.c ioctl.h kerncompat.h ctree.h
+ioctl-test-64.o: tests/ioctl-test.c ioctl.h kerncompat.h kernel-shared/ctree.h
 	@echo "    [CC64]   $@"
 	$(Q)$(CC) $(CFLAGS) -m64 -c $< -o $@
 
@@ -775,6 +779,8 @@ endif
 	$(INSTALL) -m755 -d $(DESTDIR)$(incdir)/btrfs
 	$(INSTALL) -m644 $(libbtrfs_headers) $(DESTDIR)$(incdir)/btrfs
 	$(INSTALL) -m644 libbtrfsutil/btrfsutil.h $(DESTDIR)$(incdir)
+	$(INSTALL) -m755 -d $(DESTDIR)$(pkgconfigdir)
+	$(INSTALL) -m644 libbtrfsutil/libbtrfsutil.pc $(DESTDIR)$(pkgconfigdir)
 endif
 
 ifeq ($(PYTHON_BINDINGS),1)

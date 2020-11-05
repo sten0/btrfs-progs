@@ -24,11 +24,11 @@
 #include <limits.h>
 
 #include "kerncompat.h"
-#include "ctree.h"
-#include "volumes.h"
-#include "disk-io.h"
-#include "print-tree.h"
-#include "transaction.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/volumes.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/print-tree.h"
+#include "kernel-shared/transaction.h"
 #include "kernel-lib/list.h"
 #include "common/utils.h"
 #include "common/help.h"

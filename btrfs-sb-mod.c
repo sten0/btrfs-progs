@@ -25,7 +25,7 @@
 #include <limits.h>
 #include <byteswap.h>
 #include "crypto/crc32c.h"
-#include "disk-io.h"
+#include "kernel-shared/disk-io.h"
 
 #define BLOCKSIZE (4096)
 static char buf[BLOCKSIZE];
@@ -139,6 +139,19 @@ struct sb_field {
 	{ .name = "log_root_level",		.type = TYPE_U8 },
 	{ .name = "cache_generation",		.type = TYPE_U64 },
 	{ .name = "uuid_tree_generation",	.type = TYPE_U64 },
+	/* Device item members  */
+	{ .name = "dev_item.devid",		.type = TYPE_U64 },
+	{ .name = "dev_item.total_bytes",	.type = TYPE_U64 },
+	{ .name = "dev_item.bytes_used",	.type = TYPE_U64 },
+	{ .name = "dev_item.io_align",		.type = TYPE_U32 },
+	{ .name = "dev_item.io_width",		.type = TYPE_U32 },
+	{ .name = "dev_item.sector_size",	.type = TYPE_U32 },
+	{ .name = "dev_item.type",		.type = TYPE_U64 },
+	{ .name = "dev_item.generation",	.type = TYPE_U64 },
+	{ .name = "dev_item.start_offset",	.type = TYPE_U64 },
+	{ .name = "dev_item.dev_group",		.type = TYPE_U32 },
+	{ .name = "dev_item.seek_speed",	.type = TYPE_U8 },
+	{ .name = "dev_item.bandwidth",		.type = TYPE_U8 },
 };
 
 #define MOD_FIELD_XX(fname, set, val, bits, f_dec, f_hex, f_type)	\
@@ -154,11 +167,28 @@ struct sb_field {
 		}							\
 	}
 
+#define MOD_DEV_FIELD_XX(fname, set, val, bits, f_dec, f_hex, f_type)	\
+	else if (strcmp(name, "dev_item." #fname) == 0) {		\
+		if (set) {						\
+			printf("SET: dev_item."#fname" "f_dec" (0x"f_hex")\n",	\
+			(f_type)*val, (f_type)*val);			\
+			sb->dev_item.fname = cpu_to_le##bits(*val);	\
+		} else {						\
+			*val = le##bits##_to_cpu(sb->dev_item.fname);	\
+			printf("GET: dev_item."#fname" "f_dec" (0x"f_hex")\n", 	\
+			(f_type)*val, (f_type)*val);			\
+		}							\
+	}
+
 #define MOD_FIELD64(fname, set, val)					\
 	MOD_FIELD_XX(fname, set, val, 64, "%llu", "%llx", unsigned long long)
 
+#define MOD_DEV_FIELD64(fname, set, val)					\
+	MOD_DEV_FIELD_XX(fname, set, val, 64, "%llu", "%llx", unsigned long long)
+
 /* Alias for u64 */
 #define MOD_FIELD(fname, set, val)	MOD_FIELD64(fname, set, val)
+#define MOD_DEV_FIELD(fname, set, val)	MOD_DEV_FIELD64(fname, set, val)
 
 /*
  * Support only GET and SET properly, ADD and SUB may work
@@ -171,6 +201,15 @@ struct sb_field {
 
 #define MOD_FIELD8(fname, set, val)					\
 	MOD_FIELD_XX(fname, set, val, 8, "%hhu", "%hhx", unsigned char)
+
+#define MOD_DEV_FIELD32(fname, set, val)				\
+	MOD_DEV_FIELD_XX(fname, set, val, 32, "%u", "%x", unsigned int)
+
+#define MOD_DEV_FIELD16(fname, set, val)				\
+	MOD_DEV_FIELD_XX(fname, set, val, 16, "%hu", "%hx", unsigned short int)
+
+#define MOD_DEV_FIELD8(fname, set, val)					\
+	MOD_DEV_FIELD_XX(fname, set, val, 8, "%hhu", "%hhx", unsigned char)
 
 static void mod_field_by_name(struct btrfs_super_block *sb, int set, const char *name,
 		u64 *val)
@@ -202,6 +241,18 @@ static void mod_field_by_name(struct btrfs_super_block *sb, int set, const char 
 		MOD_FIELD8(log_root_level, set, val)
 		MOD_FIELD(cache_generation, set, val)
 		MOD_FIELD(uuid_tree_generation, set, val)
+		MOD_DEV_FIELD(devid, set, val)
+		MOD_DEV_FIELD(total_bytes, set, val)
+		MOD_DEV_FIELD(bytes_used, set, val)
+		MOD_DEV_FIELD32(io_align, set, val)
+		MOD_DEV_FIELD32(io_width, set, val)
+		MOD_DEV_FIELD32(sector_size, set, val)
+		MOD_DEV_FIELD(type, set, val)
+		MOD_DEV_FIELD(generation, set, val)
+		MOD_DEV_FIELD(start_offset, set, val)
+		MOD_DEV_FIELD32(dev_group, set, val)
+		MOD_DEV_FIELD8(seek_speed, set, val)
+		MOD_DEV_FIELD8(bandwidth, set, val)
 	else {
 		printf("ERROR: unhandled field: %s\n", name);
 		exit(1);
@@ -260,7 +311,8 @@ static int arg_to_op_value(const char *arg, enum field_op *op, u64 *val)
 	return 0;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
 	int fd;
 	loff_t off;
 	int ret;
@@ -274,6 +326,16 @@ int main(int argc, char **argv) {
 	memset(spec, 0, sizeof(spec));
 	if (argc <= 2) {
 		printf("Usage: %s image [fieldspec...]\n", argv[0]);
+		printf("Where fileldspec is: member op\n");
+		printf("  member: name of the superblock member\n");
+		printf("  op: single character optionally followed by a value\n");
+		printf("    . read the member value (no value)\n");
+		printf("    ? read the member value (no value)\n");
+		printf("    = set member to the exact value (value required)\n");
+		printf("    + add this value to member (value required)\n");
+		printf("    - subtract this value from member (value required)\n");
+		printf("    ^ xor member with this value (value required)\n");
+		printf("    @ byteswap of the member (no value)\n");
 		exit(1);
 	}
 	fd = open(argv[1], O_RDWR | O_EXCL);

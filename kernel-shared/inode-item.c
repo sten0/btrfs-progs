@@ -16,9 +16,9 @@
  * Boston, MA 021110-1307, USA.
  */
 
-#include "ctree.h"
-#include "disk-io.h"
-#include "transaction.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/transaction.h"
 
 static int find_name_in_backref(struct btrfs_path *path, const char * name,
 			 int name_len, struct btrfs_inode_ref **ref_ret)

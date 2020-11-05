@@ -91,10 +91,10 @@
 #include <pthread.h>
 #include <stdbool.h>
 
-#include "ctree.h"
-#include "disk-io.h"
-#include "volumes.h"
-#include "transaction.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/disk-io.h"
+#include "kernel-shared/volumes.h"
+#include "kernel-shared/transaction.h"
 #include "common/utils.h"
 #include "common/task-utils.h"
 #include "common/path-utils.h"
@@ -727,6 +727,24 @@ out:
 	return ret;
 }
 
+static int copy_free_space_tree(struct btrfs_convert_context *cctx)
+{
+	struct cache_tree *src = &cctx->free_space;
+	struct cache_tree *dst = &cctx->free_space_initial;
+	struct cache_extent *cache;
+	int ret = 0;
+
+	for (cache = search_cache_extent(src, 0);
+	     cache;
+	     cache = next_cache_extent(cache)) {
+		ret = add_merge_cache_extent(dst, cache->start, cache->size);
+		if (ret < 0)
+			return ret;
+		cctx->free_bytes_initial += cache->size;
+	}
+	return ret;
+}
+
 /*
  * Read used space, and since we have the used space,
  * calculate data_chunks and free for later mkfs
@@ -740,7 +758,10 @@ static int convert_read_used_space(struct btrfs_convert_context *cctx)
 		return ret;
 
 	ret = calculate_available_space(cctx);
-	return ret;
+	if (ret < 0)
+		return ret;
+
+	return copy_free_space_tree(cctx);
 }
 
 /*
@@ -1123,6 +1144,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	struct task_ctx ctx;
 	char features_buf[64];
 	struct btrfs_mkfs_config mkfs_cfg;
+	bool btrfs_sb_committed = false;
 
 	init_convert_context(&cctx);
 	ret = convert_open_fs(devname, &cctx);
@@ -1136,6 +1158,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	if (ret)
 		goto fail;
 
+	ASSERT(cctx.total_bytes != 0);
 	blocksize = cctx.blocksize;
 	total_bytes = (u64)blocksize * (u64)cctx.block_count;
 	if (blocksize < 4096) {
@@ -1163,7 +1186,10 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	printf("\tnodesize:  %u\n", nodesize);
 	printf("\tfeatures:  %s\n", features_buf);
 	printf("\tchecksum:  %s\n", btrfs_super_csum_name(csum_type));
-
+	printf("free space report:\n");
+	printf("\ttotal:     %llu\n",cctx.total_bytes);
+	printf("\tfree:      %llu (%.2f%%)\n", cctx.free_bytes_initial,
+			100.0 * cctx.free_bytes_initial / cctx.total_bytes);
 	memset(&mkfs_cfg, 0, sizeof(mkfs_cfg));
 	mkfs_cfg.csum_type = csum_type;
 	mkfs_cfg.label = cctx.volume_name;
@@ -1269,6 +1295,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		error("unable to migrate super block: %d", ret);
 		goto fail;
 	}
+	btrfs_sb_committed = true;
 
 	root = open_ctree_fd(fd, devname, 0,
 			     OPEN_CTREE_WRITES | OPEN_CTREE_TEMPORARY_SUPER);
@@ -1286,8 +1313,12 @@ fail:
 	clean_convert_context(&cctx);
 	if (fd != -1)
 		close(fd);
-	warning(
-"an error occurred during conversion, filesystem is partially created but not finalized and not mountable");
+	if (btrfs_sb_committed)
+		warning(
+"error during conversion, filesystem is partially created but not finalized and not mountable");
+	else
+		warning(
+"error during conversion, the original filesystem is not modified");
 	return -1;
 }
 
