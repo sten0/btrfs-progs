@@ -18,7 +18,7 @@ Build-Depends: debhelper-compat (= 12),
 	       python3-dev,
 	       python3-setuptools,
 	       dh-python,
-Standards-Version: 4.5.0
+Standards-Version: 4.5.1
 Rules-Requires-Root: no
 Homepage: http://btrfs.wiki.kernel.org/
 Vcs-Browser: https://salsa.debian.org/debian/btrfs-progs/tree/debian
