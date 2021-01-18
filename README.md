@@ -1,4 +1,4 @@
-Btrfs-progs [![build status](https://travis-ci.org/kdave/btrfs-progs.svg?branch=devel)](https://travis-ci.org/kdave/btrfs-progs) [![coverity status](https://scan.coverity.com/projects/617/badge.svg)](https://scan.coverity.com/projects/btrfs-progs) [![gitlab CI/CD](https://gitlab.com/kdave/btrfs-progs)](https://gitlab.com/kdave/btrfs-progs/badges/devel/build.svg)
+Btrfs-progs [![build status](https://travis-ci.org/kdave/btrfs-progs.svg?branch=devel)](https://travis-ci.org/kdave/btrfs-progs) [![coverity status](https://scan.coverity.com/projects/617/badge.svg)](https://scan.coverity.com/projects/btrfs-progs)
 ===========
 
 Userspace utilities to manage btrfs filesystems.
@@ -84,7 +84,7 @@ the patches meet some criteria (often lacking in github contributions):
 
 Source code coding style and preferences follow the
 [kernel coding style](https://www.kernel.org/doc/html/latest/process/coding-style.html).
-You can find the editor settins in `.editorconfig` and use the
+You can find the editor settings in `.editorconfig` and use the
 [EditorConfig](https://editorconfig.org/) plugin to let your editor use that,
 or update your editor settings manually.
 

@@ -35,6 +35,7 @@
 #include <linux/kdev_t.h>
 #include <limits.h>
 #include <blkid/blkid.h>
+#include <libmount/libmount.h>
 #include <sys/vfs.h>
 #include <sys/statfs.h>
 #include <linux/magic.h>
@@ -1097,32 +1098,34 @@ out:
 	return ret;
 }
 
+int get_fsid_fd(int fd, u8 *fsid)
+{
+	int ret;
+	struct btrfs_ioctl_fs_info_args args;
+
+	ret = ioctl(fd, BTRFS_IOC_FS_INFO, &args);
+	if (ret < 0)
+		return -errno;
+
+	memcpy(fsid, args.fsid, BTRFS_FSID_SIZE);
+	return 0;
+}
+
 int get_fsid(const char *path, u8 *fsid, int silent)
 {
 	int ret;
 	int fd;
-	struct btrfs_ioctl_fs_info_args args;
 
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		ret = -errno;
 		if (!silent)
 			error("failed to open %s: %m", path);
-		goto out;
+		return -errno;
 	}
 
-	ret = ioctl(fd, BTRFS_IOC_FS_INFO, &args);
-	if (ret < 0) {
-		ret = -errno;
-		goto out;
-	}
+	ret = get_fsid_fd(fd, fsid);
+	close(fd);
 
-	memcpy(fsid, args.fsid, BTRFS_FSID_SIZE);
-	ret = 0;
-
-out:
-	if (fd != -1)
-		close(fd);
 	return ret;
 }
 
@@ -1239,6 +1242,107 @@ int ask_user(const char *question)
 	return fgets(buf, sizeof(buf) - 1, stdin) &&
 	       (answer = strtok_r(buf, " \t\n\r", &saveptr)) &&
 	       (!strcasecmp(answer, "yes") || !strcasecmp(answer, "y"));
+}
+
+/*
+ * Use libmount to compare the subvol passed with the pathname of the directory
+ * mounted in btrfs. The pathname inside btrfs is different from getmnt and
+ * friends, since it can detect bind mounts to content from the inside of the
+ * original mount.
+ *
+ * Example:
+ *   # mount -o subvol=/vol /dev/sda2 /mnt
+ *   # mount --bind /mnt/dir2 /othermnt
+ *
+ *   # mounts
+ *   ...
+ *   /dev/sda2 on /mnt type btrfs (ro,relatime,ssd,space_cache,subvolid=256,subvol=/vol)
+ *   /dev/sda2 on /othermnt type btrfs (ro,relatime,ssd,space_cache,subvolid=256,subvol=/vol)
+ *
+ *   # cat /proc/self/mountinfo
+ *
+ *   38 30 0:32 /vol /mnt ro,relatime - btrfs /dev/sda2 ro,ssd,space_cache,subvolid=256,subvol=/vol
+ *   37 29 0:32 /vol/dir2 /othermnt ro,relatime - btrfs /dev/sda2 ro,ssd,space_cache,subvolid=256,subvol=/vol
+ *
+ * If we try to find a mounpoint only using subvol and subvolid from mount
+ * options we would get mislead to belive that /othermnt has the same content
+ * from /mnt.
+ *
+ * But, using mountinfo, we have the pathaname _inside_ the filesystem, so we
+ * can filter out the mount points with bind mounts which has different content
+ * from the original mounts, in this case the mount point with id 37.
+ */
+int find_mount_fsroot(const char *subvol, const char *subvolid, char **mount)
+{
+	struct libmnt_cache *cache;
+	struct libmnt_iter *iter;
+	struct libmnt_fs *fs;
+	struct libmnt_table *tb;
+
+	tb = mnt_new_table_from_file("/proc/self/mountinfo");
+	if (!tb)
+		return -1;
+
+	iter = mnt_new_iter(MNT_ITER_FORWARD);
+	if (!iter)
+		goto out_table;
+
+	cache = mnt_new_cache();
+	if (!cache)
+		goto out_iter;
+
+	if (mnt_table_set_cache(tb, cache))
+		goto out_cache;
+
+	while (mnt_table_next_fs(tb, iter, &fs) == 0) {
+		const char *mnt_root = mnt_fs_get_root(fs);
+		bool found = true;
+		char *subid = NULL;
+		size_t id_siz;
+
+		/*
+		 * Check any combination that would lead to an undesired mount
+		 * point and remove from the table.
+		 */
+		if (strcmp(mnt_fs_get_fstype(fs), "btrfs") != 0)
+			found = false;
+		else if (strlen(mnt_root) != strlen(subvol))
+			found = false;
+		else if (strcmp(mnt_root, subvol) != 0)
+			found = false;
+		else if (mnt_fs_get_option(fs, "subvolid", &subid, &id_siz))
+			found = false;
+		else if (strncmp(subid, subvolid, id_siz) != 0)
+			found = false;
+
+		if (!found)
+			mnt_table_remove_fs(tb, fs);
+	}
+
+	/* Rewind the iterator to make second pass */
+	mnt_reset_iter(iter, MNT_ITER_FORWARD);
+
+	/*
+	 * What remains in the list are the mount itself and possible bind mounts
+	 * referring to the same pathname mounted by the original mount. As in
+	 * this case the mount point would have the same content of the original
+	 * mount, we can safely return the first entry.
+	 */
+	if (!mnt_table_is_empty(tb)) {
+		mnt_table_next_fs(tb, iter, &fs);
+		*mount = strdup(mnt_fs_get_target(fs));
+	}
+
+	return 0;
+
+out_cache:
+	mnt_unref_cache(cache);
+out_iter:
+	mnt_free_iter(iter);
+out_table:
+	mnt_unref_table(tb);
+
+	return -1;
 }
 
 /*
@@ -1889,4 +1993,157 @@ int btrfs_warn_multiple_profiles(int fd)
 	free(system_prof);
 
 	return 1;
+}
+
+/*
+ * Open a file in fsid directory in sysfs and return the file descriptor or
+ * error
+ */
+int sysfs_open_fsid_file(int fd, const char *filename)
+{
+	u8 fsid[BTRFS_UUID_SIZE];
+	char fsid_str[BTRFS_UUID_UNPARSED_SIZE];
+	char sysfs_file[PATH_MAX];
+	int ret;
+
+	ret = get_fsid_fd(fd, fsid);
+	if (ret < 0)
+		return ret;
+	uuid_unparse(fsid, fsid_str);
+
+	ret = path_cat3_out(sysfs_file, "/sys/fs/btrfs", fsid_str, filename);
+	if (ret < 0)
+		return ret;
+
+	return open(sysfs_file, O_RDONLY);
+}
+
+/*
+ * Read up to @size bytes to @buf from @fd
+ */
+int sysfs_read_file(int fd, char *buf, size_t size)
+{
+	lseek(fd, 0, SEEK_SET);
+	memset(buf, 0, size);
+	return read(fd, buf, size);
+}
+
+static const char exclop_def[][16] = {
+	[BTRFS_EXCLOP_NONE]		"none",
+	[BTRFS_EXCLOP_BALANCE]		"balance",
+	[BTRFS_EXCLOP_DEV_ADD]		"device add",
+	[BTRFS_EXCLOP_DEV_REMOVE]	"device remove",
+	[BTRFS_EXCLOP_DEV_REPLACE]	"device replace",
+	[BTRFS_EXCLOP_RESIZE]		"resize",
+	[BTRFS_EXCLOP_SWAP_ACTIVATE]	"swap activate",
+};
+
+/*
+ * Read currently running exclusive operation from sysfs. If this is not
+ * available, return BTRFS_EXCLOP_UNKNOWN
+ */
+int get_fs_exclop(int fd)
+{
+	int sysfs_fd;
+	char buf[32];
+	int ret;
+	int i;
+
+	sysfs_fd = sysfs_open_fsid_file(fd, "exclusive_operation");
+	if (sysfs_fd < 0)
+		return BTRFS_EXCLOP_UNKNOWN;
+
+	memset(buf, 0, sizeof(buf));
+	ret = sysfs_read_file(sysfs_fd, buf, sizeof(buf));
+	close(sysfs_fd);
+	if (ret <= 0)
+		return BTRFS_EXCLOP_UNKNOWN;
+
+	i = strlen(buf) - 1;
+	while (i > 0 && isspace(buf[i])) i--;
+	if (i > 0)
+		buf[i + 1] = 0;
+	for (i = 0; i < ARRAY_SIZE(exclop_def); i++) {
+		if (strcmp(exclop_def[i], buf) == 0)
+			return i;
+	}
+
+	return BTRFS_EXCLOP_UNKNOWN;
+}
+
+const char *get_fs_exclop_name(int op)
+{
+	if (0 <= op && op <= ARRAY_SIZE(exclop_def))
+		return exclop_def[op];
+	return "UNKNOWN";
+}
+
+/*
+ * Check if there's another exclusive operation running and either return error
+ * or wait until there's none in case @enqueue is true. The timeout between
+ * checks is 1 minute as we get notification on the sysfs file when the
+ * operation finishes.
+ *
+ * Return:
+ * 0  - caller can continue, nothing running or the status is not available
+ * 1  - another operation running
+ * <0 - there was another error
+ */
+int check_running_fs_exclop(int fd, enum exclusive_operation start, bool enqueue)
+{
+	int sysfs_fd;
+	int exclop;
+	int ret;
+
+	sysfs_fd = sysfs_open_fsid_file(fd, "exclusive_operation");
+	if (sysfs_fd < 0) {
+		if (errno == ENOENT)
+			return 0;
+		return -errno;
+	}
+
+	exclop = get_fs_exclop(fd);
+	if (exclop <= 0) {
+		ret = 0;
+		goto out;
+	}
+
+	if (!enqueue) {
+		error(
+	"unable to start %s, another exclusive operation '%s' in progress",
+			get_fs_exclop_name(start),
+			get_fs_exclop_name(exclop));
+		ret = 1;
+		goto out;
+	}
+
+	while (exclop > 0) {
+		fd_set fds;
+		struct timeval tv = { .tv_sec = 60, .tv_usec = 0 };
+
+		FD_ZERO(&fds);
+		FD_SET(sysfs_fd, &fds);
+
+		ret = select(sysfs_fd + 1, NULL, NULL, &fds, &tv);
+		if (ret < 0) {
+			ret = -errno;
+			break;
+		}
+		if (ret > 0) {
+			/*
+			 * Notified before the timeout, check again before
+			 * returning. In case there are more operations
+			 * waiting, we want to reduce the chances to race so
+			 * reuse the remaining time to randomize the order.
+			 */
+			tv.tv_sec /= 2;
+			ret = select(sysfs_fd + 1, NULL, NULL, &fds, &tv);
+			exclop = get_fs_exclop(fd);
+			continue;
+		}
+	}
+out:
+	close(sysfs_fd);
+
+	return ret;
 }

@@ -98,6 +98,7 @@ static void fmt_separator(struct format_ctx *fctx)
 void fmt_start(struct format_ctx *fctx, const struct rowspec *spec, int width,
 		int indent)
 {
+	memset(fctx, 0, sizeof(*fctx));
 	fctx->width = width;
 	fctx->indent = indent;
 	fctx->rowspec = spec;
@@ -186,10 +187,12 @@ void fmt_print_start_group(struct format_ctx *fctx, const char *name,
 		fmt_inc_depth(fctx);
 		fctx->jtype[fctx->depth] = jtype;
 		fctx->memb[fctx->depth] = 0;
+		if (name)
+			printf("\"%s\": ", name);
 		if (jtype == JSON_TYPE_MAP)
-			printf("\"%s\": {", name);
+			putchar('{');
 		else if (jtype == JSON_TYPE_ARRAY)
-			printf("\"%s\": [", name);
+			putchar('[');
 		else
 			fmt_error(fctx);
 	}
