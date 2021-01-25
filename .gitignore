@@ -26,6 +26,7 @@
 /btrfs-crc
 /btrfstune
 /btrfstune.static
+/btrfs-sb-mod
 /mktables
 
 /libbtrfs.a
@@ -47,6 +48,8 @@
 /ioctl-test
 /send-test
 /quick-test
+/json-formatter-test
+/hash-speedtest
 
 /aclocal.m4
 /autom4te.cache

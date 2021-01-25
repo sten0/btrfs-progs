@@ -5,6 +5,7 @@ The Btrfs utility programs require the following libraries/tools to build:
 
 - libuuid - provided by util-linux, e2fsprogs/e2fslibs or libuuid
 - libblkid - block device id library
+- libmount - provided by util-linux, access /proc information about mount points
 - liblzo2 - LZO data compression library
 - zlib - ZLIB data compression library
 - libzstd - ZSTD data compression library version >= 1.0.0
@@ -14,7 +15,7 @@ For the btrfs-convert utility:
 - e2fsprogs - ext2/ext3/ext4 file system libraries, or called e2fslibs
 - libreiserfscore - reiserfs file system library version >= 3.6.27
 
-Optionally, the checksums based on cryptographic hashes can be implemeted by
+Optionally, the checksums based on cryptographic hashes can be implemented by
 external libraries. Builtin implementations are provided in case the library
 dependencies are not desired.
 

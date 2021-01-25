@@ -36,6 +36,7 @@
 #include "common/path-utils.h"
 #include "common/device-utils.h"
 #include "common/device-scan.h"
+#include "common/format-output.h"
 #include "mkfs/common.h"
 
 static const char * const device_cmd_group_usage[] = {
@@ -49,6 +50,8 @@ static const char * const cmd_device_add_usage[] = {
 	"",
 	"-K|--nodiscard    do not perform whole device TRIM on devices that report such capability",
 	"-f|--force        force overwrite existing filesystem on the disk",
+	"--enqueue         wait if there's another exclusive operation running,",
+	"                  otherwise continue",
 	NULL
 };
 
@@ -61,13 +64,16 @@ static int cmd_device_add(const struct cmd_struct *cmd,
 	int discard = 1;
 	int force = 0;
 	int last_dev;
+	bool enqueue = false;
 
 	optind = 0;
 	while (1) {
 		int c;
+		enum { GETOPT_VAL_ENQUEUE = 256 };
 		static const struct option long_options[] = {
 			{ "nodiscard", optional_argument, NULL, 'K'},
 			{ "force", no_argument, NULL, 'f'},
+			{ "enqueue", no_argument, NULL, GETOPT_VAL_ENQUEUE},
 			{ NULL, 0, NULL, 0}
 		};
 
@@ -80,6 +86,9 @@ static int cmd_device_add(const struct cmd_struct *cmd,
 			break;
 		case 'f':
 			force = 1;
+			break;
+		case GETOPT_VAL_ENQUEUE:
+			enqueue = true;
 			break;
 		default:
 			usage_unknown_option(cmd, argv);
@@ -95,6 +104,14 @@ static int cmd_device_add(const struct cmd_struct *cmd,
 	fdmnt = btrfs_open_dir(mntpnt, &dirstream, 1);
 	if (fdmnt < 0)
 		return 1;
+
+	ret = check_running_fs_exclop(fdmnt, BTRFS_EXCLOP_DEV_ADD, enqueue);
+	if (ret != 0) {
+		if (ret < 0)
+			error("unable to check status of exclusive operation: %m");
+		close_file_or_dir(fdmnt, dirstream);
+		return 1;
+	}
 
 	for (i = optind; i < last_dev; i++){
 		struct btrfs_ioctl_vol_args ioctl_args;
@@ -155,8 +172,28 @@ static int _cmd_device_remove(const struct cmd_struct *cmd,
 	char	*mntpnt;
 	int i, fdmnt, ret = 0;
 	DIR	*dirstream = NULL;
+	bool enqueue = false;
 
-	clean_args_no_options(cmd, argc, argv);
+	optind = 0;
+	while (1) {
+		int c;
+		enum { GETOPT_VAL_ENQUEUE = 256 };
+		static const struct option long_options[] = {
+			{ "enqueue", no_argument, NULL, GETOPT_VAL_ENQUEUE},
+			{ NULL, 0, NULL, 0}
+		};
+
+		c = getopt_long(argc, argv, "", long_options, NULL);
+		if (c < 0)
+			break;
+		switch (c) {
+		case GETOPT_VAL_ENQUEUE:
+			enqueue = true;
+			break;
+		default:
+			usage_unknown_option(cmd, argv);
+		}
+	}
 
 	if (check_argc_min(argc - optind, 2))
 		return 1;
@@ -166,6 +203,14 @@ static int _cmd_device_remove(const struct cmd_struct *cmd,
 	fdmnt = btrfs_open_dir(mntpnt, &dirstream, 1);
 	if (fdmnt < 0)
 		return 1;
+
+	ret = check_running_fs_exclop(fdmnt, BTRFS_EXCLOP_DEV_REMOVE, enqueue);
+	if (ret != 0) {
+		if (ret < 0)
+			error("unable to check status of exclusive operation: %m");
+		close_file_or_dir(fdmnt, dirstream);
+		return 1;
+	}
 
 	for(i = optind; i < argc - 1; i++) {
 		struct	btrfs_ioctl_vol_args arg;
@@ -244,6 +289,8 @@ static const char * const cmd_device_remove_usage[] = {
 	"Remove a device from a filesystem",
 	COMMON_USAGE_REMOVE_DELETE,
 	"",
+	"--enqueue         wait if there's another exclusive operation running,",
+	"                  otherwise continue",
 	NULL
 };
 
@@ -259,6 +306,8 @@ static const char * const cmd_device_delete_usage[] = {
 	"Remove a device from a filesystem (alias of \"btrfs device remove\")",
 	COMMON_USAGE_REMOVE_DELETE,
 	"",
+	"--enqueue         wait if there's another exclusive operation running,",
+	"                  otherwise continue",
 	NULL
 };
 
@@ -459,6 +508,17 @@ out:
 }
 static DEFINE_SIMPLE_COMMAND(device_ready, "ready");
 
+static const struct rowspec device_stats_rowspec[] = {
+	{ .key = "device", .fmt = "%s", .out_text = "device", .out_json = "device" },
+	{ .key = "devid", .fmt = "%u", .out_text = "devid", .out_json = "devid" },
+	{ .key = "write_io_errs", .fmt = "%llu", .out_text = "write_io_errs", .out_json = "write_io_errs" },
+	{ .key = "read_io_errs", .fmt = "%llu", .out_text = "read_io_errs", .out_json = "read_io_errs" },
+	{ .key = "flush_io_errs", .fmt = "%llu", .out_text = "flush_io_errs", .out_json = "flush_io_errs" },
+	{ .key = "corruption_errs", .fmt = "%llu", .out_text = "corruption_errs", .out_json = "corruption_errs" },
+	{ .key = "generation_errs", .fmt = "%llu", .out_text = "generation_errs", .out_json = "generation_errs" },
+	ROWSPEC_END
+};
+
 static const char * const cmd_device_stats_usage[] = {
 	"btrfs device stats [options] <path>|<device>",
 	"Show device IO error statistics",
@@ -467,6 +527,8 @@ static const char * const cmd_device_stats_usage[] = {
 	"",
 	"-c|--check             return non-zero if any stat counter is not zero",
 	"-z|--reset             show current stats and reset values to zero",
+	HELPINFO_INSERT_GLOBALS,
+	HELPINFO_INSERT_FORMAT,
 	NULL
 };
 
@@ -482,6 +544,7 @@ static int cmd_device_stats(const struct cmd_struct *cmd, int argc, char **argv)
 	int check = 0;
 	__u64 flags = 0;
 	DIR *dirstream = NULL;
+	struct format_ctx fctx;
 
 	optind = 0;
 	while (1) {
@@ -530,6 +593,8 @@ static int cmd_device_stats(const struct cmd_struct *cmd, int argc, char **argv)
 		goto out;
 	}
 
+	fmt_start(&fctx, device_stats_rowspec, 24, 0);
+	fmt_print_start_group(&fctx, "device-stats", JSON_TYPE_ARRAY);
 	for (i = 0; i < fi_args.num_devices; i++) {
 		struct btrfs_ioctl_get_dev_stats args = {0};
 		char path[BTRFS_DEVICE_PATH_NAME_MAX + 1];
@@ -548,6 +613,7 @@ static int cmd_device_stats(const struct cmd_struct *cmd, int argc, char **argv)
 			err |= 1;
 		} else {
 			char *canonical_path;
+			char devid_str[32];
 			int j;
 			static const struct {
 				const char name[32];
@@ -561,6 +627,11 @@ static int cmd_device_stats(const struct cmd_struct *cmd, int argc, char **argv)
 				{ "generation_errs",
 					BTRFS_DEV_STAT_GENERATION_ERRS },
 			};
+			/*
+			 * The plain text and json formats cannot be
+			 * mapped directly in all cases and we have to switch
+			 */
+			const bool json = (bconf.output_format == CMD_FORMAT_JSON);
 
 			canonical_path = canonicalize_path(path);
 
@@ -574,23 +645,41 @@ static int cmd_device_stats(const struct cmd_struct *cmd, int argc, char **argv)
 				snprintf(canonical_path, 32,
 					 "devid:%llu", args.devid);
 			}
+			snprintf(devid_str, 32, "%llu", args.devid);
+			fmt_print_start_group(&fctx, NULL, JSON_TYPE_MAP);
+			/* Plain text does not print device info */
+			if (json) {
+				fmt_print(&fctx, "device", canonical_path);
+				fmt_print(&fctx, "devid", di_args[i].devid);
+			}
 
 			for (j = 0; j < ARRAY_SIZE(dev_stats); j++) {
 				/* We got fewer items than we know */
 				if (args.nr_items < dev_stats[j].num + 1)
 					continue;
-				printf("[%s].%-16s %llu\n", canonical_path,
-					dev_stats[j].name,
-					(unsigned long long)
-					 args.values[dev_stats[j].num]);
+
+				/* Own format due to [/dev/name].value */
+				if (json) {
+					fmt_print(&fctx, dev_stats[j].name,
+						args.values[dev_stats[j].num]);
+				} else {
+					printf("[%s].%-16s %llu\n",
+						canonical_path,
+						dev_stats[j].name,
+						(unsigned long long)
+						args.values[dev_stats[j].num]);
+				}
 				if ((check == 1)
 				    && (args.values[dev_stats[j].num] > 0))
 					err |= 64;
 			}
-
+			fmt_print_end_group(&fctx, NULL);
 			free(canonical_path);
 		}
 	}
+
+	fmt_print_end_group(&fctx, "device-stats");
+	fmt_end(&fctx);
 
 out:
 	free(di_args);
@@ -598,7 +687,7 @@ out:
 
 	return err;
 }
-static DEFINE_SIMPLE_COMMAND(device_stats, "stats");
+static DEFINE_COMMAND_WITH_FLAGS(device_stats, "stats", CMD_FORMAT_JSON);
 
 static const char * const cmd_device_usage_usage[] = {
 	"btrfs device usage [options] <path> [<path>..]",

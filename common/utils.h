@@ -52,6 +52,17 @@
 #define UNITS_HUMAN			(UNITS_HUMAN_BINARY)
 #define UNITS_DEFAULT			(UNITS_HUMAN)
 
+enum exclusive_operation {
+	BTRFS_EXCLOP_NONE,
+	BTRFS_EXCLOP_BALANCE,
+	BTRFS_EXCLOP_DEV_ADD,
+	BTRFS_EXCLOP_DEV_REMOVE,
+	BTRFS_EXCLOP_DEV_REPLACE,
+	BTRFS_EXCLOP_RESIZE,
+	BTRFS_EXCLOP_SWAP_ACTIVATE,
+	BTRFS_EXCLOP_UNKNOWN = -1,
+};
+
 void units_set_mode(unsigned *units, unsigned mode);
 void units_set_base(unsigned *units, unsigned base);
 
@@ -75,6 +86,10 @@ void close_file_or_dir(int fd, DIR *dirstream);
 int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 		struct btrfs_ioctl_dev_info_args **di_ret);
 int get_fsid(const char *path, u8 *fsid, int silent);
+int get_fsid_fd(int fd, u8 *fsid);
+int get_fs_exclop(int fd);
+int check_running_fs_exclop(int fd, enum exclusive_operation start, bool enqueue);
+const char *get_fs_exclop_name(int op);
 
 int get_label(const char *btrfs_dev, char *label);
 int set_label(const char *btrfs_dev, const char *label);
@@ -92,6 +107,7 @@ int csum_tree_block(struct btrfs_fs_info *root, struct extent_buffer *buf,
 int ask_user(const char *question);
 int lookup_path_rootid(int fd, u64 *rootid);
 int get_btrfs_mount(const char *dev, char *mp, size_t mp_size);
+int find_mount_fsroot(const char *subvol, const char *subvolid, char **mount);
 int find_mount_root(const char *path, char **mount_root);
 int get_device_info(int fd, u64 devid,
 		struct btrfs_ioctl_dev_info_args *di_args);
@@ -151,5 +167,8 @@ void init_rand_seed(u64 seed);
 
 char *btrfs_test_for_multiple_profiles(int fd);
 int btrfs_warn_multiple_profiles(int fd);
+
+int sysfs_open_fsid_file(int fd, const char *filename);
+int sysfs_read_file(int fd, char *buf, size_t size);
 
 #endif
