@@ -1,3 +1,11 @@
+btrfs-progs (5.11-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Drop libmount-dev from B-Deps again.
+  * Install libbtrfsutil.pc
+
+ -- Adam Borowski <kilobyte@angband.pl>  Mon, 08 Mar 2021 00:05:00 +0100
+
 btrfs-progs (5.10.1-1) unstable; urgency=medium
 
   * New upstream bugfix release.
