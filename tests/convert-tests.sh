@@ -13,7 +13,7 @@ if [ -z "$TOP" ]; then
 		INTERNAL_BIN="$TOP"
 	else
 		# external, defaults to system binaries
-		TOP=$(dirname `which btrfs`)
+		TOP=$(dirname `type -p btrfs`)
 		TEST_TOP="$SCRIPT_DIR"
 		INTERNAL_BIN="$TEST_TOP"
 	fi
@@ -70,6 +70,7 @@ run_one_test() {
 			fi
 			_fail "test failed for case $testname"
 		fi
+		check_test_results "$RESULTS" "$testname"
 	else
 		_fail "custom test script not found"
 	fi

@@ -503,7 +503,8 @@ static const char * const cmd_balance_start_usage[] = {
 	"-d[filters]    act on data chunks",
 	"-m[filters]    act on metadata chunks",
 	"-s[filters]    act on system chunks (only under -f)",
-	"-f             force a reduction of metadata integrity",
+	"-f             force a reduction of metadata integrity, or",
+	"               skip timeout when converting to RAID56 profiles",
 	"--full-balance do not print warning and do not delay start",
 	"--background|--bg",
 	"               run the balance as a background process",
@@ -526,6 +527,7 @@ static int cmd_balance_start(const struct cmd_struct *cmd,
 	int background = 0;
 	bool enqueue = false;
 	unsigned start_flags = 0;
+	bool raid56_warned = false;
 	int i;
 
 	memset(&args, 0, sizeof(args));
@@ -632,11 +634,45 @@ static int cmd_balance_start(const struct cmd_struct *cmd,
 
 	/* soft makes sense only when convert for corresponding type is set */
 	for (i = 0; ptrs[i]; i++) {
+		int delay = 10;
+
 		if ((ptrs[i]->flags & BTRFS_BALANCE_ARGS_SOFT) &&
 		    !(ptrs[i]->flags & BTRFS_BALANCE_ARGS_CONVERT)) {
 			error("'soft' option can be used only when converting profiles");
 			return 1;
 		}
+
+		if (!(ptrs[i]->flags & BTRFS_BALANCE_ARGS_CONVERT))
+			continue;
+
+		if (!(ptrs[i]->flags & (BTRFS_BLOCK_GROUP_RAID6 |
+					BTRFS_BLOCK_GROUP_RAID5)))
+			continue;
+
+		if (raid56_warned)
+			continue;
+
+		raid56_warned = true;
+		printf("WARNING:\n\n");
+		printf("\tRAID5/6 support has known problems and is strongly discouraged\n");
+		printf("\tto be used besides testing or evaluation. It is recommended that\n");
+		printf("\tyou use one of the other RAID profiles.\n");
+		/*
+		 * Override timeout by the --force option too, though it's
+		 * otherwise used for allowing redundancy reduction.
+		 */
+		if (force) {
+			printf("\tSafety timeout skipped due to --force\n\n");
+			continue;
+		}
+		printf("\tThe operation will continue in %d seconds.\n", delay);
+		printf("\tUse Ctrl-C to stop.\n");
+		while (delay) {
+			printf("%2d", delay--);
+			fflush(stdout);
+			sleep(1);
+		}
+		printf("\nStarting conversion to RAID5/6.\n");
 	}
 
 	if (!(start_flags & BALANCE_START_FILTERS) && !(start_flags & BALANCE_START_NOWARN)) {

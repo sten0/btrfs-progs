@@ -19,6 +19,8 @@ tools.  Currently covers:
 . file attributes
 . control device
 . filesystems with multiple block group profiles
+. seeding device
+. raid56 status and recommended practices
 
 
 MOUNT OPTIONS
@@ -920,16 +922,28 @@ filesystem module:
   for a given filesystem
 * get the supported features (can be also found under '/sys/fs/btrfs/features')
 
-The device is usually created by a system device node manager (eg. udev), but
-can be created manually:
+The device is created when btrfs is initialized, either as a module or a
+built-in functionality and makes sense only in connection with that. Running
+eg. mkfs without the module loaded will not register the device and will
+probably warn about that.
+
+In rare cases when the module is loaded but the device is not present (most
+likely accidentally deleted), it's possible to recreate it by
 
 --------------------
 # mknod --mode=600 /dev/btrfs-control c 10 234
 --------------------
 
+or (since 5.11) by a convenience command
+
+--------------------
+# btrfs rescue create-control-device
+--------------------
+
 The control device is not strictly required but the device scanning will not
 work and a workaround would need to be used to mount a multi-device filesystem.
-The mount option 'device' can trigger the device scanning during mount.
+The mount option 'device' can trigger the device scanning during mount, see
+also *btrfs device scan*.
 
 
 FILESYSTEM WITH MULTIPLE PROFILES
@@ -993,6 +1007,132 @@ that report space usage: 'filesystem df', 'device usage'. The command
 ---------------
     Multiple profiles:                 yes (data, metadata)
 ---------------
+
+
+SEEDING DEVICE
+--------------
+
+The COW mechanism and multiple devices under one hood enable an interesting
+concept, called a seeding device: extending a read-only filesystem on a single
+device filesystem with another device that captures all writes. For example
+imagine an immutable golden image of an operating system enhanced with another
+device that allows to use the data from the golden image and normal operation.
+This idea originated on CD-ROMs with base OS and allowing to use them for live
+systems, but this became obsolete. There are technologies providing similar
+functionality, like 'unionmount', 'overlayfs' or 'qcow2' image snapshot.
+
+The seeding device starts as a normal filesystem, once the contents is ready,
+*btrfstune -S 1* is used to flag it as a seeding device. Mounting such device
+will not allow any writes, except adding a new device by *btrfs device add*.
+Then the filesystem can be remounted as read-write.
+
+Given that the filesystem on the seeding device is always recognized as
+read-only, it can be used to seed multiple filesystems, at the same time. The
+UUID that is normally attached to a device is automatically changed to a random
+UUID on each mount.
+
+Once the seeding device is mounted, it needs the writable device. After adding
+it, something like 'remount -o remount,rw /path' makes the filesystem at
+'/path' ready for use. The simplest usecase is to throw away all changes by
+unmounting the filesystem when convenient.
+
+Alternatively, deleting the seeding device from the filesystem can turn it into
+a normal filesystem, provided that the writable device can also contain all the
+data from the seeding device.
+
+The seeding device flag can be cleared again by *btrfstune -f -s 0*, eg.
+allowing to update with newer data but please note that this will invalidate
+all existing filesystems that use this particular seeding device. This works
+for some usecases, not for others, and a forcing flag to the command is
+mandatory to avoid accidental mistakes.
+
+Example how to create and use one seeding device:
+
+---------------
+# mkfs.btrfs /dev/sda
+# mount /dev/sda /mnt/mnt1
+# ... fill mnt1 with data
+# umount /mnt/mnt1
+# btrfstune -S 1 /dev/sda
+# mount /dev/sda /mnt/mnt1
+# btrfs device add /dev/sdb /mnt
+# mount -o remount,rw /mnt/mnt1
+# ... /mnt/mnt1 is now writable
+---------------
+
+Now '/mnt/mnt1' can be used normally. The device '/dev/sda' can be mounted
+again with a another writable device:
+
+---------------
+# mount /dev/sda /mnt/mnt2
+# btrfs device add /dev/sdc /mnt/mnt2
+# mount -o remount,rw /mnt/mnt2
+# ... /mnt/mnt2 is now writable
+---------------
+
+The writable device ('/dev/sdb') can be decoupled from the seeding device and
+used independently:
+
+---------------
+# btrfs device delete /dev/sda /mnt/mnt1
+---------------
+
+As the contents originated in the seeding device, it's possible to turn
+'/dev/sdb' to a seeding device again and repeat the whole process.
+
+A few things to note:
+
+* it's recommended to use only single device for the seeding device, it works
+  for multiple devices but the 'single' profile must be used in order to make
+  the seeding device deletion work
+* block group profiles 'single' and 'dup' support the usecases above
+* the label is copied from the seeding device and can be changed by *btrfs filesystem label*
+* each new mount of the seeding device gets a new random UUID
+
+
+RAID56 STATUS AND RECOMMENDED PRACTICES
+---------------------------------------
+
+The RAID56 feature provides striping and parity over several devices, same as
+the traditional RAID5/6. There are some implementation and design deficiencies
+that make it unreliable for some corner cases and the feature **should not be
+used in production, only for evaluation or testing**.  The power failure safety
+for metadata with RAID56 is not 100%.
+
+Metadata
+~~~~~~~~
+
+Do not use 'raid5' nor 'raid6' for metadata. Use 'raid1' or 'raid1c3'
+respectively.
+
+The substitute profiles provide the same guarantees against loss of 1 or 2
+devices, and in some respect can be an improvement.  Recovering from one
+missing device will only need to access the remaining 1st or 2nd copy, that in
+general may be stored on some other devices due to the way RAID1 works on
+btrfs, unlike on a striped profile (similar to 'raid0') that would need all
+devices all the time.
+
+The space allocation pattern and consumption is different (eg. on N devices):
+for 'raid5' as an example, a 1GiB chunk is reserved on each device, while with
+'raid1' there's each 1GiB chunk stored on 2 devices. The consumption of each
+1GiB of used metadata is then 'N * 1GiB' for vs '2 * 1GiB'. Using 'raid1'
+is also more convenient for balancing/converting to other profile due to lower
+requirement on the available chunk space.
+
+Missing/incomplete support
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When RAID56 is on the same filesystem with different raid profiles, the space
+reporting is inaccurate, eg. 'df', 'btrfs filesystem df' or 'btrfs filesystem
+usge'. When there's only a one profile per block group type (eg. raid5 for data)
+the reporting is accurate.
+
+When scrub is started on a RAID56 filesystem, it's started on all devices that
+degrade the performance. The workaround is to start it on each device
+separately. Due to that the device stats may not match the actual state and
+some errors might get reported multiple times.
+
+The 'write hole' problem.
 
 
 SEE ALSO

@@ -393,7 +393,7 @@ check_prereq()
 
 check_global_prereq()
 {
-	which "$1" &> /dev/null
+	type -p "$1" &> /dev/null
 	if [ $? -ne 0 ]; then
 		_fail "Failed system wide prerequisities: $1";
 	fi
@@ -405,7 +405,7 @@ check_dm_target_support()
 {
 	setup_root_helper
 
-	which dmsetup &> /dev/null
+	type -p dmsetup &> /dev/null
 	if [ $? -ne 0 ]; then
 		_not_run "This test requires dmsetup tool";
 	fi
@@ -449,23 +449,23 @@ extract_image()
 		rm -f "$image.restored"
 		;;
 	*.img.xz)
-		xz --decompress --keep "$image" || \
+		xz --decompress --keep --force "$image" || \
 			_fail "failed to decompress image $image" >&2
 		image=${image%%.xz}
 		rm -f "$image.restored"
 		cleanme=$image
 		;;
 	*.raw)
-		cp --sparse=auto "$image" "$image.restored"
+		cp --sparse=auto --force "$image" "$image.restored"
 		;;
 	*.raw.xz)
-		xz --decompress --keep "$image" || \
+		xz --decompress --keep --force "$image" || \
 			_fail "failed to decompress image $image" >&2
 		image=${image%%.xz}
 		mv "$image" "$image.restored"
 		;;
 	*.stream.xz)
-		xz --decompress --keep "$image" || \
+		xz --decompress --keep --force "$image" || \
 			_fail "failed to decompress file $image" >&2
 		image=${image%%.xz}
 		mv "$image" "$image.restored"
@@ -832,4 +832,17 @@ init_env()
 		echo "  convert: $TEST_ARGS_CONVERT" >> "$RESULTS"
 	fi
 }
+
+# Catch critical warning messages in test results
+check_test_results()
+{
+	local results="$1"
+	local testname="$2"
+
+	# Check subpage related warning
+	if grep -q "crrosses 64K page boundary" "$results"; then
+		_fail "found subpage related warning for case $testname"
+	fi
+}
+
 init_env

@@ -12,7 +12,7 @@ if [ -z "$TOP" ]; then
 		INTERNAL_BIN="$TOP"
 	else
 		# external, defaults to system binaries
-		TOP=$(dirname `which btrfs`)
+		TOP=$(dirname `type -p btrfs`)
 		TEST_TOP="$SCRIPT_DIR"
 		INTERNAL_BIN="$TEST_TOP"
 	fi
@@ -61,6 +61,7 @@ do
 			fi
 			_fail "test failed for case $(basename $i)"
 		fi
+		check_test_results "$RESULTS" "$(basename $i)"
 	fi
 	cd "$TEST_TOP"
 done

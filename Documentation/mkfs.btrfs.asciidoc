@@ -51,7 +51,7 @@ suitable as default.
 *-m|--metadata <profile>*::
 Specify the profile for the metadata block groups.
 Valid values are 'raid0', 'raid1', 'raid1c3', 'raid1c4', 'raid5', 'raid6',
-'gaid10', 'single' or 'dup' (case does not matter).
+'raid10', 'single' or 'dup' (case does not matter).
 +
 Default on a single device filesystem is 'DUP', unless an SSD is detected, in which
 case it will default to 'single'. The detection is based on the value of
@@ -205,8 +205,7 @@ root partition created with RAID1/10/5/6 profiles. The mount action can happen
 before all block devices are discovered. The waiting is usually done on the
 initramfs/initrd systems.
 
-As of kernel 4.14, RAID5/6 is still considered experimental and shouldn't be
-employed for production use.
+RAID5/6 has known problems and should not be used in production.
 
 FILESYSTEM FEATURES
 -------------------
