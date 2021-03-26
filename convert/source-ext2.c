@@ -43,6 +43,12 @@ static int ext2_open_fs(struct btrfs_convert_context *cctx, const char *name)
 			fprintf(stderr, "ext2fs_open: %s\n", error_message(ret));
 		return -1;
 	}
+
+	if (ext2_fs->super->s_feature_incompat & EXT3_FEATURE_INCOMPAT_RECOVER) {
+		error("source filesystem requires recovery, run e2fsck first");
+		goto fail;
+	}
+
 	/*
 	 * We need to know exactly the used space, some RO compat flags like
 	 * BIGALLOC will affect how used space is present.
@@ -692,7 +698,7 @@ static void ext2_copy_inode_item(struct btrfs_inode_item *dst,
 	memset(&dst->reserved, 0, sizeof(dst->reserved));
 }
 
-#if HAVE_OWN_EXT4_EPOCH_MASK_DEFINE
+#if HAVE_EXT4_EPOCH_MASK_DEFINE
 
 /*
  * Copied and modified from fs/ext4/ext4.h
@@ -763,7 +769,7 @@ out:
 	return ret;
 }
 
-#else /* HAVE_OWN_EXT4_EPOCH_MASK_DEFINE */
+#else /* HAVE_EXT4_EPOCH_MASK_DEFINE */
 
 static int ext4_copy_inode_timespec_extra(struct btrfs_inode_item *dst,
 				ext2_ino_t ext2_ino, u32 s_inode_size,
@@ -780,7 +786,7 @@ static int ext4_copy_inode_timespec_extra(struct btrfs_inode_item *dst,
 	return 0;
 }
 
-#endif /* !HAVE_OWN_EXT4_EPOCH_MASK_DEFINE */
+#endif /* !HAVE_EXT4_EPOCH_MASK_DEFINE */
 
 static int ext2_check_state(struct btrfs_convert_context *cctx)
 {

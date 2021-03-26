@@ -223,38 +223,32 @@ elif test "$with_crypto" = "libgcrypt"; then
 	cryptoprovider="libgcrypt"
 	PKG_CHECK_MODULES(GCRYPT, [libgcrypt >= 1.8.0])
 	AC_DEFINE([CRYPTOPROVIDER_LIBGCRYPT],[1],[Use libcrypt])
-	cryptoproviderversion=`pkg-config libgcrypt --version`
+	cryptoproviderversion=`${PKG_CONFIG} libgcrypt --version`
 elif test "$with_crypto" = "libsodium"; then
 	cryptoprovider="libsodium"
 	PKG_CHECK_MODULES(SODIUM, [libsodium >= 1.0.4])
 	AC_DEFINE([CRYPTOPROVIDER_LIBSODIUM],[1],[Use libsodium])
-	cryptoproviderversion=`pkg-config libsodium --version`
+	cryptoproviderversion=`${PKG_CONFIG} libsodium --version`
 elif test "$with_crypto" = "libkcapi"; then
 	cryptoprovider="libkcapi"
 	PKG_CHECK_MODULES(KCAPI, [libkcapi >= 1.0.0])
 	AC_DEFINE([CRYPTOPROVIDER_LIBKCAPI],[1],[Use libkcapi])
-	cryptoproviderversion=`pkg-config libkcapi --version`
+	cryptoproviderversion=`${PKG_CONFIG} libkcapi --version`
 else
 	AC_MSG_ERROR([unrecognized crypto provider: $with_crypto])
 fi
 AC_SUBST([CRYPTOPROVIDER_BUILTIN])
 AC_DEFINE_UNQUOTED([CRYPTOPROVIDER],["$cryptoprovider"],[Crypto implementation source name])
 
-HAVE_OWN_FIEMAP_EXTENT_SHARED_DEFINE=0
 AX_CHECK_DEFINE([linux/fiemap.h], [FIEMAP_EXTENT_SHARED], [],
-		[HAVE_OWN_FIEMAP_EXTENT_SHARED_DEFINE=1
+		[AC_DEFINE([HAVE_OWN_FIEMAP_EXTENT_SHARED_DEFINE], [1],
+                           [Define to 1 if kernel headers do not define FIEMAP_EXTENT_SHARED])
 		 AC_MSG_WARN([no definition of FIEMAP_EXTENT_SHARED found, probably old kernel, will use own definition, 'btrfs fi du' might report wrong numbers])])
 
-if test "x$HAVE_OWN_FIEMAP_EXTENT_SHARED_DEFINE" == "x1"; then
-AC_DEFINE([HAVE_OWN_FIEMAP_EXTENT_SHARED_DEFINE], [1], [We defined FIEMAP_EXTENT_SHARED])
-else
-AC_DEFINE([HAVE_OWN_FIEMAP_EXTENT_SHARED_DEFINE], [0], [We did not define FIEMAP_EXTENT_SHARED])
-fi
-
-HAVE_OWN_EXT4_EPOCH_MASK_DEFINE=0
-AX_CHECK_DEFINE([ext2fs/ext2_fs.h], [EXT4_EPOCH_MASK], [],
-		[HAVE_OWN_EXT4_EPOCH_MASK_DEFINE=1
-		 AC_MSG_WARN([no definition of EXT4_EPOCH_MASK found, probably old e2fsprogs, will use own definition, no 64bit time precision of converted images])])
+AX_CHECK_DEFINE([ext2fs/ext2_fs.h], [EXT4_EPOCH_MASK],
+		[AC_DEFINE([HAVE_EXT4_EPOCH_MASK_DEFINE], [1],
+			   [Define to 1 if e2fsprogs defines EXT4_EPOCH_MASK])],
+		[AC_MSG_WARN([no definition of EXT4_EPOCH_MASK found, probably old e2fsprogs, no 64bit time precision of converted images])])
 
 dnl Define <NAME>_LIBS= and <NAME>_CFLAGS= by pkg-config
 dnl
