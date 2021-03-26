@@ -1,3 +1,9 @@
+btrfs-progs (5.11.1-1) experimental; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Fri, 26 Mar 2021 08:12:36 +0100
+
 btrfs-progs (5.11-1) experimental; urgency=medium
 
   * New upstream release.
