@@ -2,7 +2,7 @@ Source: btrfs-progs
 Section: admin
 Priority: optional
 Maintainer: Adam Borowski <kilobyte@angband.pl>
-Build-Depends: debhelper-compat (= 12),
+Build-Depends: debhelper-compat (= 13),
                e2fslibs-dev,
                pkg-config,
                libacl1-dev,
