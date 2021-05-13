@@ -1,3 +1,10 @@
+btrfs-progs (5.12.1-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Mention relicensing of libbtrfsutil to LGPL in debian/copyright
+
+ -- Adam Borowski <kilobyte@angband.pl>  Fri, 14 May 2021 01:55:00 +0200
+
 btrfs-progs (5.11.1-1) experimental; urgency=medium
 
   * New upstream bugfix release.
