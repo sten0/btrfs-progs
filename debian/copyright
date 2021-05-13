@@ -6,6 +6,10 @@ Files: *
 Copyright: 2007-2012 Oracle <http://www.oracle.com/>
 License: GPL-2
 
+Files: libbtrfsutil/*
+Copyright: 2007-2012 Oracle <http://www.oracle.com/>
+License: LGPL-2.1+
+
 Files: kernel-lib/radix-tree.c
 Copyright: 2007-2009 Oracle <http://www.oracle.com/>
            2001 Momchil Velikov
@@ -61,6 +65,9 @@ License: GPL-2
  .
  The complete text of the GNU General Public License
  can be found in /usr/share/common-licenses/GPL-2 file.
+
+License: LGPL-2.1+
+ See /usr/share/common-licenses/LGPL-2.1.
 
 License: TLP-4
  Copyright (c) 2011 IETF Trust and the persons identified as
