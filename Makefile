@@ -149,8 +149,7 @@ objects = kernel-shared/dir-item.o \
 	  common/string-table.o common/task-utils.o \
 	  kernel-shared/inode.o kernel-shared/file.o common/help.o cmds/receive-dump.o \
 	  common/fsfeatures.o \
-	  common/format-output.o \
-	  common/device-utils.o
+	  common/format-output.o
 cmds_objects = cmds/subvolume.o cmds/filesystem.o cmds/device.o cmds/scrub.o \
 	       cmds/inspect.o cmds/balance.o cmds/send.o cmds/receive.o \
 	       cmds/quota.o cmds/qgroup.o cmds/replace.o check/main.o \
@@ -168,12 +167,13 @@ libbtrfs_objects = common/send-stream.o common/send-utils.o kernel-lib/rbtree.o 
 		   kernel-shared/print-tree.o \
 		   kernel-shared/free-space-cache.o kernel-shared/root-tree.o \
 		   kernel-shared/volumes.o kernel-shared/transaction.o \
-		   kernel-shared/free-space-tree.o repair.o kernel-shared/inode-item.o \
-		   kernel-shared/file-item.o \
+		   kernel-shared/free-space-tree.o common/repair.o kernel-shared/inode-item.o \
+		   kernel-shared/file-item.o kernel-shared/zoned.o \
 		   kernel-lib/raid56.o kernel-lib/tables.o \
 		   common/device-scan.o common/path-utils.o \
 		   common/utils.o libbtrfsutil/subvolume.o libbtrfsutil/stubs.o \
-		   crypto/hash.o crypto/xxhash.o $(CRYPTO_OBJECTS)
+		   crypto/hash.o crypto/xxhash.o $(CRYPTO_OBJECTS) \
+		   common/open-utils.o common/units.o common/device-utils.o
 libbtrfs_headers = common/send-stream.h common/send-utils.h send.h kernel-lib/rbtree.h btrfs-list.h \
 	       crypto/crc32c.h kernel-lib/list.h kerncompat.h \
 	       kernel-lib/radix-tree.h kernel-lib/sizes.h kernel-lib/raid56.h \
@@ -187,7 +187,8 @@ libbtrfsutil_objects = libbtrfsutil/errors.o libbtrfsutil/filesystem.o \
 		       libbtrfsutil/subvolume.o libbtrfsutil/qgroup.o \
 		       libbtrfsutil/stubs.o
 convert_objects = convert/main.o convert/common.o convert/source-fs.o \
-		  convert/source-ext2.o convert/source-reiserfs.o
+		  convert/source-ext2.o convert/source-reiserfs.o \
+		  mkfs/common.o
 mkfs_objects = mkfs/main.o mkfs/common.o mkfs/rootdir.o
 image_objects = image/main.o image/sanitize.o
 all_objects = $(objects) $(cmds_objects) $(libbtrfs_objects) $(convert_objects) \
@@ -506,11 +507,11 @@ libbtrfsutil/%.o: libbtrfsutil/%.c
 	@echo "    [CC]     $@"
 	$(Q)$(CC) $(LIBBTRFSUTIL_CFLAGS) -o $@ -c $< -o $@
 
-libbtrfsutil.so.$(libbtrfsutil_version): $(libbtrfsutil_objects) libbtrfsutil.sym
+libbtrfsutil.so.$(libbtrfsutil_version): $(libbtrfsutil_objects) libbtrfsutil/libbtrfsutil.sym
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(LIBBTRFSUTIL_CFLAGS) $(libbtrfsutil_objects) $(LIBBTRFSUTIL_LDFLAGS) \
 		-shared -Wl,-soname,libbtrfsutil.so.$(libbtrfsutil_major) \
-		-Wl,--version-script=libbtrfsutil.sym -o $@
+		-Wl,--version-script=libbtrfsutil/libbtrfsutil.sym -o $@
 
 libbtrfsutil.a: $(libbtrfsutil_objects)
 	@echo "    [AR]     $@"
@@ -666,7 +667,7 @@ library-test: tests/library-test.c libbtrfs.so
 	$(Q)mkdir -p $(TMPD)/include/btrfs && \
 	cp $(libbtrfs_headers) $(TMPD)/include/btrfs && \
 	cp libbtrfs.so.0.1 $(TMPD) && \
-	cd $(TMPD) && $(CC) -I$(TMPD)/include -o $@ $(addprefix $(ABSTOPDIR)/,$^) -Wl,-rpath=$(ABSTOPDIR) -lbtrfs
+	cd $(TMPD) && $(CC) -I$(TMPD)/include -o $@ $(addprefix $(ABSTOPDIR)/,$^) -Wl,-rpath=$(ABSTOPDIR)
 	@echo "    [TEST RUN]   $@"
 	$(Q)cd $(TMPD) && LD_PRELOAD=libbtrfs.so.0.1 ./$@
 	@echo "    [TEST CLEAN] $@"
@@ -687,6 +688,10 @@ fssum: tests/fssum.c crypto/sha224-256.c
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 hash-speedtest: crypto/hash-speedtest.c $(objects) $(libs_static)
+	@echo "    [LD]     $@"
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+hash-vectest: crypto/hash-vectest.c $(objects) $(libs_static)
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 

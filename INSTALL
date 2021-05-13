@@ -22,6 +22,9 @@ dependencies are not desired.
 - libsodium
 - libkcapi
 
+For zoned device support, the system headers installed in /usr/include/linux
+must be 5.10 or newer.
+
 Generating documentation:
 
 - asciidoc - text document format tool
@@ -106,6 +109,15 @@ The list of built-ins can be obtained by
     $ btrfs help --box
 
 The basic set will always contain: mkfs.btrfs, btrfs-image, btrfs-convert.
+
+
+32bit build on 64bit host
+-------------------------
+
+The combination of 32bit build on 64bit host could work but depends on the
+libraries that must provide the 32bit versions, or even 32bit static versions.
+This is fairly uncommon on contemporary distributions and building 32bit
+versions on a 32bit host is recommended.
 
 
 References:

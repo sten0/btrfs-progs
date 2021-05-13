@@ -7,12 +7,18 @@ eventually.
 
 ## Hosted
 
-**Travis CI**
+No active hosted CI is currently set up, we're looking for one.
 
-The Travis service is set up to run tests on development and release branches,
-triggered by a push to the repository. Pull requests are not set up to run.
+Reuirements:
 
-[Branch overview](https://travis-ci.org/kdave/btrfs-progs)
+* recent kernel, latest stable if possible, 5.10 is minimum
+* ability to run commands as root
+* ability to create loop devices (losetup)
+* ability to mount and unmount filesystems
+* integration with github/gitlab repository to watch for updates
+* enough granted run time to finish the testsuite
+* (optional) run docker images
+* (nice to have) web gui with results, email notifications
 
 **Gitlab**
 
@@ -20,6 +26,10 @@ The integration with gitlab.org has been disabled but is possible to revive. We
 were experimenting with nested virtualization to run the tests on a current
 kernel not some old version provided by the hosted image. The tests took to
 long to fit in the free plan quota.
+
+**Travis CI**
+
+Disabled since version v5.12 (05/2021).
 
 ## Local
 
@@ -127,8 +137,6 @@ To do:
 - 32bit coverage -- while this architecture is fading out, it may be useful to
   still have some coverage, however running 32bit docker in 64bit is not
   considered experimental does not work out of the box
-- static build -- when all build dependencies provide the static library
-  versions, it's possible to to build the static binaries of all the tools
 - add some kind of templates, there's a lot of repeated stuff in the
   *Dockerfile*s and the scripts need to be inside the directories in order to
   allow copying them to the image

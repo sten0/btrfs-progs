@@ -25,7 +25,6 @@
 #include <fcntl.h>
 #include <ftw.h>
 #include <mntent.h>
-#include <linux/limits.h>
 #include <linux/version.h>
 #include <getopt.h>
 #include <limits.h>
@@ -41,9 +40,12 @@
 #include "kernel-lib/list_sort.h"
 #include "kernel-shared/disk-io.h"
 #include "common/help.h"
+#include "common/units.h"
 #include "common/fsfeatures.h"
 #include "common/path-utils.h"
 #include "common/device-scan.h"
+#include "common/device-utils.h"
+#include "common/open-utils.h"
 
 /*
  * for btrfs fi show, we maintain a hash of fsids we've already printed.
@@ -65,17 +67,24 @@ static const char * const cmd_filesystem_df_usage[] = {
 	NULL
 };
 
-static void print_df(struct btrfs_ioctl_space_args *sargs, unsigned unit_mode)
+static void print_df(int fd, struct btrfs_ioctl_space_args *sargs, unsigned unit_mode)
 {
 	u64 i;
 	struct btrfs_ioctl_space_info *sp = sargs->spaces;
+	u64 unusable;
+	bool ok;
 
 	for (i = 0; i < sargs->total_spaces; i++, sp++) {
-		printf("%s, %s: total=%s, used=%s\n",
+		unusable = device_get_zone_unusable(fd, sp->flags);
+		ok = (unusable != DEVICE_ZONE_UNUSABLE_UNKNOWN);
+
+		printf("%s, %s: total=%s, used=%s%s%s\n",
 			btrfs_group_type_str(sp->flags),
 			btrfs_group_profile_str(sp->flags),
 			pretty_size_mode(sp->total_bytes, unit_mode),
-			pretty_size_mode(sp->used_bytes, unit_mode));
+			pretty_size_mode(sp->used_bytes, unit_mode),
+			(ok ? ", zone_unusable=" : ""),
+			(ok ? pretty_size_mode(unusable, unit_mode) : ""));
 	}
 }
 
@@ -105,7 +114,7 @@ static int cmd_filesystem_df(const struct cmd_struct *cmd,
 	ret = get_df(fd, &sargs);
 
 	if (ret == 0) {
-		print_df(sargs, unit_mode);
+		print_df(fd, sargs, unit_mode);
 		free(sargs);
 	} else {
 		errno = -ret;
@@ -574,6 +583,8 @@ static int map_seed_devices(struct list_head *all_uuids)
 	fs_uuids = btrfs_scanned_uuids();
 
 	list_for_each_entry(cur_fs, all_uuids, list) {
+		struct open_ctree_flags ocf = { 0 };
+
 		device = list_first_entry(&cur_fs->devices,
 						struct btrfs_device, dev_list);
 		if (!device)
@@ -586,8 +597,9 @@ static int map_seed_devices(struct list_head *all_uuids)
 		/*
 		 * open_ctree_* detects seed/sprout mapping
 		 */
-		fs_info = open_ctree_fs_info(device->name, 0, 0, 0,
-						OPEN_CTREE_PARTIAL);
+		ocf.filename = device->name;
+		ocf.flags = OPEN_CTREE_PARTIAL;
+		fs_info = open_ctree_fs_info(&ocf);
 		if (!fs_info)
 			continue;
 
@@ -1155,7 +1167,10 @@ static int check_resize_args(const char *amount, const char *path) {
 		}
 		old_size = di_args[dev_idx].total_bytes;
 
-		if (mod < 0) {
+		/* For target sizes without +/- sign prefix (e.g. 1:150g) */
+		if (mod == 0) {
+			new_size = diff;
+		} else if (mod < 0) {
 			if (diff > old_size) {
 				error("current size is %s which is smaller than %s",
 				      pretty_size_mode(old_size, UNITS_DEFAULT),

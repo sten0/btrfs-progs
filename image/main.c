@@ -38,6 +38,7 @@
 #include "common/extent-cache.h"
 #include "common/help.h"
 #include "common/device-utils.h"
+#include "common/open-utils.h"
 #include "image/metadump.h"
 #include "image/sanitize.h"
 #include "common/box.h"
@@ -2627,10 +2628,11 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 
 	/* NOTE: open with write mode */
 	if (fixup_offset) {
-		info = open_ctree_fs_info(target, 0, 0, 0,
-					  OPEN_CTREE_WRITES |
-					  OPEN_CTREE_RESTORE |
-					  OPEN_CTREE_PARTIAL);
+		struct open_ctree_flags ocf = { 0 };
+
+		ocf.filename = target;
+		ocf.flags = OPEN_CTREE_WRITES | OPEN_CTREE_RESTORE | OPEN_CTREE_PARTIAL;
+		info = open_ctree_fs_info(&ocf);
 		if (!info) {
 			error("open ctree failed");
 			ret = -EIO;
@@ -2690,7 +2692,6 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 	if (!ret && !multi_devices && !old_restore &&
 	    btrfs_super_num_devices(mdrestore.original_super) != 1) {
 		struct btrfs_root *root;
-		struct stat st;
 
 		root = open_ctree_fd(fileno(out), target, 0,
 					  OPEN_CTREE_PARTIAL |
@@ -2703,17 +2704,55 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 		}
 		info = root->fs_info;
 
-		if (stat(target, &st)) {
-			error("stat %s failed: %m", target);
-			close_ctree(info->chunk_root);
-			free(cluster);
-			return 1;
-		}
-
 		ret = fixup_chunks_and_devices(info, &mdrestore, fileno(out));
 		close_ctree(info->chunk_root);
 		if (ret)
 			goto out;
+	} else {
+		struct btrfs_root *root;
+		struct stat st;
+		u64 dev_size;
+
+		if (!info) {
+			root = open_ctree_fd(fileno(out), target, 0, 0);
+			if (!root) {
+				error("open ctree failed in %s", target);
+				ret = -EIO;
+				goto out;
+			}
+
+			info = root->fs_info;
+
+			dev_size = btrfs_stack_device_total_bytes(
+					&info->super_copy->dev_item);
+			close_ctree(root);
+			info = NULL;
+		} else {
+			dev_size = btrfs_stack_device_total_bytes(
+					&info->super_copy->dev_item);
+		}
+
+		/*
+		 * We don't need extra tree modification, but if the output is
+		 * a file, we need to enlarge the output file so that 5.11+
+		 * kernel won't report an error.
+		 */
+		ret = fstat(fileno(out), &st);
+		if (ret < 0) {
+			error("failed to stat result image: %m");
+			ret = -errno;
+			goto out;
+		}
+		if (S_ISREG(st.st_mode) && st.st_size < dev_size) {
+			ret = ftruncate64(fileno(out), dev_size);
+			if (ret < 0) {
+				error(
+		"failed to enlarge result image file from %llu to %llu: %m",
+					(unsigned long long)st.st_size, dev_size);
+				ret = -errno;
+				goto out;
+			}
+		}
 	}
 out:
 	mdrestore_destroy(&mdrestore, num_threads);
@@ -2989,13 +3028,14 @@ int BOX_MAIN(image)(int argc, char *argv[])
 
 	 /* extended support for multiple devices */
 	if (!create && multi_devices) {
+		struct open_ctree_flags ocf = { 0 };
 		struct btrfs_fs_info *info;
 		u64 total_devs;
 		int i;
 
-		info = open_ctree_fs_info(target, 0, 0, 0,
-					  OPEN_CTREE_PARTIAL |
-					  OPEN_CTREE_RESTORE);
+		ocf.filename = target;
+		ocf.flags = OPEN_CTREE_PARTIAL | OPEN_CTREE_RESTORE;
+		info = open_ctree_fs_info(&ocf);
 		if (!info) {
 			error("open ctree failed at %s", target);
 			return 1;

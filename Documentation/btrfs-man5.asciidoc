@@ -290,30 +290,6 @@ type can be 'data', 'metadata' or 'all'. This mount option should not be used
 outside of debugging environments and is not recognized if the kernel config
 option 'BTRFS_DEBUG' is not enabled.
 
-*inode_cache*::
-*noinode_cache*::
-(since: 3.0, default: off)
-+
-Enable free inode number caching. Not recommended to use unless files on your
-filesystem get assigned inode numbers that are approaching 2^64^. Normally, new
-files in each subvolume get assigned incrementally (plus one from the last
-time) and are not reused. The mount option turns on caching of the existing
-inode numbers and reuse of inode numbers of deleted files.
-+
-This option may slow down your system at first run, or after mounting without
-the option.
-+
-NOTE: Defaults to off due to a potential overflow problem when the free space
-checksums don't fit inside a single page.
-+
-Don't use this option unless you really need it. The inode number limit
-on 64bit system is 2^64^, which is practically enough for the whole filesystem
-lifetime. Due to implementation of linux VFS layer, the inode numbers on 32bit
-systems are only 32 bits wide. This lowers the limit significantly and makes
-it possible to reach it. In such case, this mount option will help.
-Alternatively, files with high inode numbers can be copied to a new subvolume
-which will effectively start the inode numbers from the beginning again.
-
 *nologreplay*::
 (default: off, even read-only)
 +
@@ -369,6 +345,17 @@ write operations.
 +
 Force check and rebuild procedure of the UUID tree. This should not
 normally be needed.
+
+*rescue*::
+(since: 5.9)
++
+Modes allowing mount with damaged filesystem structures.
++
+* 'usebackuproot' (since: 5.9, replaces standalone option 'usebackuproot')
+* 'nologreplay' (since: 5.9, replaces standalone option 'nologreplay')
+* 'ignorebadroots', 'ibadroots' (since: 5.11)
+* 'ignoredatacsums', 'idatacsums' (since: 5.11)
+* 'all' (since: 5.9)
 
 *skip_balance*::
 (since: 3.3, default: off)
@@ -507,6 +494,15 @@ List of mount options that have been removed, kept for backward compatibility.
 NOTE: this option has been replaced by 'usebackuproot' and should not be used
 but will work on 4.5+ kernels.
 
+*inode_cache*::
+*noinode_cache*::
+(removed in: 5.11, since: 3.0, default: off)
++
+NOTE: the functionality has been removed in 5.11, any stale data created by
+previous use of the 'inode_cache' option can be removed by *btrfs check
+--clear-ino-cache*.
+
+
 NOTES ON GENERIC MOUNT OPTIONS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -644,12 +640,35 @@ ordinary directory. Note that this feature only depends on the kernel version.
 +
 reduced-size metadata for extent references, saves a few percent of metadata
 
+*send_stream_version*::
+(since: 5.10)
++
+number of the highest supported send stream version
+
 *supported_checksums*::
 (since: 5.5)
 +
 list of checksum algorithms supported by the kernel module, the respective
 modules or built-in implementing the algorithms need to be present to mount
-the filesystem
+the filesystem, see 'CHECKSUM ALGORITHMS'
+
+*supported_sectorsizes*::
+(since: 5.13)
++
+list of values that are accepted as sector sizes (*mkfs.btrfs --sectorsize*) by
+the running kernel
+
+*supported_rescue_options*::
+(since: 5.11)
++
+list of values for the mount option 'rescue' that are supported by the running
+kernel, see `btrfs`(5)
+
+*zoned*::
+(since: 5.12)
++
+zoned mode is allocation/write friendly to host-managed devices, allocation
+space is split into fixed-size zones that must be updated sequentially
 
 SWAPFILE SUPPORT
 ~~~~~~~~~~~~~~~~
@@ -657,33 +676,35 @@ SWAPFILE SUPPORT
 The swapfile is supported since kernel 5.0. Use `swapon`(8) to activate the
 swapfile. There are some limitations of the implementation in btrfs and linux
 swap subsystem:
- 
+
 * filesystem - must be only single device
 * filesystem - must have only 'single' data profile
 * swapfile - the containing subvolume cannot be snapshotted
 * swapfile - must be preallocated
 * swapfile - must be nodatacow (ie. also nodatasum)
 * swapfile - must not be compressed
- 
+
 The limitations come namely from the COW-based design and mapping layer of
 blocks that allows the advanced features like relocation and multi-device
 filesystems. However, the swap subsystem expects simpler mapping and no
 background changes of the file blocks once they've been attached to swap.
- 
+
 With active swapfiles, the following whole-filesystem operations will skip
 swapfile extents or may fail:
- 
+
 * balance - block groups with swapfile extents are skipped and reported, the rest will be processed normally
 * resize grow - unaffected
 * resize shrink - works as long as the extents are outside of the shrunk range
 * device add - a new device does not interfere with existing swapfile and this operation will work, though no new swapfile can be activated afterwards
 * device delete - if the device has been added as above, it can be also deleted
 * device replace - ditto
- 
+
 When there are no active swapfiles and a whole-filesystem exclusive operation
 is running (ie. balance, device delete, shrink), the swapfiles cannot be
 temporarily activated. The operation must finish first.
- 
+
+To create and activate a swapfile run the following commands:
+
 --------------------
 # truncate -s 0 swapfile
 # chattr +C swapfile
@@ -693,6 +714,28 @@ temporarily activated. The operation must finish first.
 # swapon swapfile
 --------------------
 
+Please note that the UUID returned by the 'mkswap' utility identifies the swap
+"filesystem" and because it's stored in a file, it's not generally visible and
+usable as an identifier unlike if it was on a block device.
+
+The file will appear in '/proc/swaps':
+
+--------------------
+# cat /proc/swaps
+Filename          Type          Size           Used      Priority
+/path/swapfile    file          2097152        0         -2
+--------------------
+
+The swapfile can be created as one-time operation or, once properly created,
+activated on each boot by the 'swapon -a' command (usually started by the
+service manager). Add the following entry to '/etc/fstab', assuming the
+filesystem that provides the '/path' has been already mounted at this point.
+Additional mount options relevant for the swapfile can be set too (like
+priority, not the btrfs mount options).
+
+--------------------
+/path/swapfile        none        swap        defaults      0 0
+--------------------
 
 CHECKSUM ALGORITHMS
 -------------------
@@ -846,6 +889,7 @@ Please note that compression is also affected by the mount options or the parent
 directory attributes.
 +
 When set on a directory, all newly created files will inherit this attribute.
+This attribute cannot be set with 'm' at the same time.
 
 *C*::
 'no copy-on-write', file data modifications are done in-place
@@ -867,15 +911,17 @@ and 'O_DSYNC'
 'immutable', no file data and metadata changes allowed even to the root user as
 long as this attribute is set (obviously the exception is unsetting the attribute)
 
+*m*::
+'no compression', permanently turn off compression on the given file. Any
+compression mount options will not affect this file. (`chattr` support added in
+1.46.2)
++
+When set on a directory, all newly created files will inherit this attribute.
+This attribute cannot be set with 'c' at the same time.
+
 *S*::
 'synchronous updates', for more details search `open`(2) for 'O_SYNC' and
 'O_DSYNC'
-
-*X*::
-'no compression', permanently turn off compression on the given file. Any
-compression mount options will not affect this file.
-+
-When set on a directory, all newly created files will inherit this attribute.
 
 No other attributes are supported.  For the complete list please refer to the
 `chattr`(1) manual page.

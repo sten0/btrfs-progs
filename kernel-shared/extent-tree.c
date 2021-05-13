@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include <math.h>
 #include "kerncompat.h"
+#include "kernel-lib/list.h"
 #include "kernel-lib/radix-tree.h"
 #include "kernel-lib/rbtree.h"
 #include "kernel-shared/ctree.h"
@@ -31,6 +32,7 @@
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/free-space-cache.h"
 #include "kernel-shared/free-space-tree.h"
+#include "kernel-shared/zoned.h"
 #include "common/utils.h"
 
 #define PENDING_EXTENT_INSERT 0
@@ -282,6 +284,14 @@ again:
 	last = max(search_start, cache->start);
 	if (cache->ro || !block_group_bits(cache, data))
 		goto new_group;
+
+	if (btrfs_is_zoned(root->fs_info)) {
+		if (cache->length - cache->alloc_offset < num)
+			goto new_group;
+		*start_ret = cache->start + cache->alloc_offset;
+		cache->alloc_offset += num;
+		return 0;
+	}
 
 	while(1) {
 		ret = find_first_extent_bit(&root->fs_info->free_space_cache,
@@ -2704,6 +2714,10 @@ static int read_one_block_group(struct btrfs_fs_info *fs_info,
 	}
 	cache->space_info = space_info;
 
+	ret = btrfs_load_block_group_zone_info(fs_info, cache);
+	if (ret)
+		return ret;
+
 	btrfs_add_block_group_cache(fs_info, cache);
 	return 0;
 }
@@ -2760,6 +2774,9 @@ btrfs_add_block_group(struct btrfs_fs_info *fs_info, u64 bytes_used, u64 type,
 	BUG_ON(!cache);
 	cache->start = chunk_offset;
 	cache->length = size;
+
+	ret = btrfs_load_block_group_zone_info(fs_info, cache);
+	BUG_ON(ret);
 
 	cache->used = bytes_used;
 	cache->flags = type;
@@ -2997,6 +3014,14 @@ static int free_chunk_dev_extent_items(struct btrfs_trans_handle *trans,
 			       struct btrfs_chunk);
 	num_stripes = btrfs_chunk_num_stripes(path->nodes[0], chunk);
 	for (i = 0; i < num_stripes; i++) {
+		u64 devid = btrfs_stripe_devid_nr(path->nodes[0], chunk, i);
+		u64 offset = btrfs_stripe_offset_nr(path->nodes[0], chunk, i);
+		u64 length = btrfs_stripe_length(fs_info, path->nodes[0], chunk);
+
+		ret = btrfs_reset_chunk_zones(fs_info, devid, offset, length);
+		if (ret < 0)
+			goto out;
+
 		ret = free_dev_extent_item(trans, fs_info,
 			btrfs_stripe_devid_nr(path->nodes[0], chunk, i),
 			btrfs_stripe_offset_nr(path->nodes[0], chunk, i));

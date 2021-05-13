@@ -22,9 +22,12 @@
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/volumes.h"
+#include "kernel-shared/transaction.h"
+#include "kernel-shared/zoned.h"
 #include "common/utils.h"
 #include "common/path-utils.h"
 #include "common/device-utils.h"
+#include "common/open-utils.h"
 #include "mkfs/common.h"
 
 static u64 reference_root_table[] = {
@@ -155,6 +158,13 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	int skinny_metadata = !!(cfg->features &
 				 BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA);
 	u64 num_bytes;
+	u64 system_group_offset = BTRFS_BLOCK_RESERVED_1M_FOR_SUPER;
+	u64 system_group_size = BTRFS_MKFS_SYSTEM_GROUP_SIZE;
+
+	if ((cfg->features & BTRFS_FEATURE_INCOMPAT_ZONED)) {
+		system_group_offset = cfg->zone_size * BTRFS_NR_SB_LOG_ZONES;
+		system_group_size = cfg->zone_size;
+	}
 
 	buf = malloc(sizeof(*buf) + max(cfg->sectorsize, cfg->nodesize));
 	if (!buf)
@@ -186,8 +196,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 
 	cfg->blocks[MKFS_SUPER_BLOCK] = BTRFS_SUPER_INFO_OFFSET;
 	for (i = 1; i < MKFS_BLOCK_COUNT; i++) {
-		cfg->blocks[i] = BTRFS_BLOCK_RESERVED_1M_FOR_SUPER +
-			cfg->nodesize * (i - 1);
+		cfg->blocks[i] = system_group_offset + cfg->nodesize * (i - 1);
 	}
 
 	btrfs_set_super_bytenr(&super, cfg->blocks[MKFS_SUPER_BLOCK]);
@@ -204,7 +213,10 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_super_stripesize(&super, cfg->stripesize);
 	btrfs_set_super_csum_type(&super, cfg->csum_type);
 	btrfs_set_super_chunk_root_generation(&super, 1);
-	btrfs_set_super_cache_generation(&super, -1);
+	if (cfg->features & BTRFS_FEATURE_INCOMPAT_ZONED)
+		btrfs_set_super_cache_generation(&super, 0);
+	else
+		btrfs_set_super_cache_generation(&super, -1);
 	btrfs_set_super_incompat_flags(&super, cfg->features);
 	if (cfg->label)
 		__strncpy_null(super.label, cfg->label, BTRFS_LABEL_SIZE - 1);
@@ -320,8 +332,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_device_id(buf, dev_item, 1);
 	btrfs_set_device_generation(buf, dev_item, 0);
 	btrfs_set_device_total_bytes(buf, dev_item, num_bytes);
-	btrfs_set_device_bytes_used(buf, dev_item,
-				    BTRFS_MKFS_SYSTEM_GROUP_SIZE);
+	btrfs_set_device_bytes_used(buf, dev_item, system_group_size);
 	btrfs_set_device_io_align(buf, dev_item, cfg->sectorsize);
 	btrfs_set_device_io_width(buf, dev_item, cfg->sectorsize);
 	btrfs_set_device_sector_size(buf, dev_item, cfg->sectorsize);
@@ -342,14 +353,14 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 
 	/* then we have chunk 0 */
 	btrfs_set_disk_key_objectid(&disk_key, BTRFS_FIRST_CHUNK_TREE_OBJECTID);
-	btrfs_set_disk_key_offset(&disk_key, BTRFS_BLOCK_RESERVED_1M_FOR_SUPER);
+	btrfs_set_disk_key_offset(&disk_key, system_group_offset);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_CHUNK_ITEM_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
 	btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
 	btrfs_set_item_size(buf, btrfs_item_nr(nritems), item_size);
 
 	chunk = btrfs_item_ptr(buf, nritems, struct btrfs_chunk);
-	btrfs_set_chunk_length(buf, chunk, BTRFS_MKFS_SYSTEM_GROUP_SIZE);
+	btrfs_set_chunk_length(buf, chunk, system_group_size);
 	btrfs_set_chunk_owner(buf, chunk, BTRFS_EXTENT_TREE_OBJECTID);
 	btrfs_set_chunk_stripe_len(buf, chunk, BTRFS_STRIPE_LEN);
 	btrfs_set_chunk_type(buf, chunk, BTRFS_BLOCK_GROUP_SYSTEM);
@@ -359,7 +370,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_chunk_num_stripes(buf, chunk, 1);
 	btrfs_set_stripe_devid_nr(buf, chunk, 0, 1);
 	btrfs_set_stripe_offset_nr(buf, chunk, 0,
-				   BTRFS_BLOCK_RESERVED_1M_FOR_SUPER);
+				   system_group_offset);
 	nritems++;
 
 	write_extent_buffer(buf, super.dev_item.uuid,
@@ -398,7 +409,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 		sizeof(struct btrfs_dev_extent);
 
 	btrfs_set_disk_key_objectid(&disk_key, 1);
-	btrfs_set_disk_key_offset(&disk_key, BTRFS_BLOCK_RESERVED_1M_FOR_SUPER);
+	btrfs_set_disk_key_offset(&disk_key, system_group_offset);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_DEV_EXTENT_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
 	btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
@@ -410,14 +421,13 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_dev_extent_chunk_objectid(buf, dev_extent,
 					BTRFS_FIRST_CHUNK_TREE_OBJECTID);
 	btrfs_set_dev_extent_chunk_offset(buf, dev_extent,
-					  BTRFS_BLOCK_RESERVED_1M_FOR_SUPER);
+					  system_group_offset);
 
 	write_extent_buffer(buf, chunk_tree_uuid,
 		    (unsigned long)btrfs_dev_extent_chunk_tree_uuid(dev_extent),
 		    BTRFS_UUID_SIZE);
 
-	btrfs_set_dev_extent_length(buf, dev_extent,
-				    BTRFS_MKFS_SYSTEM_GROUP_SIZE);
+	btrfs_set_dev_extent_length(buf, dev_extent, system_group_size);
 	nritems++;
 
 	btrfs_set_header_bytenr(buf, cfg->blocks[MKFS_DEV_TREE]);
@@ -464,17 +474,59 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	buf->len = BTRFS_SUPER_INFO_SIZE;
 	csum_tree_block_size(buf, btrfs_csum_type_size(cfg->csum_type), 0,
 			     cfg->csum_type);
-	ret = pwrite(fd, buf->data, BTRFS_SUPER_INFO_SIZE,
-			cfg->blocks[MKFS_SUPER_BLOCK]);
+	ret = sbwrite(fd, buf->data, cfg->blocks[MKFS_SUPER_BLOCK]);
 	if (ret != BTRFS_SUPER_INFO_SIZE) {
 		ret = (ret < 0 ? -errno : -EIO);
 		goto out;
 	}
 
+	ret = fsync(fd);
+	if (ret)
+		goto out;
+
 	ret = 0;
 
 out:
 	free(buf);
+	return ret;
+}
+
+int btrfs_make_root_dir(struct btrfs_trans_handle *trans,
+			struct btrfs_root *root, u64 objectid)
+{
+	int ret;
+	struct btrfs_inode_item inode_item;
+	time_t now = time(NULL);
+
+	memset(&inode_item, 0, sizeof(inode_item));
+	btrfs_set_stack_inode_generation(&inode_item, trans->transid);
+	btrfs_set_stack_inode_size(&inode_item, 0);
+	btrfs_set_stack_inode_nlink(&inode_item, 1);
+	btrfs_set_stack_inode_nbytes(&inode_item, root->fs_info->nodesize);
+	btrfs_set_stack_inode_mode(&inode_item, S_IFDIR | 0755);
+	btrfs_set_stack_timespec_sec(&inode_item.atime, now);
+	btrfs_set_stack_timespec_nsec(&inode_item.atime, 0);
+	btrfs_set_stack_timespec_sec(&inode_item.ctime, now);
+	btrfs_set_stack_timespec_nsec(&inode_item.ctime, 0);
+	btrfs_set_stack_timespec_sec(&inode_item.mtime, now);
+	btrfs_set_stack_timespec_nsec(&inode_item.mtime, 0);
+	btrfs_set_stack_timespec_sec(&inode_item.otime, now);
+	btrfs_set_stack_timespec_nsec(&inode_item.otime, 0);
+
+	if (root->fs_info->tree_root == root)
+		btrfs_set_super_root_dir(root->fs_info->super_copy, objectid);
+
+	ret = btrfs_insert_inode(trans, root, objectid, &inode_item);
+	if (ret)
+		goto error;
+
+	ret = btrfs_insert_inode_ref(trans, root, "..", 2, objectid, objectid, 0);
+	if (ret)
+		goto error;
+
+	btrfs_set_root_dirid(&root->root_item, objectid);
+	ret = 0;
+error:
 	return ret;
 }
 
@@ -633,6 +685,36 @@ out:
 }
 
 /*
+ * Check for signature at the offset 0 that would be present in case of zoned
+ * device. Workaround for old blkid that do not recognize the format to avoid
+ * accidental overwrites.
+ */
+static int check_btrfs_signature_zoned(const char *device)
+{
+	int fd;
+	int ret;
+	char buf[BTRFS_SUPER_INFO_SIZE];
+	struct btrfs_super_block *sb;
+
+	fd = open(device, O_RDONLY);
+	if (fd < 0)
+		return -1;
+	ret = pread(fd, buf, BTRFS_SUPER_INFO_SIZE, 0);
+	if (ret < 0) {
+		ret = -1;
+		goto out;
+	}
+	sb = (struct btrfs_super_block *)buf;
+	if (btrfs_super_magic(sb) == BTRFS_MAGIC)
+		ret = 1;
+	else
+		ret = 0;
+out:
+	close(fd);
+	return ret;
+}
+
+/*
  * Check for existing filesystem or partition table on device.
  * Returns:
  *	 1 for existing fs or partition
@@ -707,6 +789,23 @@ out:
 		fprintf(stderr,
 			"probe of %s failed, cannot detect "
 			  "existing filesystem.\n", device);
+
+	/* Either nothing found or there was an error is a reason to double check */
+	if (ret == 0 || ret == -1) {
+		ret = check_btrfs_signature_zoned(device);
+		if (ret > 0) {
+			warning(
+"%s contains zoned btrfs signature but was not detected by blkid, please update",
+				device);
+			ret = 1;
+		} else if (ret < 0) {
+			warning(
+			"cannot read superblock on %s, please check manually\n",
+				device);
+			ret = -1;
+		}
+	}
+
 	return ret;
 }
 

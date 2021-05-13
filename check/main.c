@@ -28,7 +28,7 @@
 #include <time.h>
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/volumes.h"
-#include "repair.h"
+#include "common/repair.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/print-tree.h"
 #include "common/task-utils.h"
@@ -46,6 +46,8 @@
 #include "check/mode-original.h"
 #include "check/mode-lowmem.h"
 #include "check/qgroup-verify.h"
+#include "common/open-utils.h"
+#include "mkfs/common.h"
 
 u64 bytes_used = 0;
 u64 total_csum_bytes = 0;
@@ -5759,7 +5761,7 @@ static int check_extent_csums(struct btrfs_root *root, u64 bytenr,
 			while (data_checked < read_len) {
 				tmp = offset + data_checked;
 
-				btrfs_csum_data(csum_type, data + tmp,
+				btrfs_csum_data(gfs_info, csum_type, data + tmp,
 						result, gfs_info->sectorsize);
 
 				csum_offset = leaf_offset +
@@ -9953,7 +9955,12 @@ static int validate_free_space_cache(struct btrfs_root *root)
 {
 	int ret;
 
+	/*
+	 * If cache generation is between 0 and -1ULL, sb generation must be
+	 * equal to sb cache generation or the v1 space caches are outdated.
+	 */
 	if (btrfs_super_cache_generation(gfs_info->super_copy) != -1ULL &&
+	    btrfs_super_cache_generation(gfs_info->super_copy) != 0 &&
 	    btrfs_super_generation(gfs_info->super_copy) !=
 	    btrfs_super_cache_generation(gfs_info->super_copy)) {
 		printf(
@@ -10182,6 +10189,7 @@ static int cmd_check(const struct cmd_struct *cmd, int argc, char **argv)
 {
 	struct cache_tree root_cache;
 	struct btrfs_root *root;
+	struct open_ctree_flags ocf = { 0 };
 	u64 bytenr = 0;
 	u64 subvolid = 0;
 	u64 tree_root_bytenr = 0;
@@ -10401,8 +10409,12 @@ static int cmd_check(const struct cmd_struct *cmd, int argc, char **argv)
 	if (repair)
 		ctree_flags |= OPEN_CTREE_PARTIAL;
 
-	gfs_info = open_ctree_fs_info(argv[optind], bytenr, tree_root_bytenr,
-				  chunk_root_bytenr, ctree_flags);
+	ocf.filename = argv[optind];
+	ocf.sb_bytenr = bytenr;
+	ocf.root_tree_bytenr = tree_root_bytenr;
+	ocf.chunk_tree_bytenr = chunk_root_bytenr;
+	ocf.flags = ctree_flags;
+	gfs_info = open_ctree_fs_info(&ocf);
 	if (!gfs_info) {
 		error("cannot open file system");
 		ret = -EIO;

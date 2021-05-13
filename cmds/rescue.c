@@ -28,6 +28,7 @@
 #include "common/utils.h"
 #include "common/help.h"
 #include "cmds/rescue.h"
+#include "common/open-utils.h"
 
 static const char * const rescue_cmd_group_usage[] = {
 	"btrfs rescue <command> [options] <path>",
@@ -228,6 +229,7 @@ static int cmd_rescue_fix_device_size(const struct cmd_struct *cmd,
 				      int argc, char **argv)
 {
 	struct btrfs_fs_info *fs_info;
+	struct open_ctree_flags ocf = { 0 };
 	char *devname;
 	int ret;
 
@@ -248,8 +250,9 @@ static int cmd_rescue_fix_device_size(const struct cmd_struct *cmd,
 		goto out;
 	}
 
-	fs_info = open_ctree_fs_info(devname, 0, 0, 0, OPEN_CTREE_WRITES |
-				     OPEN_CTREE_PARTIAL);
+	ocf.filename = devname;
+	ocf.flags = OPEN_CTREE_WRITES | OPEN_CTREE_PARTIAL;
+	fs_info = open_ctree_fs_info(&ocf);
 	if (!fs_info) {
 		error("could not open btrfs");
 		ret = -EIO;

@@ -100,6 +100,14 @@ static const struct btrfs_feature mkfs_features[] = {
 		NULL, 0,
 		NULL, 0,
 		"RAID1 with 3 or 4 copies" },
+#ifdef BTRFS_ZONED
+	{ "zoned", BTRFS_FEATURE_INCOMPAT_ZONED,
+		"zoned",
+		VERSION_TO_STRING2(5,12),
+		NULL, 0,
+		NULL, 0,
+		"support zoned devices" },
+#endif
 	/* Keep this one last */
 	{ "list-all", BTRFS_FEATURE_LIST_ALL, NULL }
 };
@@ -327,8 +335,50 @@ u32 get_running_kernel_version(void)
 
 	return version;
 }
+
+/*
+ * The buffer size is strlen of "4096 8192 16384 32768 65536", which is 28,
+ * then round up to 32.
+ */
+#define SUPPORTED_SECTORSIZE_BUF_SIZE	32
+
+/*
+ * Check if current kernel supports the given size
+ */
+static bool check_supported_sectorsize(u32 sectorsize)
+{
+	char supported_buf[SUPPORTED_SECTORSIZE_BUF_SIZE] = { 0 };
+	char sectorsize_buf[SUPPORTED_SECTORSIZE_BUF_SIZE] = { 0 };
+	char *this_char;
+	char *save_ptr = NULL;
+	int fd;
+	int ret;
+
+	fd = sysfs_open_file("features/supported_sectorsizes");
+	if (fd < 0)
+		return false;
+	ret = sysfs_read_file(fd, supported_buf, SUPPORTED_SECTORSIZE_BUF_SIZE);
+	close(fd);
+	if (ret < 0)
+		return false;
+	snprintf(sectorsize_buf, SUPPORTED_SECTORSIZE_BUF_SIZE, "%u", sectorsize);
+
+	for (this_char = strtok_r(supported_buf, " ", &save_ptr);
+	     this_char != NULL;
+	     this_char = strtok_r(NULL, " ", &save_ptr)) {
+		/*
+		 * Also check the terminal '\0' to handle cases like
+		 * "4096" and "40960".
+		 */
+		if (!strncmp(this_char, sectorsize_buf, strlen(sectorsize_buf) + 1))
+			return true;
+	}
+	return false;
+}
+
 int btrfs_check_sectorsize(u32 sectorsize)
 {
+	bool sectorsize_checked = false;
 	u32 page_size = (u32)sysconf(_SC_PAGESIZE);
 
 	if (!is_power_of_2(sectorsize)) {
@@ -340,7 +390,12 @@ int btrfs_check_sectorsize(u32 sectorsize)
 		      sectorsize);
 		return -EINVAL;
 	}
-	if (page_size != sectorsize)
+	if (page_size == sectorsize)
+		sectorsize_checked = true;
+	else
+		sectorsize_checked = check_supported_sectorsize(sectorsize);
+
+	if (!sectorsize_checked)
 		warning(
 "the filesystem may not be mountable, sectorsize %u doesn't match page size %u",
 			sectorsize, page_size);

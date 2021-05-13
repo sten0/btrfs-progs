@@ -17,7 +17,6 @@
  */
 
 #include "kerncompat.h"
-#include "androidcompat.h"
 
 #include <stdio.h>
 #include <stdio_ext.h>
@@ -1446,7 +1445,7 @@ open_ctree_with_broken_chunk(struct recover_control *rc)
 	fs_info->is_chunk_recover = 1;
 
 	fs_info->fs_devices = rc->fs_devices;
-	ret = btrfs_open_devices(fs_info->fs_devices, O_RDWR);
+	ret = btrfs_open_devices(fs_info, fs_info->fs_devices, O_RDWR);
 	if (ret)
 		goto out;
 
@@ -1911,7 +1910,7 @@ static int check_one_csum(int fd, u64 start, u32 len, u32 tree_csum,
 	}
 	ret = 0;
 	put_unaligned_le32(tree_csum, expected_csum);
-	btrfs_csum_data(csum_type, (u8 *)data, result, len);
+	btrfs_csum_data(NULL, csum_type, (u8 *)data, result, len);
 	if (memcmp(result, expected_csum, csum_size) != 0)
 		ret = 1;
 out:

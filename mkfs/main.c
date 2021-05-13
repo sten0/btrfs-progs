@@ -17,14 +17,13 @@
  */
 
 #include "kerncompat.h"
-#include "androidcompat.h"
 
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include "ioctl.h"
 #include <stdio.h>
 #include <stdlib.h>
-/* #include <sys/dir.h> included via androidcompat.h */
+#include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <unistd.h>
@@ -37,6 +36,7 @@
 #include "kernel-shared/free-space-tree.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
+#include "kernel-shared/zoned.h"
 #include "common/utils.h"
 #include "common/path-utils.h"
 #include "common/device-utils.h"
@@ -46,9 +46,9 @@
 #include "common/rbtree-utils.h"
 #include "mkfs/common.h"
 #include "mkfs/rootdir.h"
-#include "crypto/crc32c.h"
 #include "common/fsfeatures.h"
 #include "common/box.h"
+#include "common/units.h"
 #include "check/qgroup-verify.h"
 
 static int verbose = 1;
@@ -70,7 +70,15 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 	u64 bytes_used;
 	u64 chunk_start = 0;
 	u64 chunk_size = 0;
+	u64 system_group_offset = BTRFS_BLOCK_RESERVED_1M_FOR_SUPER;
+	u64 system_group_size = BTRFS_MKFS_SYSTEM_GROUP_SIZE;
 	int ret;
+
+	if (btrfs_is_zoned(fs_info)) {
+		/* Two zones are reserved for superblock */
+		system_group_offset = fs_info->zone_size * BTRFS_NR_SB_LOG_ZONES;
+		system_group_size = fs_info->zone_size;
+	}
 
 	if (mixed)
 		flags |= BTRFS_BLOCK_GROUP_DATA;
@@ -91,9 +99,8 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 	 */
 	ret = btrfs_make_block_group(trans, fs_info, bytes_used,
 				     BTRFS_BLOCK_GROUP_SYSTEM,
-				     BTRFS_BLOCK_RESERVED_1M_FOR_SUPER,
-				     BTRFS_MKFS_SYSTEM_GROUP_SIZE);
-	allocation->system += BTRFS_MKFS_SYSTEM_GROUP_SIZE;
+				     system_group_offset, system_group_size);
+	allocation->system += system_group_size;
 	if (ret)
 		return ret;
 
@@ -434,48 +441,12 @@ static int zero_output_file(int out_fd, u64 size)
 
 static int is_ssd(const char *file)
 {
-	blkid_probe probe;
-	char wholedisk[PATH_MAX];
-	char sysfs_path[PATH_MAX];
-	dev_t devno;
-	int fd;
 	char rotational;
 	int ret;
 
-	probe = blkid_new_probe_from_filename(file);
-	if (!probe)
+	ret = device_get_queue_param(file, "rotational", &rotational, 1);
+	if (ret < 1)
 		return 0;
-
-	/* Device number of this disk (possibly a partition) */
-	devno = blkid_probe_get_devno(probe);
-	if (!devno) {
-		blkid_free_probe(probe);
-		return 0;
-	}
-
-	/* Get whole disk name (not full path) for this devno */
-	ret = blkid_devno_to_wholedisk(devno,
-			wholedisk, sizeof(wholedisk), NULL);
-	if (ret) {
-		blkid_free_probe(probe);
-		return 0;
-	}
-
-	snprintf(sysfs_path, PATH_MAX, "/sys/block/%s/queue/rotational",
-		 wholedisk);
-
-	blkid_free_probe(probe);
-
-	fd = open(sysfs_path, O_RDONLY);
-	if (fd < 0) {
-		return 0;
-	}
-
-	if (read(fd, &rotational, 1) < 1) {
-		close(fd);
-		return 0;
-	}
-	close(fd);
 
 	return rotational == '0';
 }
@@ -917,6 +888,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	struct btrfs_root *root;
 	struct btrfs_fs_info *fs_info;
 	struct btrfs_trans_handle *trans;
+	struct open_ctree_flags ocf = { 0 };
 	char *label = NULL;
 	u64 block_count = 0;
 	u64 dev_block_count = 0;
@@ -936,6 +908,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	int metadata_profile_opt = 0;
 	int discard = 1;
 	int ssd = 0;
+	int zoned = 0;
 	int force_overwrite = 0;
 	char *source_dir = NULL;
 	bool source_dir_set = false;
@@ -951,6 +924,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	struct mkfs_allocation allocation = { 0 };
 	struct btrfs_mkfs_config mkfs_cfg;
 	enum btrfs_csum_type csum_type = BTRFS_CSUM_TYPE_CRC32;
+	u64 system_group_size;
 
 	crc32c_optimization_init();
 
@@ -1105,6 +1079,8 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	if (dev_cnt == 0)
 		print_usage(1);
 
+	zoned = (features & BTRFS_FEATURE_INCOMPAT_ZONED);
+
 	if (source_dir_set && dev_cnt > 1) {
 		error("the option -r is limited to a single device");
 		goto error;
@@ -1145,6 +1121,19 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 
 	file = argv[optind++];
 	ssd = is_ssd(file);
+	if (zoned) {
+		if (!zone_size(file)) {
+			error("zoned: %s: zone size undefined", file);
+			exit(1);
+		}
+	} else if (zoned_model(file) == ZONED_HOST_MANAGED) {
+		if (verbose)
+			printf(
+	"Zoned: %s: host-managed device detected, setting zoned feature\n",
+			       file);
+		zoned = 1;
+		features |= BTRFS_FEATURE_INCOMPAT_ZONED;
+	}
 
 	/*
 	* Set default profiles according to number of added devices.
@@ -1208,6 +1197,23 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	if ((data_profile | metadata_profile) &
 	    (BTRFS_BLOCK_GROUP_RAID1C3 | BTRFS_BLOCK_GROUP_RAID1C4)) {
 		features |= BTRFS_FEATURE_INCOMPAT_RAID1C34;
+	}
+
+	if (zoned) {
+		if (source_dir_set) {
+			error("the option -r and zoned mode are incompatible");
+			exit(1);
+		}
+
+		if (features & BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS) {
+			error("cannot enable mixed-bg in zoned mode");
+			exit(1);
+		}
+
+		if (features & BTRFS_FEATURE_INCOMPAT_RAID56) {
+			error("cannot enable RAID5/6 in zoned mode");
+			exit(1);
+		}
 	}
 
 	if (btrfs_check_nodesize(nodesize, sectorsize,
@@ -1277,6 +1283,20 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 			min_dev_size);
 		goto error;
 	}
+	/*
+	 * 2 zones for the primary superblock
+	 * 1 zone for the system block group
+	 * 1 zone for a metadata block group
+	 * 1 zone for a data block group
+	 */
+	if (zoned && block_count && block_count < 5 * zone_size(file)) {
+		error("size %llu is too small to make a usable filesystem",
+			block_count);
+		error("minimum size for a zoned btrfs filesystem is %llu",
+			min_dev_size);
+		goto error;
+	}
+
 	for (i = saved_optind; i < saved_optind + dev_cnt; i++) {
 		char *path;
 
@@ -1299,6 +1319,12 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	if (ret)
 		goto error;
 
+	if (zoned && ((metadata_profile | data_profile) &
+		      BTRFS_BLOCK_GROUP_PROFILE_MASK)) {
+		error("cannot use RAID/DUP profile in zoned mode");
+		goto error;
+	}
+
 	dev_cnt--;
 
 	/*
@@ -1314,7 +1340,8 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	ret = btrfs_prepare_device(fd, file, &dev_block_count, block_count,
 			(zero_end ? PREP_DEVICE_ZERO_END : 0) |
 			(discard ? PREP_DEVICE_DISCARD : 0) |
-			(verbose ? PREP_DEVICE_VERBOSE : 0));
+			(verbose ? PREP_DEVICE_VERBOSE : 0) |
+			(zoned ? PREP_DEVICE_ZONED : 0));
 	if (ret)
 		goto error;
 	if (block_count && block_count > dev_block_count) {
@@ -1325,9 +1352,10 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	}
 
 	/* To create the first block group and chunk 0 in make_btrfs */
-	if (dev_block_count < BTRFS_MKFS_SYSTEM_GROUP_SIZE) {
+	system_group_size = zoned ?  zone_size(file) : BTRFS_MKFS_SYSTEM_GROUP_SIZE;
+	if (dev_block_count < system_group_size) {
 		error("device is too small to make filesystem, must be at least %llu",
-				(unsigned long long)BTRFS_MKFS_SYSTEM_GROUP_SIZE);
+				(unsigned long long)system_group_size);
 		goto error;
 	}
 
@@ -1336,7 +1364,6 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		warning("metadata has lower redundancy than data!\n");
 	}
 
-	mkfs_cfg.csum_type = BTRFS_CSUM_TYPE_CRC32;
 	mkfs_cfg.label = label;
 	memcpy(mkfs_cfg.fs_uuid, fs_uuid, sizeof(mkfs_cfg.fs_uuid));
 	mkfs_cfg.num_bytes = dev_block_count;
@@ -1345,6 +1372,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	mkfs_cfg.stripesize = stripesize;
 	mkfs_cfg.features = features;
 	mkfs_cfg.csum_type = csum_type;
+	mkfs_cfg.zone_size = zone_size(file);
 
 	ret = make_btrfs(fd, &mkfs_cfg);
 	if (ret) {
@@ -1353,8 +1381,9 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		goto error;
 	}
 
-	fs_info = open_ctree_fs_info(file, 0, 0, 0,
-			OPEN_CTREE_WRITES | OPEN_CTREE_TEMPORARY_SUPER);
+	ocf.filename = file;
+	ocf.flags = OPEN_CTREE_WRITES | OPEN_CTREE_TEMPORARY_SUPER;
+	fs_info = open_ctree_fs_info(&ocf);
 	if (!fs_info) {
 		error("open ctree failed");
 		goto error;
@@ -1427,7 +1456,8 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 				block_count,
 				(verbose ? PREP_DEVICE_VERBOSE : 0) |
 				(zero_end ? PREP_DEVICE_ZERO_END : 0) |
-				(discard ? PREP_DEVICE_DISCARD : 0));
+				(discard ? PREP_DEVICE_DISCARD : 0) |
+				(zoned ? PREP_DEVICE_ZONED : 0));
 		if (ret) {
 			goto error;
 		}
@@ -1538,6 +1568,10 @@ raid_groups:
 			btrfs_group_profile_str(metadata_profile),
 			pretty_size(allocation.system));
 		printf("SSD detected:       %s\n", ssd ? "yes" : "no");
+		printf("Zoned device:       %s\n", zoned ? "yes" : "no");
+		if (zoned)
+			printf("  Zone size:        %s\n",
+			       pretty_size(fs_info->zone_size));
 		btrfs_parse_fs_features_to_string(features_buf, features);
 		printf("Incompat features:  %s\n", features_buf);
 		btrfs_parse_runtime_features_to_string(features_buf,

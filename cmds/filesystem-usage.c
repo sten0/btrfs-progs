@@ -32,10 +32,12 @@
 #include "cmds/filesystem-usage.h"
 #include "cmds/commands.h"
 #include "kernel-shared/disk-io.h"
-
+#include "common/open-utils.h"
+#include "common/units.h"
 #include "version.h"
 #include "common/help.h"
 #include "common/device-utils.h"
+#include "common/open-utils.h"
 
 /*
  * Add the chunk info to the chunk_info list
@@ -429,9 +431,11 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 	u64 l_global_reserve_used = 0;
 	u64 free_estimated = 0;
 	u64 free_min = 0;
+	u64 zone_unusable = 0;
 	double max_data_ratio = 1.0;
 	int mixed = 0;
 	struct statfs statfs_buf;
+	struct btrfs_ioctl_feature_flags feature_flags;
 
 	sargs = load_space_info(fd, path);
 	if (!sargs) {
@@ -496,6 +500,16 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		if ((flags & (BTRFS_BLOCK_GROUP_DATA | BTRFS_BLOCK_GROUP_METADATA))
 		    == (BTRFS_BLOCK_GROUP_DATA | BTRFS_BLOCK_GROUP_METADATA)) {
 			mixed = 1;
+		} else {
+			/*
+			 * As mixed mode is not supported in zoned mode, this
+			 * will account for all profile types
+			 */
+			u64 tmp;
+
+			tmp = device_get_zone_unusable(fd, flags);
+			if (tmp != DEVICE_ZONE_UNUSABLE_UNKNOWN)
+				zone_unusable += tmp;
 		}
 		if (flags & BTRFS_BLOCK_GROUP_DATA) {
 			r_data_used += sargs->spaces[i].used_bytes * ratio;
@@ -577,6 +591,11 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		pretty_size_mode(r_total_missing, unit_mode));
 	printf("    Used:\t\t\t%*s\n", width,
 		pretty_size_mode(r_total_used, unit_mode));
+	ret = ioctl(fd, BTRFS_IOC_GET_FEATURES, &feature_flags);
+	if (ret == 0 && (feature_flags.incompat_flags & BTRFS_FEATURE_INCOMPAT_ZONED)) {
+		printf("    Device zone unusable:\t%*s\n", width,
+			pretty_size_mode(zone_unusable, unit_mode));
+	}
 	printf("    Free (estimated):\t\t%*s\t(",
 		width,
 		pretty_size_mode(free_estimated, unit_mode));
@@ -712,7 +731,7 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 		} else {
 			strcpy(info[ndevs].path, (char *)dev_info.path);
 			info[ndevs].device_size =
-				get_partition_size((char *)dev_info.path);
+				device_get_partition_size((const char *)dev_info.path);
 		}
 		info[ndevs].size = dev_info.total_bytes;
 		++ndevs;
@@ -893,7 +912,7 @@ static void _cmd_filesystem_usage_tabular(unsigned unit_mode,
 			col++;
 		}
 
-		unused = get_partition_size(device_info_ptr[i].path)
+		unused = device_get_partition_size(device_info_ptr[i].path)
 				- total_allocated;
 
 		table_printf(matrix, unallocated_col, vhdr_skip + i, ">%s",

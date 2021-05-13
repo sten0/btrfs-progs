@@ -6,7 +6,7 @@ RUN zypper install -y --no-recommends autoconf automake pkg-config
 RUN zypper install -y --no-recommends libattr-devel libblkid-devel libuuid-devel
 RUN zypper install -y --no-recommends libext2fs-devel libreiserfscore-devel
 RUN zypper install -y --no-recommends zlib-devel lzo-devel libzstd-devel
-RUN zypper install -y --no-recommends make gcc tar gzip
+RUN zypper install -y --no-recommends make gcc tar gzip clang
 RUN zypper install -y --no-recommends python3 python3-devel python3-setuptools
 
 # For downloading fresh sources
@@ -23,7 +23,8 @@ COPY ./test-build .
 COPY ./run-tests .
 COPY ./devel.tar.gz .
 
-CMD ./test-build devel --disable-documentation
+# The blkzoned.h exists but blk_zone.capacity is missing, disable zoned mode explicitly
+CMD ./test-build devel --disable-documentation --disable-zoned
 
 # Continue with:
 # cd /tmp
