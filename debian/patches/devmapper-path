@@ -1,0 +1,24 @@
+commit dcfda5527538993dc7b2291cb9b9b9967f3b3c4a
+Author: David Sterba <dsterba@suse.com>
+Date:   Wed Feb 10 16:36:50 2021 +0100
+
+    btrfs-progs: fix device mapper path canonicalization
+    
+    Commit 922eaa7b5472 ("btrfs-progs: build: fix linking with static
+    libmount") broke path canonicalization, that prevented eg 'device add
+    /dev/dm-0' to properly recognize the device mapper names.
+    
+    Issue: #339
+    Signed-off-by: David Sterba <dsterba@suse.com>
+
+--- btrfs-progs-5.10.1.orig/common/path-utils.c
++++ btrfs-progs-5.10.1/common/path-utils.c
+@@ -325,7 +325,7 @@ char *path_canonicalize(const char *path
+ 		return strdup(path);
+ 	p = strrchr(canonical, '/');
+ 	if (p && strncmp(p, "/dm-", 4) == 0 && isdigit(*(p + 4))) {
+-		char *dm = path_canonicalize(p + 1);
++		char *dm = path_canonicalize_dm_name(p + 1);
+ 
+ 		if (dm) {
+ 			free(canonical);

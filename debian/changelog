@@ -1,20 +1,14 @@
-btrfs-progs (5.10.1-1~bpo10+1) buster-backports; urgency=medium
+btrfs-progs (5.10.1-2) unstable; urgency=medium
 
-  * Rebuild for buster-backports.
+  * Fix failure to add new devices via a devmapper path.  Closes: #982990
 
- -- Nicholas D Steeves <sten@debian.org>  Tue, 16 Feb 2021 14:58:27 -0500
+ -- Adam Borowski <kilobyte@angband.pl>  Fri, 14 May 2021 02:52:17 +0200
 
 btrfs-progs (5.10.1-1) unstable; urgency=medium
 
   * New upstream bugfix release.
 
  -- Adam Borowski <kilobyte@angband.pl>  Sat, 06 Feb 2021 00:04:21 +0100
-
-btrfs-progs (5.10-1~bpo10+1) buster-backports; urgency=medium
-
-  * Rebuild for buster-backports.
-
- -- Nicholas D Steeves <sten@debian.org>  Fri, 29 Jan 2021 18:36:33 -0500
 
 btrfs-progs (5.10-1) unstable; urgency=medium
 
@@ -23,25 +17,11 @@ btrfs-progs (5.10-1) unstable; urgency=medium
 
  -- Adam Borowski <kilobyte@angband.pl>  Tue, 19 Jan 2021 00:17:58 +0100
 
-btrfs-progs (5.9-1~bpo10+1) buster-backports; urgency=medium
-
-  * Rebuild for buster-backports.
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Thu, 05 Nov 2020 16:18:31 -0500
-
 btrfs-progs (5.9-1) unstable; urgency=medium
 
   * New upstream release.
 
  -- Adam Borowski <kilobyte@angband.pl>  Fri, 23 Oct 2020 21:22:35 +0200
-
-btrfs-progs (5.7-1~bpo10+1) buster-backports; urgency=medium
-
-  * Rebuild for buster-backports.
-  * Drop hardcoded dep on modern libgcc-s1, and breaks old initramfs-tools,
-    because these are not applicable to the backport.
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 28 Jul 2020 20:31:55 -0400
 
 btrfs-progs (5.7-1) unstable; urgency=medium
 
@@ -51,12 +31,6 @@ btrfs-progs (5.7-1) unstable; urgency=medium
   * Don't declare initramfs trigger ourselves (done by dh_installinitramfs).
 
  -- Adam Borowski <kilobyte@angband.pl>  Mon, 06 Jul 2020 01:07:42 +0200
-
-btrfs-progs (5.6-1~bpo10+1) buster-backports; urgency=medium
-
-  * Rebuild for buster-backports.
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Fri, 05 Jun 2020 11:27:24 -0400
 
 btrfs-progs (5.6-1) unstable; urgency=medium
 
@@ -102,13 +76,6 @@ btrfs-progs (5.3-1) unstable; urgency=medium
   * Update symbols.
 
  -- Adam Borowski <kilobyte@angband.pl>  Mon, 21 Oct 2019 18:01:05 +0200
-
-btrfs-progs (5.2.1-1~bpo10+1) buster-backports; urgency=medium
-
-  * Rebuild for buster-backports.
-  * Restore Provides: btrfs-tools.
-
- -- Nicholas D Steeves <nsteeves@gmail.com>  Tue, 27 Aug 2019 15:59:22 -0400
 
 btrfs-progs (5.2.1-1) unstable; urgency=medium
 
