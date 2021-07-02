@@ -1,0 +1,114 @@
+Installation instructions
+=========================
+
+The Btrfs utility programs require the following libraries/tools to build:
+
+- util-linux (>= 2.24)
+  - libblkid - block device id library
+  - libmount - access /proc information about mount points
+- libuuid - provided by util-linux, e2fsprogs/e2fslibs or libuuid
+- liblzo2 - LZO data compression library
+- zlib - ZLIB data compression library
+- libzstd - ZSTD data compression library version >= 1.0.0
+
+For the btrfs-convert utility:
+
+- e2fsprogs - ext2/ext3/ext4 file system libraries, or called e2fslibs
+- libreiserfscore - reiserfs file system library version >= 3.6.27
+
+Optionally, the checksums based on cryptographic hashes can be implemented by
+external libraries. Builtin implementations are provided in case the library
+dependencies are not desired.
+
+- libgcrypt
+- libsodium
+- libkcapi
+
+Generating documentation:
+
+- asciidoc - text document format tool
+- xmlto - text document format tool
+- source-highlight - optional, only for generating HTML output
+
+XATTR library should be provided by the standard C library or by
+
+- libattr - extended attribute library
+
+Please note that the package names may differ according to the distribution.
+See https://btrfs.wiki.kernel.org/index.php/Btrfs_source_repositories#Dependencies .
+
+
+Building from sources
+---------------------
+
+To build from git sources you need to generate the configure script using the
+autotools:
+
+    $ ./autogen.sh
+
+To build from the released tarballs:
+
+    $ ./configure
+    $ make
+    $ make install
+
+To install the libbtrfsutil Python bindings:
+
+    $ make install_python
+
+You may disable building some parts like documentation, btrfs-convert or
+backtrace support. See ./configure --help for more.
+
+Specific CFLAGS or LDFLAGS should be set like
+
+    $ CFLAGS=... LDFLAGS=... ./configure --prefix=/usr
+
+and not as arguments to make. You can specify additional flags to build via
+variables EXTRA_CFLAGS and EXTRA_LDFLAGS that get appended to the predefined
+values of the respective variables. There are further build tuning options
+documented in the Makefile.
+
+    $ make EXTRA_CFLAGS=-ggdb3
+
+The build utilizes autotools, dependencies for generating the configure
+scripts are:
+
+* autoconf, autoheader
+* automake, aclocal
+* pkg-config
+
+
+Statically built binaries
+-------------------------
+
+The makefiles are ready to let you build static binaries of the utilities. This
+may be handy in rescue environments. Your system has to provide static version
+of the libraries.
+
+    $ make static
+    $ make btrfs.static
+    $ make btrfs-convert.static
+
+The resulting binaries have the '.static' suffix, the intermediate object
+files do not conflict with the normal (dynamic) build.
+
+
+All-in-one binary (busybox style)
+---------------------------------
+
+Since version 5.2 it's possible to build a single binary that can act as other
+standalone tools, based on the file name:
+
+    $ make btrfs.box
+    $ mv btrfs.box btrfs
+    $ ln -s btrfs mkfs.btrfs
+
+The list of built-ins can be obtained by
+
+    $ btrfs help --box
+
+The basic set will always contain: mkfs.btrfs, btrfs-image, btrfs-convert.
+
+
+References:
+* https://btrfs.wiki.kernel.org
