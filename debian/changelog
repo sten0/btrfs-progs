@@ -1,3 +1,10 @@
+btrfs-progs (5.13-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Don't depend on libgcc-s1 on hppa.  Closes: #990324
+
+ -- Adam Borowski <kilobyte@angband.pl>  Tue, 13 Jul 2021 15:19:33 +0200
+
 btrfs-progs (5.10.1-2) unstable; urgency=medium
 
   * Fix failure to add new devices via a devmapper path.  Closes: #982990
