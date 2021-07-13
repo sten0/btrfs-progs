@@ -395,6 +395,38 @@ static void get_raid56_space_info(struct btrfs_ioctl_space_args *sargs,
 	}
 }
 
+static u64 get_first_device_zone_size(int fd)
+{
+	int dirfd;
+	DIR *dir;
+	struct dirent *de;
+	char name[NAME_MAX] = {0};
+	u64 ret;
+
+	dirfd = sysfs_open_fsid_dir(fd, "devices");
+	if (dirfd < 0)
+		return 0;
+	dir = fdopendir(dirfd);
+	if (!dir) {
+		ret = 0;
+		goto out;
+	}
+	while (1) {
+		de = readdir(dir);
+		if (strcmp(".", de->d_name) == 0 || strcmp("..", de->d_name) == 0)
+			continue;
+		strcpy(name, de->d_name);
+		name[NAME_MAX - 1] = 0;
+		break;
+	}
+	ret = device_get_zone_size(fd, name);
+	ret *= 512;
+
+out:
+	closedir(dir);
+	return ret;
+}
+
 #define	MIN_UNALOCATED_THRESH	SZ_16M
 static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		int chunkcount, struct device_info *devinfo, int devcount,
@@ -589,13 +621,18 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		pretty_size_mode(r_total_unused, unit_mode | UNITS_NEGATIVE));
 	printf("    Device missing:\t\t%*s\n", width,
 		pretty_size_mode(r_total_missing, unit_mode));
-	printf("    Used:\t\t\t%*s\n", width,
-		pretty_size_mode(r_total_used, unit_mode));
 	ret = ioctl(fd, BTRFS_IOC_GET_FEATURES, &feature_flags);
 	if (ret == 0 && (feature_flags.incompat_flags & BTRFS_FEATURE_INCOMPAT_ZONED)) {
+		u64 zone_size;
+
 		printf("    Device zone unusable:\t%*s\n", width,
 			pretty_size_mode(zone_unusable, unit_mode));
+		zone_size = get_first_device_zone_size(fd);
+		printf("    Device zone size:\t\t%*s\n", width,
+			pretty_size_mode(zone_size, unit_mode));
 	}
+	printf("    Used:\t\t\t%*s\n", width,
+		pretty_size_mode(r_total_used, unit_mode));
 	printf("    Free (estimated):\t\t%*s\t(",
 		width,
 		pretty_size_mode(free_estimated, unit_mode));
@@ -1192,20 +1229,41 @@ void print_device_chunks(struct device_info *devinfo,
 		const char *r_mode;
 		u64 flags;
 		u64 size;
+		u64 num_stripes;
+		u64 profile;
 
 		if (chunks_info_ptr[i].devid != devinfo->devid)
 			continue;
 
 		flags = chunks_info_ptr[i].type;
+		profile = (flags & BTRFS_BLOCK_GROUP_PROFILE_MASK);
 
 		description = btrfs_group_type_str(flags);
 		r_mode = btrfs_group_profile_str(flags);
 		size = calc_chunk_size(chunks_info_ptr+i);
-		printf("   %s,%s:%*s%10s\n",
-			description,
-			r_mode,
-			(int)(20 - strlen(description) - strlen(r_mode)), "",
-			pretty_size_mode(size, unit_mode));
+		num_stripes = chunks_info_ptr[i].num_stripes;
+
+		switch (profile) {
+		case BTRFS_BLOCK_GROUP_RAID0:
+		case BTRFS_BLOCK_GROUP_RAID5:
+		case BTRFS_BLOCK_GROUP_RAID6:
+		case BTRFS_BLOCK_GROUP_RAID10:
+			printf("   %s,%s/%llu:%*s%10s\n",
+				   description,
+				   r_mode,
+				   num_stripes,
+				   (int)(20 - strlen(description) - strlen(r_mode)
+						 - count_digits(num_stripes) - 1), "",
+				   pretty_size_mode(size, unit_mode));
+			break;
+		default:
+			printf("   %s,%s:%*s%10s\n",
+				   description,
+				   r_mode,
+				   (int)(20 - strlen(description) - strlen(r_mode)), "",
+				   pretty_size_mode(size, unit_mode));
+			break;
+		}
 
 		allocated += size;
 

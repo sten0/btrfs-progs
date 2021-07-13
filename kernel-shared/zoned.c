@@ -471,7 +471,7 @@ size_t btrfs_sb_io(int fd, void *buf, off_t offset, int rw)
 	const u64 sb_size_sector = (BTRFS_SUPER_INFO_SIZE >> SECTOR_SHIFT);
 	u64 mapped = U64_MAX;
 	u32 zone_num;
-	unsigned int zone_size_sector;
+	u32 zone_size_sector;
 	size_t rep_size;
 	int mirror = -1;
 	int i;
@@ -488,9 +488,14 @@ size_t btrfs_sb_io(int fd, void *buf, off_t offset, int rw)
 	/* Do not call ioctl(BLKGETZONESZ) on a regular file. */
 	if ((stat_buf.st_mode & S_IFMT) == S_IFBLK) {
 		ret = ioctl(fd, BLKGETZONESZ, &zone_size_sector);
-		if (ret) {
-			error("zoned: ioctl BLKGETZONESZ failed (%m)");
-			exit(1);
+		if (ret < 0) {
+			if (errno == ENOTTY) {
+				/* No kernel support, assuming non-zoned device */
+				zone_size_sector = 0;
+			} else {
+				error("zoned: ioctl BLKGETZONESZ failed: %m");
+				exit(1);
+			}
 		}
 	} else {
 		zone_size_sector = 0;
@@ -528,7 +533,11 @@ size_t btrfs_sb_io(int fd, void *buf, off_t offset, int rw)
 
 	ret = ioctl(fd, BLKREPORTZONE, rep);
 	if (ret) {
-		error("zoned: ioctl BLKREPORTZONE failed (%m)");
+		if (errno == ENOTTY) {
+			error("zoned: BLKREPORTZONE failed but BLKGETZONESZ works: %m");
+			exit(1);
+		}
+		error("zoned: ioctl BLKREPORTZONE failed: %m");
 		exit(1);
 	}
 	if (rep->nr_zones != 2) {
@@ -543,6 +552,7 @@ size_t btrfs_sb_io(int fd, void *buf, off_t offset, int rw)
 	zones = (struct blk_zone *)(rep + 1);
 
 	ret = sb_log_location(fd, zones, rw, &mapped);
+	free(rep);
 	/*
 	 * Special case: no superblock found in the zones. This case happens
 	 * when initializing a file-system.

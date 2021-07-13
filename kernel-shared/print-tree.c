@@ -296,7 +296,7 @@ static void print_dev_item(struct extent_buffer *eb,
 			   (unsigned long)btrfs_device_fsid(dev_item),
 			   BTRFS_UUID_SIZE);
 	uuid_unparse(fsid, fsid_str);
-	printf("\t\tdevid %llu total_bytes %llu bytes_used %Lu\n"
+	printf("\t\tdevid %llu total_bytes %llu bytes_used %llu\n"
 	       "\t\tio_align %u io_width %u sector_size %u type %llu\n"
 	       "\t\tgeneration %llu start_offset %llu dev_group %u\n"
 	       "\t\tseek_speed %hhu bandwidth %hhu\n"
@@ -1161,23 +1161,58 @@ static void print_temporary_item(struct extent_buffer *eb, void *ptr,
 }
 
 static void print_extent_csum(struct extent_buffer *eb,
-		struct btrfs_fs_info *fs_info, u32 item_size, u64 start)
+		int item_size, u64 offset, void *ptr, bool print_csum_items)
 {
+	struct btrfs_fs_info *fs_info = eb->fs_info;
 	u32 size;
+	int csum_size;
 
 	/*
 	 * If we don't have fs_info, only output its start position as we
 	 * don't have sectorsize for the calculation
 	 */
 	if (!fs_info) {
-		printf("\t\trange start %llu\n", (unsigned long long)start);
+		printf("\t\trange start %llu\n", (unsigned long long)offset);
 		return;
 	}
-	size = (item_size / btrfs_super_csum_size(fs_info->super_copy)) *
-			fs_info->sectorsize;
+	csum_size = btrfs_super_csum_size(fs_info->super_copy);
+	size = (item_size / csum_size) * fs_info->sectorsize;
 	printf("\t\trange start %llu end %llu length %u\n",
-			(unsigned long long)start,
-			(unsigned long long)start + size, size);
+			(unsigned long long)offset,
+			(unsigned long long)offset + size, size);
+
+
+	/*
+	 * Fill one long line, which is 1 item of sha256/blake2,
+	 * 2x xxhash, 4x crc32c with format:
+	 * [offset] 0xCHECKSUM [offset] 0xCHECKSUM
+	 */
+	if (print_csum_items) {
+		const int one_line = max(1, BTRFS_CSUM_SIZE / csum_size / 2);
+		int curline;
+		const u8 *csum = (const u8 *)(eb->data + (unsigned long)ptr);
+
+		curline = one_line;
+		while (size > 0) {
+			int i;
+
+			if (curline == one_line) {
+				printf("\t\t");
+			} else if (curline == 0) {
+				curline = one_line;
+				printf("\n\t\t");
+			} else {
+				putchar(' ');
+			}
+			printf("[%llu] 0x", offset);
+			for (i = 0; i < csum_size; i++)
+				printf("%02x", *csum++);
+			offset += fs_info->sectorsize;
+			size -= fs_info->sectorsize;
+			curline--;
+		}
+		putchar('\n');
+	}
 }
 
 /* Caller must ensure sizeof(*ret) >= 14 "WRITTEN|RELOC" */
@@ -1196,12 +1231,16 @@ static void header_flags_to_str(u64 flags, char *ret)
 	}
 }
 
-static void print_header_info(struct extent_buffer *eb)
+static void print_header_info(struct extent_buffer *eb, unsigned int mode)
 {
+	struct btrfs_fs_info *fs_info = eb->fs_info;
 	char flags_str[128];
 	u64 flags;
 	u32 nr;
 	u8 backref_rev;
+	char csum_str[2 * BTRFS_CSUM_SIZE + strlen(" csum 0x") + 1];
+	int i;
+	int csum_size;
 
 	flags = btrfs_header_flags(eb) & ~BTRFS_BACKREF_REV_MASK;
 	backref_rev = btrfs_header_flags(eb) >> BTRFS_BACKREF_REV_SHIFT;
@@ -1222,23 +1261,40 @@ static void print_header_info(struct extent_buffer *eb)
 		       (unsigned long long)btrfs_header_generation(eb));
 	print_objectid(stdout, btrfs_header_owner(eb), 0);
 	printf("\n");
-	printf("%s %llu flags 0x%llx(%s) backref revision %d\n",
+	if (fs_info && (mode & BTRFS_PRINT_TREE_CSUM_HEADERS)) {
+		char *tmp = csum_str;
+		u8 *csum = (u8 *)(eb->data + offsetof(struct btrfs_header, csum));
+
+		csum_size = btrfs_super_csum_size(fs_info->super_copy);
+		strcpy(csum_str, " csum 0x");
+		tmp = csum_str + strlen(csum_str);
+		for (i = 0; i < csum_size; i++) {
+			sprintf(tmp, "%02x", csum[i]);
+			tmp++;
+			tmp++;
+		}
+	} else {
+		/* We don't have fs_info, can't print the csum */
+		csum_str[0] = 0;
+	}
+	printf("%s %llu flags 0x%llx(%s) backref revision %d%s\n",
 	       btrfs_header_level(eb) ? "node" : "leaf",
-	       btrfs_header_bytenr(eb), flags, flags_str, backref_rev);
+	       btrfs_header_bytenr(eb), flags, flags_str, backref_rev,
+	       csum_str);
 	print_uuids(eb);
 	fflush(stdout);
 }
 
-void btrfs_print_leaf(struct extent_buffer *eb)
+void btrfs_print_leaf(struct extent_buffer *eb, unsigned int mode)
 {
-	struct btrfs_fs_info *fs_info = eb->fs_info;
 	struct btrfs_item *item;
 	struct btrfs_disk_key disk_key;
 	u32 leaf_data_size = __BTRFS_LEAF_DATA_SIZE(eb->len);
 	u32 i;
 	u32 nr;
+	const bool print_csum_items = (mode & BTRFS_PRINT_TREE_CSUM_ITEMS);
 
-	print_header_info(eb);
+	print_header_info(eb, mode);
 	nr = btrfs_header_nritems(eb);
 	for (i = 0; i < nr; i++) {
 		u32 item_size;
@@ -1303,7 +1359,7 @@ void btrfs_print_leaf(struct extent_buffer *eb)
 			struct btrfs_dir_log_item *dlog;
 
 			dlog = btrfs_item_ptr(eb, i, struct btrfs_dir_log_item);
-			printf("\t\tdir log end %Lu\n",
+			printf("\t\tdir log end %llu\n",
 			       (unsigned long long)btrfs_dir_log_end(eb, dlog));
 			break;
 			}
@@ -1344,8 +1400,7 @@ void btrfs_print_leaf(struct extent_buffer *eb)
 			printf("\t\tcsum item\n");
 			break;
 		case BTRFS_EXTENT_CSUM_KEY:
-			print_extent_csum(eb, fs_info, item_size,
-					offset);
+			print_extent_csum(eb, item_size, offset, ptr, print_csum_items);
 			break;
 		case BTRFS_EXTENT_DATA_KEY:
 			print_file_extent_item(eb, item, i, ptr);
@@ -1436,7 +1491,7 @@ out:
 	return ret;
 }
 
-static void bfs_print_children(struct extent_buffer *root_eb)
+static void bfs_print_children(struct extent_buffer *root_eb, unsigned int mode)
 {
 	struct btrfs_fs_info *fs_info = root_eb->fs_info;
 	struct btrfs_path path;
@@ -1446,6 +1501,10 @@ static void bfs_print_children(struct extent_buffer *root_eb)
 
 	if (root_level < 1)
 		return;
+
+	mode &= ~(BTRFS_PRINT_TREE_FOLLOW);
+	mode |= BTRFS_PRINT_TREE_BFS;
+	mode &= ~(BTRFS_PRINT_TREE_DFS);
 
 	btrfs_init_path(&path);
 	/* For path */
@@ -1462,8 +1521,7 @@ static void bfs_print_children(struct extent_buffer *root_eb)
 
 		/* Print all sibling tree blocks */
 		while (1) {
-			btrfs_print_tree(path.nodes[cur_level], 0,
-					 BTRFS_PRINT_TREE_BFS);
+			btrfs_print_tree(path.nodes[cur_level], mode);
 			ret = btrfs_next_sibling_tree_block(fs_info, &path);
 			if (ret < 0)
 				goto out;
@@ -1478,13 +1536,17 @@ out:
 	return;
 }
 
-static void dfs_print_children(struct extent_buffer *root_eb)
+static void dfs_print_children(struct extent_buffer *root_eb, unsigned int mode)
 {
 	struct btrfs_fs_info *fs_info = root_eb->fs_info;
 	struct extent_buffer *next;
 	int nr = btrfs_header_nritems(root_eb);
 	int root_eb_level = btrfs_header_level(root_eb);
 	int i;
+
+	mode |= BTRFS_PRINT_TREE_FOLLOW;
+	mode |= BTRFS_PRINT_TREE_DFS;
+	mode &= ~(BTRFS_PRINT_TREE_BFS);
 
 	for (i = 0; i < nr; i++) {
 		next = read_tree_block(fs_info, btrfs_node_blockptr(root_eb, i),
@@ -1504,12 +1566,18 @@ static void dfs_print_children(struct extent_buffer *root_eb)
 			free_extent_buffer(next);
 			continue;
 		}
-		btrfs_print_tree(next, 1, BTRFS_PRINT_TREE_DFS);
+		btrfs_print_tree(next, mode);
 		free_extent_buffer(next);
 	}
 }
 
-void btrfs_print_tree(struct extent_buffer *eb, bool follow, int traverse)
+/*
+ * Print a tree block (applies to both node and leaf).
+ *
+ * @eb:		tree block where to start
+ * @mode:	bits setting mode of operation, see BTRFS_PRINT_TREE_*
+ */
+void btrfs_print_tree(struct extent_buffer *eb, unsigned int mode)
 {
 	u32 i;
 	u32 nr;
@@ -1517,15 +1585,20 @@ void btrfs_print_tree(struct extent_buffer *eb, bool follow, int traverse)
 	struct btrfs_fs_info *fs_info = eb->fs_info;
 	struct btrfs_disk_key disk_key;
 	struct btrfs_key key;
+	const bool follow = (mode & BTRFS_PRINT_TREE_FOLLOW);
+	unsigned int traverse = BTRFS_PRINT_TREE_DEFAULT;
 
 	if (!eb)
 		return;
-	if (traverse != BTRFS_PRINT_TREE_DFS && traverse != BTRFS_PRINT_TREE_BFS)
-		traverse = BTRFS_PRINT_TREE_DEFAULT;
+	/* BFS is default and takes precedence if both are set */
+	if (mode & BTRFS_PRINT_TREE_DFS)
+		traverse = BTRFS_PRINT_TREE_DFS;
+	if (mode & BTRFS_PRINT_TREE_BFS)
+		traverse = BTRFS_PRINT_TREE_BFS;
 
 	nr = btrfs_header_nritems(eb);
 	if (btrfs_is_leaf(eb)) {
-		btrfs_print_leaf(eb);
+		btrfs_print_leaf(eb, mode);
 		return;
 	}
 	/* We are crossing eb boundary, this node must be corrupted */
@@ -1533,7 +1606,7 @@ void btrfs_print_tree(struct extent_buffer *eb, bool follow, int traverse)
 		warning(
 		"node nr_items corrupted, has %u limit %u, continue anyway",
 			nr, BTRFS_NODEPTRS_PER_EXTENT_BUFFER(eb));
-	print_header_info(eb);
+	print_header_info(eb, mode);
 	ptr_num = BTRFS_NODEPTRS_PER_EXTENT_BUFFER(eb);
 	for (i = 0; i < nr && i < ptr_num; i++) {
 		u64 blocknr = btrfs_node_blockptr(eb, i);
@@ -1553,11 +1626,13 @@ void btrfs_print_tree(struct extent_buffer *eb, bool follow, int traverse)
 	if (follow && !fs_info)
 		return;
 
-	if (traverse == BTRFS_PRINT_TREE_DFS)
-		dfs_print_children(eb);
-	else
-		bfs_print_children(eb);
-	return;
+	/* Keep non-traversal modes */
+	mode &= ~(BTRFS_PRINT_TREE_DFS | BTRFS_PRINT_TREE_BFS);
+	if (traverse == BTRFS_PRINT_TREE_DFS) {
+		dfs_print_children(eb, mode);
+	} else {
+		bfs_print_children(eb, mode);
+	}
 }
 
 static bool is_valid_csum_type(u16 csum_type)
