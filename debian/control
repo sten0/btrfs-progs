@@ -27,8 +27,7 @@ Vcs-Git: https://salsa.debian.org/debian/btrfs-progs.git -b debian
 Package: btrfs-progs
 Architecture: linux-any
 Multi-Arch: foreign
-Depends: ${misc:Depends}, ${shlibs:Depends}, libgcc-s1 (>> 10-20200211) [!hppa]
-# backports will want the Breaks:libcc-s1 below
+Depends: ${misc:Depends}, ${shlibs:Depends}
 Breaks: btrbk (<= 0.25.0), libgcc-s1 (<< 10-20200211), initramfs-tools (<< 0.137~)
 Suggests: duperemove
 Description: Checksumming Copy on Write Filesystem utilities
