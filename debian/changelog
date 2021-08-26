@@ -1,3 +1,10 @@
+btrfs-progs (5.13.1-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+  * Drop handling of early-bullseye-unstable libgcc-s1.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Thu, 26 Aug 2021 17:21:52 +0200
+
 btrfs-progs (5.13-1) experimental; urgency=medium
 
   * New upstream release.
