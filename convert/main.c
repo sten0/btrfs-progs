@@ -90,6 +90,7 @@
 #include <getopt.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <uuid/uuid.h>
 
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
@@ -99,6 +100,7 @@
 #include "common/task-utils.h"
 #include "common/path-utils.h"
 #include "common/help.h"
+#include "common/parse-utils.h"
 #include "mkfs/common.h"
 #include "convert/common.h"
 #include "convert/source-fs.h"
@@ -129,7 +131,7 @@ static void *print_copied_inodes(void *p)
 	while (1) {
 		count++;
 		pthread_mutex_lock(&priv->mutex);
-		printf("copy inodes [%c] [%10llu/%10llu]\r",
+		printf("Copy inodes [%c] [%10llu/%10llu]\r",
 		       work_indicator[count % 4],
 		       (unsigned long long)priv->cur_copy_inodes,
 		       (unsigned long long)priv->max_copy_inodes);
@@ -1131,7 +1133,8 @@ static int convert_open_fs(const char *devname,
 }
 
 static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
-		const char *fslabel, int progress, u64 features, u16 csum_type)
+		const char *fslabel, int progress, u64 features, u16 csum_type,
+		char fsid[BTRFS_UUID_UNPARSED_SIZE])
 {
 	int ret;
 	int fd = -1;
@@ -1144,9 +1147,11 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	char subvol_name[SOURCE_FS_NAME_LEN + 8];
 	struct task_ctx ctx;
 	char features_buf[64];
+	char fsid_str[BTRFS_UUID_UNPARSED_SIZE];
 	struct btrfs_mkfs_config mkfs_cfg;
 	bool btrfs_sb_committed = false;
 
+	memset(&mkfs_cfg, 0, sizeof(mkfs_cfg));
 	init_convert_context(&cctx);
 	ret = convert_open_fs(devname, &cctx);
 	if (ret)
@@ -1182,24 +1187,50 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	if (features == BTRFS_MKFS_DEFAULT_FEATURES)
 		strcat(features_buf, " (default)");
 
-	printf("create btrfs filesystem:\n");
-	printf("\tblocksize: %u\n", blocksize);
-	printf("\tnodesize:  %u\n", nodesize);
-	printf("\tfeatures:  %s\n", features_buf);
-	printf("\tchecksum:  %s\n", btrfs_super_csum_name(csum_type));
-	printf("free space report:\n");
-	printf("\ttotal:     %llu\n",cctx.total_bytes);
-	printf("\tfree:      %llu (%.2f%%)\n", cctx.free_bytes_initial,
+	if (convert_flags & CONVERT_FLAG_COPY_FSID) {
+		uuid_unparse(cctx.fs_uuid, mkfs_cfg.fs_uuid);
+	} else if (fsid[0] == 0) {
+		uuid_t uuid;
+
+		uuid_generate(uuid);
+		uuid_unparse(uuid, mkfs_cfg.fs_uuid);
+	} else {
+		memcpy(mkfs_cfg.fs_uuid, fsid, BTRFS_UUID_UNPARSED_SIZE);
+	}
+
+	printf("Source filesystem:\n");
+	printf("  Type:           %s\n", cctx.convert_ops->name);
+	printf("  Label:          %s\n", cctx.label);
+	printf("  Blocksize:      %u\n", blocksize);
+	uuid_unparse(cctx.fs_uuid, fsid_str);
+	printf("  UUID:           %s\n", fsid_str);
+	printf("Target filesystem:\n");
+	printf("  Label:          %s\n", fslabel);
+	printf("  Blocksize:      %u\n", blocksize);
+	printf("  Nodesize:       %u\n", nodesize);
+	printf("  UUID:           %s\n", mkfs_cfg.fs_uuid);
+	printf("  Checksum:       %s\n", btrfs_super_csum_name(csum_type));
+	printf("  Features:       %s\n", features_buf);
+	printf("    Data csum:    %s\n", (convert_flags & CONVERT_FLAG_DATACSUM) ?  "yes" : "no");
+	printf("    Inline data:  %s\n", (convert_flags & CONVERT_FLAG_INLINE_DATA) ?  "yes" : "no");
+	printf("    Copy xattr:   %s\n", (convert_flags & CONVERT_FLAG_XATTR) ? "yes" : "no");
+	printf("Reported stats:\n");
+	printf("  Total space:    %12llu\n", cctx.total_bytes);
+	printf("  Free space:     %12llu (%.2f%%)\n", cctx.free_bytes_initial,
 			100.0 * cctx.free_bytes_initial / cctx.total_bytes);
-	memset(&mkfs_cfg, 0, sizeof(mkfs_cfg));
+	printf("  Inode count:    %12llu\n", cctx.inodes_count);
+	printf("  Free inodes:    %12llu\n", cctx.free_inodes_count);
+	printf("  Block count:    %12llu\n", cctx.block_count);
+
 	mkfs_cfg.csum_type = csum_type;
-	mkfs_cfg.label = cctx.volume_name;
+	mkfs_cfg.label = cctx.label;
 	mkfs_cfg.num_bytes = total_bytes;
 	mkfs_cfg.nodesize = nodesize;
 	mkfs_cfg.sectorsize = blocksize;
 	mkfs_cfg.stripesize = blocksize;
 	mkfs_cfg.features = features;
 
+	printf("Create initial btrfs filesystem\n");
 	ret = make_convert_btrfs(fd, &mkfs_cfg, &cctx);
 	if (ret) {
 		errno = -ret;
@@ -1219,7 +1250,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		goto fail;
 	}
 
-	printf("creating %s image file\n", cctx.convert_ops->name);
+	printf("Create %s image file\n", cctx.convert_ops->name);
 	snprintf(subvol_name, sizeof(subvol_name), "%s_saved",
 			cctx.convert_ops->name);
 	key.objectid = CONV_IMAGE_SUBVOL_OBJECTID;
@@ -1238,7 +1269,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		goto fail;
 	}
 
-	printf("creating btrfs metadata\n");
+	printf("Create btrfs metadata\n");
 	ret = pthread_mutex_init(&ctx.mutex, NULL);
 	if (ret) {
 		error("failed to initialize mutex: %d", ret);
@@ -1272,11 +1303,11 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	memset(root->fs_info->super_copy->label, 0, BTRFS_LABEL_SIZE);
 	if (convert_flags & CONVERT_FLAG_COPY_LABEL) {
 		__strncpy_null(root->fs_info->super_copy->label,
-				cctx.volume_name, BTRFS_LABEL_SIZE - 1);
-		printf("copy label '%s'\n", root->fs_info->super_copy->label);
+				cctx.label, BTRFS_LABEL_SIZE - 1);
+		printf("Copy label '%s'\n", root->fs_info->super_copy->label);
 	} else if (convert_flags & CONVERT_FLAG_SET_LABEL) {
 		strcpy(root->fs_info->super_copy->label, fslabel);
-		printf("set label to '%s'\n", fslabel);
+		printf("Set label to '%s'\n", fslabel);
 	}
 
 	ret = close_ctree(root);
@@ -1308,7 +1339,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	close_ctree(root);
 	close(fd);
 
-	printf("conversion complete\n");
+	printf("Conversion complete\n");
 	return 0;
 fail:
 	clean_convert_context(&cctx);
@@ -1576,7 +1607,11 @@ static int do_rollback(const char *devname)
 	struct btrfs_path path;
 	struct btrfs_dir_item *dir;
 	struct btrfs_inode_item *inode_item;
+	struct btrfs_root_ref *root_ref_item;
 	char *image_name = "image";
+	char dir_name[PATH_MAX];
+	int name_len;
+	char fsid_str[BTRFS_UUID_UNPARSED_SIZE];
 	char *reserved_ranges[ARRAY_SIZE(btrfs_reserved_ranges)] = { NULL };
 	u64 total_bytes;
 	u64 fsize;
@@ -1585,6 +1620,8 @@ static int do_rollback(const char *devname)
 	int fd = -1;
 	int ret;
 	int i;
+
+	printf("Open filesystem for rollback:\n");
 
 	for (i = 0; i < ARRAY_SIZE(btrfs_reserved_ranges); i++) {
 		const struct simple_range *range = &btrfs_reserved_ranges[i];
@@ -1616,6 +1653,10 @@ static int do_rollback(const char *devname)
 	}
 	fs_info = root->fs_info;
 
+	printf("  Label:           %s\n", fs_info->super_copy->label);
+	uuid_unparse(fs_info->super_copy->fsid, fsid_str);
+	printf("  UUID:            %s\n", fsid_str);
+
 	/*
 	 * Search root backref first, or after subvolume deletion (orphan),
 	 * we can still rollback the image.
@@ -1625,7 +1666,6 @@ static int do_rollback(const char *devname)
 	key.offset = BTRFS_FS_TREE_OBJECTID;
 	btrfs_init_path(&path);
 	ret = btrfs_search_slot(NULL, fs_info->tree_root, &key, &path, 0, 0);
-	btrfs_release_path(&path);
 	if (ret > 0) {
 		error("unable to find source fs image subvolume, is it deleted?");
 		ret = -ENOENT;
@@ -1635,6 +1675,18 @@ static int do_rollback(const char *devname)
 		error("failed to find source fs image subvolume: %m");
 		goto close_fs;
 	}
+	/* (256 ROOT_BACKREF 5) */
+	/* root backref key dirid 256 sequence 3 name ext2_saved */
+	root_ref_item = btrfs_item_ptr(path.nodes[0], path.slots[0], struct btrfs_root_ref);
+	name_len = btrfs_root_ref_name_len(path.nodes[0], root_ref_item);
+	if (name_len > sizeof(dir_name))
+		name_len = sizeof(dir_name) - 1;
+	read_extent_buffer(path.nodes[0], dir_name, (unsigned long)(root_ref_item + 1), name_len);
+	dir_name[sizeof(dir_name) - 1] = 0;
+
+	printf("  Restoring from:  %s/%s\n", dir_name, image_name);
+
+	btrfs_release_path(&path);
 
 	/* Search convert subvolume */
 	key.objectid = CONV_IMAGE_SUBVOL_OBJECTID;
@@ -1730,7 +1782,7 @@ free_mem:
 	if (ret)
 		error("rollback failed");
 	else
-		printf("rollback succeeded\n");
+		printf("Rollback succeeded\n");
 	return ret;
 }
 
@@ -1747,6 +1799,7 @@ static void print_usage(void)
 	printf("\t-r|--rollback          roll back to the original filesystem\n");
 	printf("\t-l|--label LABEL       set filesystem label\n");
 	printf("\t-L|--copy-label        use label from converted filesystem\n");
+	printf("\t--uuid SPEC            new, copy or user-defined conforming UUID\n");
 	printf("\t-p|--progress          show converting progress (default)\n");
 	printf("\t-O|--features LIST     comma separated list of filesystem features\n");
 	printf("\t--no-progress          show only overview, not the detailed progress\n");
@@ -1772,11 +1825,15 @@ int BOX_MAIN(convert)(int argc, char *argv[])
 	char fslabel[BTRFS_LABEL_SIZE];
 	u64 features = BTRFS_MKFS_DEFAULT_FEATURES;
 	u16 csum_type = BTRFS_CSUM_TYPE_CRC32;
+	u32 copy_fsid = 0;
+	char fsid[BTRFS_UUID_UNPARSED_SIZE] = {0};
 
 	crc32c_optimization_init();
+	printf("btrfs-convert from %s\n\n", PACKAGE_STRING);
 
 	while(1) {
-		enum { GETOPT_VAL_NO_PROGRESS = 256, GETOPT_VAL_CHECKSUM };
+		enum { GETOPT_VAL_NO_PROGRESS = 256, GETOPT_VAL_CHECKSUM,
+			GETOPT_VAL_UUID };
 		static const struct option long_options[] = {
 			{ "no-progress", no_argument, NULL,
 				GETOPT_VAL_NO_PROGRESS },
@@ -1792,6 +1849,7 @@ int BOX_MAIN(convert)(int argc, char *argv[])
 			{ "progress", no_argument, NULL, 'p' },
 			{ "label", required_argument, NULL, 'l' },
 			{ "copy-label", no_argument, NULL, 'L' },
+			{ "uuid", required_argument, NULL, GETOPT_VAL_UUID },
 			{ "nodesize", required_argument, NULL, 'N' },
 			{ "help", no_argument, NULL, GETOPT_VAL_HELP},
 			{ NULL, 0, NULL, 0 }
@@ -1866,6 +1924,23 @@ int BOX_MAIN(convert)(int argc, char *argv[])
 			case GETOPT_VAL_CHECKSUM:
 				csum_type = parse_csum_type(optarg);
 				break;
+			case GETOPT_VAL_UUID:
+				copy_fsid = 0;
+				fsid[0] = 0;
+				if (strcmp(optarg, "copy") == 0) {
+					copy_fsid = CONVERT_FLAG_COPY_FSID;
+				} else if (strcmp(optarg, "new") == 0) {
+					/* Generated later */
+				} else {
+					uuid_t uuid;
+
+					if (uuid_parse(optarg, uuid) != 0) {
+						error("invalid UUID: %s\n", optarg);
+						return 1;
+					}
+					strncpy(fsid, optarg, sizeof(fsid));
+				}
+				break;
 			case GETOPT_VAL_HELP:
 			default:
 				print_usage();
@@ -1908,9 +1983,10 @@ int BOX_MAIN(convert)(int argc, char *argv[])
 		cf |= datacsum ? CONVERT_FLAG_DATACSUM : 0;
 		cf |= packing ? CONVERT_FLAG_INLINE_DATA : 0;
 		cf |= noxattr ? 0 : CONVERT_FLAG_XATTR;
+		cf |= copy_fsid;
 		cf |= copylabel;
 		ret = do_convert(file, cf, nodesize, fslabel, progress, features,
-				 csum_type);
+				 csum_type, fsid);
 	}
 	if (ret)
 		return 1;

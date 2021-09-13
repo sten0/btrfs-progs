@@ -28,6 +28,7 @@
 #include "check/mode-lowmem.h"
 
 static u64 last_allocated_chunk;
+static u64 total_used = 0;
 
 static int calc_extent_flag(struct btrfs_root *root, struct extent_buffer *eb,
 			    u64 *flags_ret)
@@ -2675,6 +2676,15 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 	while (1) {
 		btrfs_item_key_to_cpu(path->nodes[0], &last_key, path->slots[0]);
 		ret = btrfs_next_item(root, path);
+
+		/*
+		 * New leaf, we need to check it and see if it's valid, if not
+		 * we need to bail otherwise we could end up stuck.
+		 */
+		if (path->slots[0] == 0 &&
+		    btrfs_check_leaf(gfs_info, NULL, path->nodes[0]))
+			ret = -EIO;
+
 		if (ret < 0) {
 			/* out will fill 'err' rusing current statistics */
 			goto out;
@@ -3645,6 +3655,8 @@ next:
 out:
 	btrfs_release_path(&path);
 
+	total_used += used;
+
 	if (total != used) {
 		error(
 		"block group[%llu %llu] used %llu but extent items used %llu",
@@ -4265,7 +4277,7 @@ static int check_extent_item(struct btrfs_path *path)
 		err |= CROSSING_STRIPE_BOUNDARY;
 	}
 	if (metadata)
-		btrfs_check_subpage_eb_alignment(key.objectid, nodesize);
+		btrfs_check_subpage_eb_alignment(gfs_info, key.objectid, nodesize);
 
 	ptr = (unsigned long)(ei + 1);
 
@@ -4381,6 +4393,7 @@ next:
 		goto next;
 	}
 
+	err |= tmp_err;
 	ptr_offset += btrfs_extent_inline_ref_size(type);
 	goto next;
 
@@ -5195,7 +5208,7 @@ static int check_btrfs_root(struct btrfs_root *root, int check_all)
 		 * missing we will skip it forever.
 		 */
 		ret = check_fs_first_inode(root);
-		if (ret < 0)
+		if (ret)
 			return FATAL_ERROR;
 	}
 
@@ -5546,6 +5559,14 @@ next:
 	}
 out:
 
+	if (total_used != btrfs_super_bytes_used(gfs_info->super_copy)) {
+		fprintf(stderr,
+			"super bytes_used %llu mismatches actual used %llu\n",
+			btrfs_super_bytes_used(gfs_info->super_copy),
+			total_used);
+		err |= SUPER_BYTES_USED_ERROR;
+	}
+
 	if (repair) {
 		ret = end_avoid_extents_overwrite();
 		if (ret < 0)
@@ -5558,7 +5579,7 @@ out:
 		if (ret)
 			err |= ret;
 		else
-			err &= ~BG_ACCOUNTING_ERROR;
+			err &= ~(BG_ACCOUNTING_ERROR | SUPER_BYTES_USED_ERROR);
 	}
 
 	btrfs_release_path(&path);

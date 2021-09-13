@@ -46,6 +46,7 @@
 #include "common/device-scan.h"
 #include "common/device-utils.h"
 #include "common/open-utils.h"
+#include "common/parse-utils.h"
 
 /*
  * for btrfs fi show, we maintain a hash of fsids we've already printed.
@@ -829,18 +830,16 @@ static int cmd_filesystem_sync(const struct cmd_struct *cmd,
 }
 static DEFINE_SIMPLE_COMMAND(filesystem_sync, "sync");
 
-static int parse_compress_type(char *s)
+static int parse_compress_type_arg(char *s)
 {
-	if (strcmp(optarg, "zlib") == 0)
-		return BTRFS_COMPRESS_ZLIB;
-	else if (strcmp(optarg, "lzo") == 0)
-		return BTRFS_COMPRESS_LZO;
-	else if (strcmp(optarg, "zstd") == 0)
-		return BTRFS_COMPRESS_ZSTD;
-	else {
-		error("unknown compression type %s", s);
+	int ret;
+
+	ret = parse_compress_type(s);
+	if (ret) {
+		error("unknown compression type: %s", s);
 		exit(1);
-	};
+	}
+	return ret;
 }
 
 static const char * const cmd_filesystem_defrag_usage[] = {
@@ -939,7 +938,7 @@ static int cmd_filesystem_defrag(const struct cmd_struct *cmd,
 		case 'c':
 			compress_type = BTRFS_COMPRESS_ZLIB;
 			if (optarg)
-				compress_type = parse_compress_type(optarg);
+				compress_type = parse_compress_type_arg(optarg);
 			break;
 		case 'f':
 			flush = 1;

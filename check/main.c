@@ -4162,7 +4162,6 @@ static int record_bad_block_io(struct cache_tree *extent_cache,
 {
 	struct extent_record *rec;
 	struct cache_extent *cache;
-	struct btrfs_key key;
 
 	cache = lookup_cache_extent(extent_cache, start, len);
 	if (!cache)
@@ -4172,8 +4171,8 @@ static int record_bad_block_io(struct cache_tree *extent_cache,
 	if (!is_extent_tree_record(rec))
 		return 0;
 
-	btrfs_disk_key_to_cpu(&key, &rec->parent_key);
-	return btrfs_add_corrupt_extent_record(gfs_info, &key, start, len, 0);
+	return btrfs_add_corrupt_extent_record(gfs_info, &rec->parent_key,
+					       start, len, 0);
 }
 
 static int swap_values(struct btrfs_root *root, struct btrfs_path *path,
@@ -5083,7 +5082,24 @@ static void free_block_group_record(struct cache_extent *cache)
 
 void free_block_group_tree(struct block_group_tree *tree)
 {
+	extent_io_tree_cleanup(&tree->pending_extents);
 	cache_tree_free_extents(&tree->tree, free_block_group_record);
+}
+
+static void update_block_group_used(struct block_group_tree *tree,
+				    u64 bytenr, u64 num_bytes)
+{
+	struct cache_extent *bg_item;
+	struct block_group_record *bg_rec;
+
+	bg_item = lookup_cache_extent(&tree->tree, bytenr, num_bytes);
+	if (!bg_item) {
+		set_extent_dirty(&tree->pending_extents, bytenr,
+				 bytenr + num_bytes - 1);
+		return;
+	}
+	bg_rec = container_of(bg_item, struct block_group_record, cache);
+	bg_rec->actual_used += num_bytes;
 }
 
 int insert_device_extent_record(struct device_extent_tree *tree,
@@ -5270,6 +5286,7 @@ btrfs_new_block_group_record(struct extent_buffer *leaf, struct btrfs_key *key,
 
 	ptr = btrfs_item_ptr(leaf, slot, struct btrfs_block_group_item);
 	rec->flags = btrfs_block_group_flags(leaf, ptr);
+	rec->disk_used = btrfs_block_group_used(leaf, ptr);
 
 	INIT_LIST_HEAD(&rec->list);
 
@@ -5281,6 +5298,7 @@ static int process_block_group_item(struct block_group_tree *block_group_cache,
 				    struct extent_buffer *eb, int slot)
 {
 	struct block_group_record *rec;
+	u64 start, end;
 	int ret = 0;
 
 	rec = btrfs_new_block_group_record(eb, key, slot);
@@ -5289,6 +5307,20 @@ static int process_block_group_item(struct block_group_tree *block_group_cache,
 		fprintf(stderr, "Block Group[%llu, %llu] existed.\n",
 			rec->objectid, rec->offset);
 		free(rec);
+		return ret;
+	}
+
+	while (!find_first_extent_bit(&block_group_cache->pending_extents,
+				      rec->objectid, &start, &end, EXTENT_DIRTY)) {
+		u64 len;
+
+		if (start >= rec->objectid + rec->offset)
+			break;
+		start = max(start, rec->objectid);
+		len = min(end - start + 1, rec->objectid + rec->offset - start);
+		rec->actual_used += len;
+		clear_extent_dirty(&block_group_cache->pending_extents, start,
+				   start + len - 1);
 	}
 
 	return ret;
@@ -5352,6 +5384,7 @@ process_device_extent_item(struct device_extent_tree *dev_extent_cache,
 
 static int process_extent_item(struct btrfs_root *root,
 			       struct cache_tree *extent_cache,
+			       struct block_group_tree *block_group_cache,
 			       struct extent_buffer *eb, int slot)
 {
 	struct btrfs_extent_item *ei;
@@ -5379,6 +5412,8 @@ static int process_extent_item(struct btrfs_root *root,
 	} else {
 		num_bytes = key.offset;
 	}
+
+	update_block_group_used(block_group_cache, key.objectid, num_bytes);
 
 	if (!IS_ALIGNED(key.objectid, gfs_info->sectorsize)) {
 		error("ignoring invalid extent, bytenr %llu is not aligned to %u",
@@ -5410,7 +5445,7 @@ static int process_extent_item(struct btrfs_root *root,
 		return -EIO;
 	}
 	if (metadata)
-		btrfs_check_subpage_eb_alignment(key.objectid, num_bytes);
+		btrfs_check_subpage_eb_alignment(gfs_info, key.objectid, num_bytes);
 
 	memset(&tmpl, 0, sizeof(tmpl));
 	tmpl.start = key.objectid;
@@ -5776,12 +5811,16 @@ static int check_extent_csums(struct btrfs_root *root, u64 bytenr,
 				read_extent_buffer(eb, (char *)&csum_expected,
 						   csum_offset, csum_size);
 				if (memcmp(result, csum_expected, csum_size) != 0) {
+					char found[BTRFS_CSUM_STRING_LEN];
+					char want[BTRFS_CSUM_STRING_LEN];
+
 					csum_mismatch = true;
-					/* FIXME: format of the checksum value */
+					btrfs_format_csum(csum_type, result, found);
+					btrfs_format_csum(csum_type,
+							  csum_expected, want);
 					fprintf(stderr,
-			"mirror %d bytenr %llu csum %u expected csum %u\n",
-						mirror, bytenr + tmp,
-						result[0], csum_expected[0]);
+				"mirror %d bytenr %llu csum %s expected csum %s\n",
+						mirror, bytenr + tmp, found, want);
 				}
 				data_checked += gfs_info->sectorsize;
 			}
@@ -6348,13 +6387,13 @@ static int run_next_block(struct btrfs_root *root,
 				continue;
 			}
 			if (key.type == BTRFS_EXTENT_ITEM_KEY) {
-				process_extent_item(root, extent_cache, buf,
-						    i);
+				process_extent_item(root, extent_cache,
+						    block_group_cache, buf, i);
 				continue;
 			}
 			if (key.type == BTRFS_METADATA_ITEM_KEY) {
-				process_extent_item(root, extent_cache, buf,
-						    i);
+				process_extent_item(root, extent_cache,
+						    block_group_cache, buf, i);
 				continue;
 			}
 			if (key.type == BTRFS_EXTENT_CSUM_KEY) {
@@ -6531,7 +6570,9 @@ static int run_next_block(struct btrfs_root *root,
 			}
 
 			memset(&tmpl, 0, sizeof(tmpl));
-			btrfs_cpu_key_to_disk(&tmpl.parent_key, &key);
+			tmpl.parent_key.objectid = key.objectid;
+			tmpl.parent_key.type = key.type;
+			tmpl.parent_key.offset = key.offset;
 			tmpl.parent_generation =
 				btrfs_node_ptr_generation(buf, i);
 			tmpl.start = ptr;
@@ -7892,6 +7933,8 @@ static int record_unaligned_extent_rec(struct extent_record *rec)
 
 	rbtree_postorder_for_each_entry_safe(back, tmp,
 					     &rec->backref_tree, node) {
+		bool skip = false;
+
 		if (back->full_backref || !back->is_data)
 			continue;
 
@@ -7905,6 +7948,40 @@ static int record_unaligned_extent_rec(struct extent_record *rec)
 
 		/* For non-exist root we just skip it */
 		if (IS_ERR_OR_NULL(dest_root))
+			continue;
+
+		/*
+		 * If we repaired something and restarted we could potentially
+		 * try to add this unaligned record multiple times, so check
+		 * before we add a new one.
+		 */
+		list_for_each_entry(urec, &dest_root->unaligned_extent_recs, list) {
+			if (urec->objectid == dest_root->objectid &&
+			    urec->owner == dback->owner &&
+			    urec->bytenr == rec->start) {
+				skip = true;
+				break;
+			}
+		}
+
+		if (skip)
+			continue;
+
+		/*
+		 * If we repaired something and restarted we could potentially
+		 * try to add this unaligned record multiple times, so check
+		 * before we add a new one.
+		 */
+		list_for_each_entry(urec, &dest_root->unaligned_extent_recs, list) {
+			if (urec->objectid == dest_root->objectid &&
+			    urec->owner == dback->owner &&
+			    urec->bytenr == rec->start) {
+				skip = true;
+				break;
+			}
+		}
+
+		if (skip)
 			continue;
 
 		urec = malloc(sizeof(struct unaligned_extent_rec_t));
@@ -8599,6 +8676,56 @@ static int deal_root_from_list(struct list_head *list,
 	return ret;
 }
 
+static int check_block_groups(struct block_group_tree *bg_cache)
+{
+	struct btrfs_trans_handle *trans;
+	struct cache_extent *item;
+	struct block_group_record *bg_rec;
+	u64 used = 0;
+	int ret = 0;
+
+	for (item = first_cache_extent(&bg_cache->tree);
+	     item;
+	     item = next_cache_extent(item)) {
+		bg_rec = container_of(item, struct block_group_record, cache);
+		used += bg_rec->actual_used;
+		if (bg_rec->disk_used == bg_rec->actual_used)
+			continue;
+		fprintf(stderr,
+			"block group [%llu %llu] used %llu but extent items used %llu\n",
+			bg_rec->objectid, bg_rec->offset, bg_rec->disk_used,
+			bg_rec->actual_used);
+		ret = -1;
+	}
+
+	/*
+	 * We check the super bytes_used here because it's the sum of all block
+	 * groups used, and the repair actually happens in
+	 * btrfs_fix_block_accounting, so we can kill both birds with the same
+	 * stone here.
+	 */
+	if (used != btrfs_super_bytes_used(gfs_info->super_copy)) {
+		fprintf(stderr,
+			"super bytes used %llu mismatches actual used %llu\n",
+			btrfs_super_bytes_used(gfs_info->super_copy), used);
+		ret = -1;
+	}
+
+	if (!repair || !ret)
+		return ret;
+
+	trans = btrfs_start_transaction(gfs_info->extent_root, 1);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		fprintf(stderr, "Failed to start a transaction\n");
+		return ret;
+	}
+
+	ret = btrfs_fix_block_accounting(trans);
+	btrfs_commit_transaction(trans, gfs_info->extent_root);
+	return ret ? ret : -EAGAIN;
+}
+
 /**
  * parse_tree_roots - Go over all roots in the tree root and add each one to
  *		      a list.
@@ -8885,6 +9012,13 @@ again:
 
 	ret = check_extent_refs(root, &extent_cache);
 	if (ret < 0) {
+		if (ret == -EAGAIN)
+			goto loop;
+		goto out;
+	}
+
+	ret = check_block_groups(&block_group_cache);
+	if (ret) {
 		if (ret == -EAGAIN)
 			goto loop;
 		goto out;

@@ -399,10 +399,17 @@ check_global_prereq()
 	fi
 }
 
-# Check if dmsetup and targets passed as arguments are available, and skip the
-# test if they aren't
+# Check if dmsetup and the target passed as argument is available, and skip the
+# test if they aren't. Some targets may be loaded by different module name, in
+# that case the 2nd parameter is used as well if specified.
+#
+# $1: the target name, expectind module dm-$1
+# $2: optional name or alias, if specified, fail
 check_dm_target_support()
 {
+	local target="$1"
+	local secondary="$2"
+
 	setup_root_helper
 
 	type -p dmsetup &> /dev/null
@@ -410,26 +417,42 @@ check_dm_target_support()
 		_not_run "This test requires dmsetup tool";
 	fi
 
-	for target in "$@"; do
-		$SUDO_HELPER modprobe "dm-$target" >/dev/null 2>&1
-		$SUDO_HELPER dmsetup targets 2>&1 | grep -q "^$target"
-		if [ $? -ne 0 ]; then
-			_not_run "This test requires dm-$target support"
+	$SUDO_HELPER modprobe "dm-$target" >/dev/null 2>&1
+	$SUDO_HELPER dmsetup targets 2>&1 | grep -q "^$target"
+	if [ $? -ne 0 ]; then
+		# Try the other name
+		if ! [ -z "$secondary" ]; then
+			$SUDO_HELPER modprobe "dm-$secondary" >/dev/null 2>&1
+			$SUDO_HELPER dmsetup targets 2>&1 | grep -q "^$secondary"
+			if [ $? -eq 0 ]; then
+				return 0
+			fi
 		fi
-	done
+		_not_run "This test requires dm-$target support"
+	fi
 }
 
 check_image()
 {
 	local image
+	local tmp_output
+
+	tmp_output=$(mktemp --tmpdir btrfs-progs-test-check-image.XXXXXX)
 
 	image=$1
 	echo "testing image $(basename $image)" >> "$RESULTS"
-	"$TOP/btrfs" check "$image" >> "$RESULTS" 2>&1
-	[ $? -eq 0 ] && _fail "btrfs check should have detected corruption"
+	run_mustfail_stdout "btrfs check should have detected corruption"	\
+		"$TOP/btrfs" check "$image" &> "$tmp_output"
+
+	# Also make sure no subpage related warnings
+	check_test_results "$tmp_output" "$testname"
 
 	run_check "$TOP/btrfs" check --repair --force "$image"
-	run_check "$TOP/btrfs" check "$image"
+	run_check_stdout "$TOP/btrfs" check "$image" &> "$tmp_output"
+
+	# Also make sure no subpage related warnings for the repaired image
+	check_test_results "$tmp_output" "$testname"
+	rm -f -- "$tmp_output"
 }
 
 # Extract a usable image from packed formats
@@ -840,7 +863,7 @@ check_test_results()
 	local testname="$2"
 
 	# Check subpage related warning
-	if grep -q "crrosses 64K page boundary" "$results"; then
+	if grep -q "not nodesize aligned" "$results"; then
 		_fail "found subpage related warning for case $testname"
 	fi
 }

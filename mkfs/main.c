@@ -44,6 +44,7 @@
 #include "kernel-lib/list_sort.h"
 #include "common/help.h"
 #include "common/rbtree-utils.h"
+#include "common/parse-utils.h"
 #include "mkfs/common.h"
 #include "mkfs/rootdir.h"
 #include "common/fsfeatures.h"
@@ -67,16 +68,13 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 	struct btrfs_trans_handle *trans;
 	struct btrfs_space_info *sinfo;
 	u64 flags = BTRFS_BLOCK_GROUP_METADATA;
-	u64 bytes_used;
 	u64 chunk_start = 0;
 	u64 chunk_size = 0;
-	u64 system_group_offset = BTRFS_BLOCK_RESERVED_1M_FOR_SUPER;
 	u64 system_group_size = BTRFS_MKFS_SYSTEM_GROUP_SIZE;
 	int ret;
 
 	if (btrfs_is_zoned(fs_info)) {
 		/* Two zones are reserved for superblock */
-		system_group_offset = fs_info->zone_size * BTRFS_NR_SB_LOG_ZONES;
 		system_group_size = fs_info->zone_size;
 	}
 
@@ -90,16 +88,12 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 
 	trans = btrfs_start_transaction(root, 1);
 	BUG_ON(IS_ERR(trans));
-	bytes_used = btrfs_super_bytes_used(fs_info->super_copy);
 
 	root->fs_info->system_allocs = 1;
 	/*
-	 * First temporary system chunk must match the chunk layout
-	 * created in make_btrfs().
+	 * We already created the block group item for our temporary system
+	 * chunk in make_btrfs(), so account for the size here.
 	 */
-	ret = btrfs_make_block_group(trans, fs_info, bytes_used,
-				     BTRFS_BLOCK_GROUP_SYSTEM,
-				     system_group_offset, system_group_size);
 	allocation->system += system_group_size;
 	if (ret)
 		return ret;
@@ -142,7 +136,6 @@ static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
 
 	root->fs_info->system_allocs = 0;
 	ret = btrfs_commit_transaction(trans, root);
-
 err:
 	return ret;
 }
@@ -259,7 +252,11 @@ static int recow_roots(struct btrfs_trans_handle *trans,
 	ret = __recow_root(trans, info->csum_root);
 	if (ret)
 		return ret;
-
+	if (info->free_space_root) {
+		ret = __recow_root(trans, info->free_space_root);
+		if (ret)
+			return ret;
+	}
 	return 0;
 }
 
@@ -375,30 +372,16 @@ static void print_usage(int ret)
 
 static u64 parse_profile(const char *s)
 {
-	if (strcasecmp(s, "raid0") == 0) {
-		return BTRFS_BLOCK_GROUP_RAID0;
-	} else if (strcasecmp(s, "raid1") == 0) {
-		return BTRFS_BLOCK_GROUP_RAID1;
-	} else if (strcasecmp(s, "raid1c3") == 0) {
-		return BTRFS_BLOCK_GROUP_RAID1C3;
-	} else if (strcasecmp(s, "raid1c4") == 0) {
-		return BTRFS_BLOCK_GROUP_RAID1C4;
-	} else if (strcasecmp(s, "raid5") == 0) {
-		return BTRFS_BLOCK_GROUP_RAID5;
-	} else if (strcasecmp(s, "raid6") == 0) {
-		return BTRFS_BLOCK_GROUP_RAID6;
-	} else if (strcasecmp(s, "raid10") == 0) {
-		return BTRFS_BLOCK_GROUP_RAID10;
-	} else if (strcasecmp(s, "dup") == 0) {
-		return BTRFS_BLOCK_GROUP_DUP;
-	} else if (strcasecmp(s, "single") == 0) {
-		return 0;
-	} else {
+	int ret;
+	u64 flags = 0;
+
+	ret = parse_bg_profile(s, &flags);
+	if (ret) {
 		error("unknown profile %s", s);
 		exit(1);
 	}
-	/* not reached */
-	return 0;
+
+	return flags;
 }
 
 static char *parse_label(const char *input)
@@ -1187,8 +1170,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	if (mixed)
 		features |= BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS;
 
-	if ((data_profile | metadata_profile) &
-	    (BTRFS_BLOCK_GROUP_RAID5 | BTRFS_BLOCK_GROUP_RAID6)) {
+	if ((data_profile | metadata_profile) & BTRFS_BLOCK_GROUP_RAID56_MASK) {
 		features |= BTRFS_FEATURE_INCOMPAT_RAID56;
 		warning("RAID5/6 support has known problems is strongly discouraged\n"
 			"\t to be used besides testing or evaluation.\n");
@@ -1359,10 +1341,9 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		goto error;
 	}
 
-	if (group_profile_max_safe_loss(metadata_profile) <
-		group_profile_max_safe_loss(data_profile)){
+	if (btrfs_bg_type_to_tolerated_failures(metadata_profile) <
+	    btrfs_bg_type_to_tolerated_failures(data_profile))
 		warning("metadata has lower redundancy than data!\n");
-	}
 
 	mkfs_cfg.label = label;
 	memcpy(mkfs_cfg.fs_uuid, fs_uuid, sizeof(mkfs_cfg.fs_uuid));
@@ -1371,6 +1352,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	mkfs_cfg.sectorsize = sectorsize;
 	mkfs_cfg.stripesize = stripesize;
 	mkfs_cfg.features = features;
+	mkfs_cfg.runtime_features = runtime_features;
 	mkfs_cfg.csum_type = csum_type;
 	mkfs_cfg.zone_size = zone_size(file);
 
@@ -1531,13 +1513,6 @@ raid_groups:
 		ret = setup_quota_root(fs_info);
 		if (ret < 0) {
 			error("failed to initialize quota: %d (%m)", ret);
-			goto out;
-		}
-	}
-	if (runtime_features & BTRFS_RUNTIME_FEATURE_FREE_SPACE_TREE) {
-		ret = btrfs_create_free_space_tree(fs_info);
-		if (ret < 0) {
-			error("failed to create free space tree: %d (%m)", ret);
 			goto out;
 		}
 	}

@@ -144,7 +144,7 @@ CHECKER_FLAGS := -include $(check_defs) -D__CHECKER__ \
 	-U_FORTIFY_SOURCE -Wdeclaration-after-statement -Wdefault-bitfield-sign
 
 objects = kernel-shared/dir-item.o \
-	  qgroup.o kernel-lib/list_sort.o props.o \
+	  kernel-lib/list_sort.o \
 	  kernel-shared/ulist.o check/qgroup-verify.o kernel-shared/backref.o \
 	  common/string-table.o common/task-utils.o \
 	  kernel-shared/inode.o kernel-shared/file.o common/help.o cmds/receive-dump.o \
@@ -173,12 +173,13 @@ libbtrfs_objects = common/send-stream.o common/send-utils.o kernel-lib/rbtree.o 
 		   common/device-scan.o common/path-utils.o \
 		   common/utils.o libbtrfsutil/subvolume.o libbtrfsutil/stubs.o \
 		   crypto/hash.o crypto/xxhash.o $(CRYPTO_OBJECTS) \
-		   common/open-utils.o common/units.o common/device-utils.o
-libbtrfs_headers = common/send-stream.h common/send-utils.h send.h kernel-lib/rbtree.h btrfs-list.h \
+		   common/open-utils.o common/units.o common/device-utils.o \
+		   common/parse-utils.o
+libbtrfs_headers = common/send-stream.h common/send-utils.h kernel-shared/send.h kernel-lib/rbtree.h \
 	       crypto/crc32c.h kernel-lib/list.h kerncompat.h \
-	       kernel-lib/radix-tree.h kernel-lib/sizes.h kernel-lib/raid56.h \
+	       kernel-lib/radix-tree.h kernel-lib/sizes.h \
 	       common/extent-cache.h kernel-shared/extent_io.h ioctl.h \
-	       kernel-shared/ctree.h btrfsck.h version.h
+	       kernel-shared/ctree.h version.h
 libbtrfsutil_major := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MAJOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
 libbtrfsutil_minor := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MINOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
 libbtrfsutil_patch := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_PATCH ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)

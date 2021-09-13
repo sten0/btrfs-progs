@@ -253,7 +253,21 @@ AX_CHECK_DEFINE([linux/fiemap.h], [FIEMAP_EXTENT_SHARED], [],
 AX_CHECK_DEFINE([ext2fs/ext2_fs.h], [EXT4_EPOCH_MASK],
 		[AC_DEFINE([HAVE_EXT4_EPOCH_MASK_DEFINE], [1],
 			   [Define to 1 if e2fsprogs defines EXT4_EPOCH_MASK])],
-		[AC_MSG_WARN([no definition of EXT4_EPOCH_MASK found, probably old e2fsprogs, no 64bit time precision of converted images])])
+        [have_ext4_epoch_mask_define=no])
+
+AS_IF([test "x$have_ext4_epoch_mask_define" = xno], [
+    AC_CHECK_MEMBERS([struct ext2_inode_large.i_atime_extra],
+        [
+            AC_DEFINE([HAVE_EXT4_EPOCH_MASK_DEFINE], [1], [Define to 1 if ext2_inode_large includes i_atime_extra])
+            AC_DEFINE([EXT4_EPOCH_BITS], [2],[for encode and decode tv_nsec in ext2 inode])
+            AC_DEFINE([EXT4_EPOCH_MASK], [((1 << EXT4_EPOCH_BITS) - 1)], [For encode and decode tv_nsec info in ext2 inode])
+            AC_DEFINE([EXT4_NSEC_MASK],  [(~0UL << EXT4_EPOCH_BITS)], [For encode and decode tv_nsec info in ext2 inode])
+            AC_DEFINE([inode_includes(size, field)],[m4_normalize[(size >= (sizeof(((struct ext2_inode_large *)0)->field) + offsetof(struct ext2_inode_large, field)))]],
+                [For encode and decode tv_nsec info in ext2 inode])
+        ],
+        [AC_MSG_WARN([It seems that ext2_inode_large don't includes tv_nsec related info, probably old e2fsprogs, no 64bit time precision of converted images])],
+        [[#include <ext2fs/ext2_fs.h>]])
+])
 
 AC_CHECK_HEADER(linux/blkzoned.h, [blkzoned_found=yes], [blkzoned_found=no])
 AC_CHECK_MEMBER([struct blk_zone.capacity], [blkzoned_capacity=yes], [blkzoned_capacity=no], [[#include <linux/blkzoned.h>]])
@@ -316,6 +330,20 @@ fi
 AS_IF([test "x$enable_python" = xyes], [PYTHON_BINDINGS=1], [PYTHON_BINDINGS=0])
 AC_SUBST(PYTHON_BINDINGS)
 AC_SUBST(PYTHON)
+
+AC_ARG_ENABLE([experimental],
+	AS_HELP_STRING([--enable-experimental], [allow UNSTABLE and EXPERIMENTAL features]))
+AS_IF([test "x$enable_experimental" = xyes], [EXPERIMENTAL=1], [EXPERIMENTAL=0])
+AC_SUBST(EXPERIMENTAL)
+AC_DEFINE_UNQUOTED([EXPERIMENTAL],[$EXPERIMENTAL],[Define to 1 if you experimental and unstable features are build])
+
+experimental_msg=
+if test "x$EXPERIMENTAL" = x1; then
+	experimental_msg="
+	WARNING: experimental and unstable features are enabled, do not use this
+	         build for production and please report issues
+"
+fi
 
 # udev v190 introduced the btrfs builtin and a udev rule to use it.
 # Our udev rule gives us the friendly dm names but isn't required (or valid)
@@ -394,6 +422,6 @@ AC_MSG_RESULT([
 	Python interpreter: ${PYTHON}
 	crypto provider:    ${cryptoprovider} ${cryptoproviderversion}
 	zoned device:       ${enable_zoned}
-
+	${experimental_msg}
 	Type 'make' to compile.
 ])

@@ -45,7 +45,7 @@
 #include "kernel-lib/list.h"
 #include "btrfs-list.h"
 
-#include "send.h"
+#include "kernel-shared/send.h"
 #include "common/send-stream.h"
 #include "common/send-utils.h"
 #include "cmds/receive-dump.h"
@@ -1064,9 +1064,12 @@ static int do_receive(struct btrfs_receive *rctx, const char *tomnt,
 	 * subvolume we're sitting in so that we can adjust the paths of any
 	 * subvols we want to receive in.
 	 */
-	ret = btrfs_list_get_path_rootid(rctx->mnt_fd, &subvol_id);
-	if (ret)
+	ret = lookup_path_rootid(rctx->mnt_fd, &subvol_id);
+	if (ret) {
+		errno = -ret;
+		error("cannot resolve rootid for path: %m");
 		goto out;
+	}
 
 	root_subvol_path[0] = 0;
 	ret = btrfs_subvolid_resolve(rctx->mnt_fd, root_subvol_path,

@@ -26,6 +26,8 @@
 #include "common/defs.h"
 #include "common/extent-cache.h"
 
+#define SOURCE_FS_UUID_SIZE	(16)
+
 struct btrfs_mkfs_config;
 
 struct btrfs_convert_context {
@@ -36,7 +38,8 @@ struct btrfs_convert_context {
 	u64 free_inodes_count;
 	u64 total_bytes;
 	u64 free_bytes_initial;
-	char *volume_name;
+	char *label;
+	u8 fs_uuid[SOURCE_FS_UUID_SIZE];
 	const struct btrfs_convert_operations *convert_ops;
 
 	/* The accurate used space of old filesystem */

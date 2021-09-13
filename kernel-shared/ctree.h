@@ -496,6 +496,7 @@ struct btrfs_super_block {
 #define BTRFS_FEATURE_INCOMPAT_METADATA_UUID    (1ULL << 10)
 #define BTRFS_FEATURE_INCOMPAT_RAID1C34		(1ULL << 11)
 #define BTRFS_FEATURE_INCOMPAT_ZONED		(1ULL << 12)
+#define BTRFS_FEATURE_INCOMPAT_EXTENT_TREE_V2	(1ULL << 13)
 
 #define BTRFS_FEATURE_COMPAT_SUPP		0ULL
 
@@ -697,6 +698,7 @@ enum btrfs_tree_block_status {
 	BTRFS_TREE_BLOCK_INVALID_LEVEL,
 	BTRFS_TREE_BLOCK_INVALID_FREE_SPACE,
 	BTRFS_TREE_BLOCK_INVALID_OFFSETS,
+	BTRFS_TREE_BLOCK_INVALID_BLOCKPTR,
 };
 
 struct btrfs_inode_item {
@@ -1003,6 +1005,13 @@ enum btrfs_raid_types {
 					 BTRFS_BLOCK_GROUP_RAID1C4 | \
 					 BTRFS_BLOCK_GROUP_DUP |     \
 					 BTRFS_BLOCK_GROUP_RAID10)
+
+#define BTRFS_BLOCK_GROUP_RAID56_MASK	(BTRFS_BLOCK_GROUP_RAID5 |	\
+                                         BTRFS_BLOCK_GROUP_RAID6)
+
+#define BTRFS_BLOCK_GROUP_RAID1_MASK    (BTRFS_BLOCK_GROUP_RAID1 |	\
+                                         BTRFS_BLOCK_GROUP_RAID1C3 |	\
+                                         BTRFS_BLOCK_GROUP_RAID1C4)
 
 /* used in struct btrfs_balance_args fields */
 #define BTRFS_AVAIL_ALLOC_BIT_SINGLE	(1ULL << 48)
@@ -2637,10 +2646,10 @@ int btrfs_del_ptr(struct btrfs_root *root, struct btrfs_path *path,
 		int level, int slot);
 enum btrfs_tree_block_status
 btrfs_check_node(struct btrfs_fs_info *fs_info,
-		 struct btrfs_disk_key *parent_key, struct extent_buffer *buf);
+		 struct btrfs_key *parent_key, struct extent_buffer *buf);
 enum btrfs_tree_block_status
 btrfs_check_leaf(struct btrfs_fs_info *fs_info,
-		 struct btrfs_disk_key *parent_key, struct extent_buffer *buf);
+		 struct btrfs_key *parent_key, struct extent_buffer *buf);
 void reada_for_search(struct btrfs_fs_info *fs_info, struct btrfs_path *path,
 		      int level, int slot, u64 objectid);
 struct extent_buffer *read_node_slot(struct btrfs_fs_info *fs_info,

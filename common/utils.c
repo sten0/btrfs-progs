@@ -48,6 +48,7 @@
 #include "common/utils.h"
 #include "common/path-utils.h"
 #include "common/device-scan.h"
+#include "common/parse-utils.h"
 #include "kernel-shared/volumes.h"
 #include "ioctl.h"
 #include "cmds/commands.h"
@@ -227,120 +228,22 @@ int set_label(const char *btrfs_dev, const char *label)
 	return ret;
 }
 
-/*
- * A not-so-good version fls64. No fascinating optimization since
- * no one except parse_size_from_string uses it
- */
-static int fls64(u64 x)
+u64 parse_qgroupid_or_path(const char *p)
 {
-	int i;
-
-	for (i = 0; i <64; i++)
-		if (x << i & (1ULL << 63))
-			return 64 - i;
-	return 64 - i;
-}
-
-u64 parse_size_from_string(const char *s)
-{
-	char c;
-	char *endptr;
-	u64 mult = 1;
-	u64 ret;
-
-	if (!s) {
-		error("size value is empty");
-		exit(1);
-	}
-	if (s[0] == '-') {
-		error("size value '%s' is less equal than 0", s);
-		exit(1);
-	}
-	ret = strtoull(s, &endptr, 10);
-	if (endptr == s) {
-		error("size value '%s' is invalid", s);
-		exit(1);
-	}
-	if (endptr[0] && endptr[1]) {
-		error("illegal suffix contains character '%c' in wrong position",
-			endptr[1]);
-		exit(1);
-	}
-	/*
-	 * strtoll returns LLONG_MAX when overflow, if this happens,
-	 * need to call strtoull to get the real size
-	 */
-	if (errno == ERANGE && ret == ULLONG_MAX) {
-		error("size value '%s' is too large for u64", s);
-		exit(1);
-	}
-	if (endptr[0]) {
-		c = tolower(endptr[0]);
-		switch (c) {
-		case 'e':
-			mult *= 1024;
-			/* fallthrough */
-		case 'p':
-			mult *= 1024;
-			/* fallthrough */
-		case 't':
-			mult *= 1024;
-			/* fallthrough */
-		case 'g':
-			mult *= 1024;
-			/* fallthrough */
-		case 'm':
-			mult *= 1024;
-			/* fallthrough */
-		case 'k':
-			mult *= 1024;
-			/* fallthrough */
-		case 'b':
-			break;
-		default:
-			error("unknown size descriptor '%c'", c);
-			exit(1);
-		}
-	}
-	/* Check whether ret * mult overflow */
-	if (fls64(ret) + fls64(mult) - 1 > 64) {
-		error("size value '%s' is too large for u64", s);
-		exit(1);
-	}
-	ret *= mult;
-	return ret;
-}
-
-u64 parse_qgroupid(const char *p)
-{
-	char *s = strchr(p, '/');
-	const char *ptr_src_end = p + strlen(p);
-	char *ptr_parse_end = NULL;
 	enum btrfs_util_error err;
-	u64 level;
 	u64 id;
+	u64 qgroupid;
 	int fd;
 	int ret = 0;
 
 	if (p[0] == '/')
 		goto path;
 
-	/* Numeric format like '0/257' is the primary case */
-	if (!s) {
-		id = strtoull(p, &ptr_parse_end, 10);
-		if (ptr_parse_end != ptr_src_end)
-			goto path;
-		return id;
-	}
-	level = strtoull(p, &ptr_parse_end, 10);
-	if (ptr_parse_end != s)
-		goto path;
+	ret = parse_qgroupid(p, &qgroupid);
+	if (ret < 0)
+		goto err;
 
-	id = strtoull(s + 1, &ptr_parse_end, 10);
-	if (ptr_parse_end != ptr_src_end)
-		goto  path;
-
-	return (level << BTRFS_QGROUP_LEVEL_SHIFT) | id;
+	return qgroupid;
 
 path:
 	/* Path format like subv at 'my_subvol' is the fallback case */
@@ -365,24 +268,20 @@ err:
 	exit(-1);
 }
 
-enum btrfs_csum_type parse_csum_type(const char *s)
+void btrfs_format_csum(u16 csum_type, const u8 *data, char *output)
 {
-	if (strcasecmp(s, "crc32c") == 0) {
-		return BTRFS_CSUM_TYPE_CRC32;
-	} else if (strcasecmp(s, "xxhash64") == 0 ||
-		   strcasecmp(s, "xxhash") == 0) {
-		return BTRFS_CSUM_TYPE_XXHASH;
-	} else if (strcasecmp(s, "sha256") == 0) {
-		return BTRFS_CSUM_TYPE_SHA256;
-	} else if (strcasecmp(s, "blake2b") == 0 ||
-		   strcasecmp(s, "blake2") == 0) {
-		return BTRFS_CSUM_TYPE_BLAKE2;
-	} else {
-		error("unknown csum type %s", s);
-		exit(1);
+	int i;
+	int cur = 0;
+	const int csum_size = btrfs_csum_type_size(csum_type);
+
+	output[0] = '\0';
+	snprintf(output, BTRFS_CSUM_STRING_LEN, "0x");
+	cur += strlen("0x");
+	for (i = 0; i < csum_size; i++) {
+		snprintf(output + cur, BTRFS_CSUM_STRING_LEN - cur, "%02x",
+			 data[i]);
+		cur += 2;
 	}
-	/* not reached */
-	return 0;
 }
 
 int get_device_info(int fd, u64 devid,
@@ -715,10 +614,10 @@ int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 		/* fallthrough */
 	case 2:
 		allowed |= BTRFS_BLOCK_GROUP_RAID0 | BTRFS_BLOCK_GROUP_RAID1 |
-			BTRFS_BLOCK_GROUP_RAID5;
+			BTRFS_BLOCK_GROUP_RAID5 | BTRFS_BLOCK_GROUP_RAID10;
 		/* fallthrough */
 	case 1:
-		allowed |= BTRFS_BLOCK_GROUP_DUP;
+		allowed |= BTRFS_BLOCK_GROUP_DUP | BTRFS_BLOCK_GROUP_RAID0;
 	}
 
 	if (dev_cnt > 1 && profile & BTRFS_BLOCK_GROUP_DUP) {
@@ -751,27 +650,6 @@ int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 		   "DUP may not actually lead to 2 copies on the device, see manual page");
 
 	return 0;
-}
-
-int group_profile_max_safe_loss(u64 flags)
-{
-	switch (flags & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
-	case 0: /* single */
-	case BTRFS_BLOCK_GROUP_DUP:
-	case BTRFS_BLOCK_GROUP_RAID0:
-		return 0;
-	case BTRFS_BLOCK_GROUP_RAID1:
-	case BTRFS_BLOCK_GROUP_RAID5:
-	case BTRFS_BLOCK_GROUP_RAID10:
-		return 1;
-	case BTRFS_BLOCK_GROUP_RAID6:
-	case BTRFS_BLOCK_GROUP_RAID1C3:
-		return 2;
-	case BTRFS_BLOCK_GROUP_RAID1C4:
-		return 3;
-	default:
-		return -1;
-	}
 }
 
 /*
@@ -1208,42 +1086,6 @@ const char* btrfs_group_profile_str(u64 flag)
 	default:
 		return "unknown";
 	}
-}
-/*
- * Check if the BTRFS_IOC_TREE_SEARCH_V2 ioctl is supported on a given
- * filesystem, opened at fd
- */
-int btrfs_tree_search2_ioctl_supported(int fd)
-{
-	struct btrfs_ioctl_search_args_v2 *args2;
-	struct btrfs_ioctl_search_key *sk;
-	int args2_size = 1024;
-	char args2_buf[args2_size];
-	int ret;
-
-	args2 = (struct btrfs_ioctl_search_args_v2 *)args2_buf;
-	sk = &(args2->key);
-
-	/*
-	 * Search for the extent tree item in the root tree.
-	 */
-	sk->tree_id = BTRFS_ROOT_TREE_OBJECTID;
-	sk->min_objectid = BTRFS_EXTENT_TREE_OBJECTID;
-	sk->max_objectid = BTRFS_EXTENT_TREE_OBJECTID;
-	sk->min_type = BTRFS_ROOT_ITEM_KEY;
-	sk->max_type = BTRFS_ROOT_ITEM_KEY;
-	sk->min_offset = 0;
-	sk->max_offset = (u64)-1;
-	sk->min_transid = 0;
-	sk->max_transid = (u64)-1;
-	sk->nr_items = 1;
-	args2->buf_size = args2_size - sizeof(struct btrfs_ioctl_search_args_v2);
-	ret = ioctl(fd, BTRFS_IOC_TREE_SEARCH_V2, args2);
-	if (ret == -EOPNOTSUPP)
-		return 0;
-	else if (ret == 0)
-		return 1;
-	return ret;
 }
 
 u64 div_factor(u64 num, int factor)

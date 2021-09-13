@@ -32,7 +32,7 @@
 
 #include "kerncompat.h"
 #include "ioctl.h"
-#include "qgroup.h"
+#include "cmds/qgroup.h"
 
 #include "kernel-shared/ctree.h"
 #include "cmds/commands.h"
@@ -115,14 +115,14 @@ static int cmd_subvol_create(const struct cmd_struct *cmd,
 
 		switch (c) {
 		case 'c':
-			res = qgroup_inherit_add_copy(&inherit, optarg, 0);
+			res = btrfs_qgroup_inherit_add_copy(&inherit, optarg, 0);
 			if (res) {
 				retval = res;
 				goto out;
 			}
 			break;
 		case 'i':
-			res = qgroup_inherit_add_group(&inherit, optarg);
+			res = btrfs_qgroup_inherit_add_group(&inherit, optarg);
 			if (res) {
 				retval = res;
 				goto out;
@@ -179,7 +179,7 @@ static int cmd_subvol_create(const struct cmd_struct *cmd,
 		memset(&args, 0, sizeof(args));
 		strncpy_null(args.name, newname);
 		args.flags |= BTRFS_SUBVOL_QGROUP_INHERIT;
-		args.size = qgroup_inherit_size(inherit);
+		args.size = btrfs_qgroup_inherit_size(inherit);
 		args.qgroup_inherit = inherit;
 
 		res = ioctl(fddst, BTRFS_IOC_SUBVOL_CREATE_V2, &args);
@@ -258,6 +258,7 @@ static int cmd_subvol_delete(const struct cmd_struct *cmd,
 	char	*path = NULL;
 	DIR	*dirstream = NULL;
 	int commit_mode = 0;
+	bool subvol_path_not_found = false;
 	u8 fsid[BTRFS_FSID_SIZE];
 	u64 subvolid = 0;
 	char uuidbuf[BTRFS_UUID_UNPARSED_SIZE];
@@ -319,6 +320,18 @@ static int cmd_subvol_delete(const struct cmd_struct *cmd,
 
 		path = argv[cnt];
 		err = btrfs_util_subvolume_path(path, subvolid, &subvol);
+		/*
+		 * If the subvolume is really not referred by anyone, and refs
+		 * is 0, newer kernel can handle it by just adding an orphan
+		 * item and queue it for cleanup.
+		 *
+		 * In this case, just let kernel to handle it, we do no extra
+		 * handling.
+		 */
+		if (err == BTRFS_UTIL_ERROR_SUBVOLUME_NOT_FOUND) {
+			subvol_path_not_found = true;
+			goto again;
+		}
 		if (err) {
 			error_btrfs_util(err);
 			ret = 1;
@@ -395,8 +408,10 @@ again:
 
 	if (subvolid == 0)
 		pr_verbose(MUST_LOG, "'%s/%s'\n", dname, vname);
-	else
+	else if (!subvol_path_not_found)
 		pr_verbose(MUST_LOG, "'%s'\n", full_subvolpath);
+	else
+		pr_verbose(MUST_LOG, "subvolid=%llu\n", subvolid);
 
 	if (subvolid == 0)
 		err = btrfs_util_delete_subvolume_fd(fd, vname, 0);
@@ -659,9 +674,12 @@ static int cmd_subvol_list(const struct cmd_struct *cmd, int argc, char **argv)
 		btrfs_list_setup_filter(&filter_set, BTRFS_LIST_FILTER_FLAGS,
 					flags);
 
-	ret = btrfs_list_get_path_rootid(fd, &top_id);
-	if (ret)
+	ret = lookup_path_rootid(fd, &top_id);
+	if (ret) {
+		errno = -ret;
+		error("cannot resolve rootid for path: %m");
 		goto out;
+	}
 
 	if (is_list_all)
 		btrfs_list_setup_filter(&filter_set,
@@ -733,14 +751,14 @@ static int cmd_subvol_snapshot(const struct cmd_struct *cmd,
 
 		switch (c) {
 		case 'c':
-			res = qgroup_inherit_add_copy(&inherit, optarg, 0);
+			res = btrfs_qgroup_inherit_add_copy(&inherit, optarg, 0);
 			if (res) {
 				retval = res;
 				goto out;
 			}
 			break;
 		case 'i':
-			res = qgroup_inherit_add_group(&inherit, optarg);
+			res = btrfs_qgroup_inherit_add_group(&inherit, optarg);
 			if (res) {
 				retval = res;
 				goto out;
@@ -750,7 +768,7 @@ static int cmd_subvol_snapshot(const struct cmd_struct *cmd,
 			readonly = 1;
 			break;
 		case 'x':
-			res = qgroup_inherit_add_copy(&inherit, optarg, 1);
+			res = btrfs_qgroup_inherit_add_copy(&inherit, optarg, 1);
 			if (res) {
 				retval = res;
 				goto out;
@@ -831,7 +849,7 @@ static int cmd_subvol_snapshot(const struct cmd_struct *cmd,
 	args.fd = fd;
 	if (inherit) {
 		args.flags |= BTRFS_SUBVOL_QGROUP_INHERIT;
-		args.size = qgroup_inherit_size(inherit);
+		args.size = btrfs_qgroup_inherit_size(inherit);
 		args.qgroup_inherit = inherit;
 	}
 	strncpy_null(args.name, newname);
