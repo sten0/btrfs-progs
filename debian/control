@@ -28,7 +28,7 @@ Package: btrfs-progs
 Architecture: linux-any
 Multi-Arch: foreign
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Breaks: btrbk (<= 0.25.0), libgcc-s1 (<< 10-20200211), initramfs-tools (<< 0.137~)
+Breaks: libgcc-s1 (<< 10-20200211), initramfs-tools (<< 0.137~)
 Suggests: duperemove
 Description: Checksumming Copy on Write Filesystem utilities
  Btrfs is a copy on write filesystem for Linux aimed at implementing
