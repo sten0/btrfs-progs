@@ -1,3 +1,9 @@
+btrfs-progs (5.14.1-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Tue, 21 Sep 2021 21:06:14 +0200
+
 btrfs-progs (5.14-1) unstable; urgency=medium
 
   * New upstream release.
