@@ -1,3 +1,13 @@
+btrfs-progs (5.15-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Add B-Dep on libudev-dev.
+  * Add Build-Depends-Package for libbtrfs.
+  * Drop an unused pattern and license from the copyright file.
+  * Enable hardening.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Sun, 07 Nov 2021 00:17:40 +0100
+
 btrfs-progs (5.14.1-1) unstable; urgency=medium
 
   * New upstream bugfix release.
