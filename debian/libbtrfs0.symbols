@@ -1,4 +1,5 @@
 libbtrfs.so.0 libbtrfs0 #MINVER#
+* Build-Depends-Package: libbtrfs-dev
  LIBBTRFS_0.1@LIBBTRFS_0.1 5.3.1
  btrfs_read_and_process_send_stream@LIBBTRFS_0.1 5.3.1
  btrfs_subvolid_resolve@LIBBTRFS_0.1 5.3.1
