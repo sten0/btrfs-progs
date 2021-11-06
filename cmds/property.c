@@ -22,6 +22,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/xattr.h>
+#include <uuid/uuid.h>
 #include <btrfsutil.h>
 #include "cmds/commands.h"
 #include "cmds/props.h"
@@ -40,15 +41,40 @@
 #define ENOATTR ENODATA
 #endif
 
+static int subvolume_clear_received_uuid(const char *path)
+{
+	struct btrfs_ioctl_received_subvol_args args = {};
+	int ret;
+	int fd;
+
+	fd = open(path, O_RDONLY | O_NOATIME);
+	if (fd == -1)
+		return -errno;
+
+	ret = ioctl(fd, BTRFS_IOC_SET_RECEIVED_SUBVOL, &args);
+	if (ret == -1) {
+		close(fd);
+		return -errno;
+	}
+	close(fd);
+
+	return 0;
+}
+
 static int prop_read_only(enum prop_object_type type,
 			  const char *object,
 			  const char *name,
-			  const char *value)
+			  const char *value,
+			  bool force)
 {
 	enum btrfs_util_error err;
 	bool read_only;
 
 	if (value) {
+		struct btrfs_util_subvolume_info info = {};
+		bool is_ro = false;
+		bool do_clear_received_uuid = false;
+
 		if (!strcmp(value, "true")) {
 			read_only = true;
 		} else if (!strcmp(value, "false")) {
@@ -57,11 +83,47 @@ static int prop_read_only(enum prop_object_type type,
 			error("invalid value for property: %s", value);
 			return -EINVAL;
 		}
+		err = btrfs_util_get_subvolume_read_only(object, &is_ro);
+		if (err) {
+			error_btrfs_util(err);
+			return -errno;
+		}
+		/* No change if already read-only */
+		if (is_ro && read_only)
+			return 0;
+
+		err = btrfs_util_subvolume_info(object, 0, &info);
+		if (err)
+			warning("cannot read subvolume info");
+		if (is_ro && !uuid_is_null(info.received_uuid)) {
+			pr_verbose(2, "ro->rw switch but has set receive_uuid");
+
+			if (force) {
+				do_clear_received_uuid = true;
+			} else {
+				error(
+"cannot flip ro->rw with received_uuid set, use force if you really want that");
+				return -EPERM;
+			}
+		}
+		if (!is_ro && !uuid_is_null(info.received_uuid))
+			warning("read-write subvolume with received_uuid, this is bad");
 
 		err = btrfs_util_set_subvolume_read_only(object, read_only);
 		if (err) {
 			error_btrfs_util(err);
 			return -errno;
+		}
+		if (do_clear_received_uuid) {
+			int ret;
+			char uuid_str[BTRFS_UUID_UNPARSED_SIZE];
+
+			uuid_unparse(info.received_uuid, uuid_str);
+			pr_verbose(2, "force used, clearing received_uuid, previously %s",
+					uuid_str);
+			ret = subvolume_clear_received_uuid(object);
+			if (ret < 0)
+				warning("failed to clear received_uuid: %m");
 		}
 	} else {
 		err = btrfs_util_get_subvolume_read_only(object, &read_only);
@@ -79,7 +141,8 @@ static int prop_read_only(enum prop_object_type type,
 static int prop_label(enum prop_object_type type,
 		      const char *object,
 		      const char *name,
-		      const char *value)
+		      const char *value,
+		      bool force)
 {
 	int ret;
 
@@ -99,7 +162,8 @@ static int prop_label(enum prop_object_type type,
 static int prop_compression(enum prop_object_type type,
 			    const char *object,
 			    const char *name,
-			    const char *value)
+			    const char *value,
+			    bool force)
 {
 	int ret;
 	ssize_t sret;
@@ -347,7 +411,7 @@ static int dump_prop(const struct prop_handler *prop,
 
 	if ((types & type) && (prop->types & type)) {
 		if (!name_and_help)
-			ret = prop->handler(type, object, prop->name, NULL);
+			ret = prop->handler(type, object, prop->name, NULL, false);
 		else
 			printf("%-20s%s\n", prop->name, prop->desc);
 	}
@@ -379,7 +443,7 @@ out:
 }
 
 static int setget_prop(int types, const char *object,
-		       const char *name, const char *value)
+		       const char *name, const char *value, bool force)
 {
 	int ret;
 	const struct prop_handler *prop = NULL;
@@ -407,7 +471,7 @@ static int setget_prop(int types, const char *object,
 		return 1;
 	}
 
-	ret = prop->handler(types, object, name, value);
+	ret = prop->handler(types, object, name, value, force);
 
 	if (ret < 0)
 		ret = 1;
@@ -420,19 +484,26 @@ static int setget_prop(int types, const char *object,
 
 static int parse_args(const struct cmd_struct *cmd, int argc, char **argv,
 		       int *types, char **object,
-		       char **name, char **value, int min_nonopt_args)
+		       char **name, char **value, int min_nonopt_args,
+		       bool *force)
 {
 	int ret;
 	char *type_str = NULL;
 	int max_nonopt_args = 1;
 
+	*force = false;
+
 	optind = 1;
 	while (1) {
-		int c = getopt(argc, argv, "t:");
+		int c = getopt(argc, argv, "ft:");
 		if (c < 0)
 			break;
 
 		switch (c) {
+		case 'f':
+			/* TODO: do not accept for get/list */
+			*force = true;
+			break;
 		case 't':
 			type_str = optarg;
 			break;
@@ -516,12 +587,13 @@ static int cmd_property_get(const struct cmd_struct *cmd,
 	char *object = NULL;
 	char *name = NULL;
 	int types = 0;
+	bool force;
 
-	if (parse_args(cmd, argc, argv, &types, &object, &name, NULL, 1))
+	if (parse_args(cmd, argc, argv, &types, &object, &name, NULL, 1, &force))
 		return 1;
 
 	if (name)
-		ret = setget_prop(types, object, name, NULL);
+		ret = setget_prop(types, object, name, NULL, force);
 	else
 		ret = dump_props(types, object, 0);
 
@@ -530,13 +602,14 @@ static int cmd_property_get(const struct cmd_struct *cmd,
 static DEFINE_SIMPLE_COMMAND(property_get, "get");
 
 static const char * const cmd_property_set_usage[] = {
-	"btrfs property set [-t <type>] <object> <name> <value>",
+	"btrfs property set [-f] [-t <type>] <object> <name> <value>",
 	"Set a property on a btrfs object",
 	"Set a property on a btrfs object where object is a path to file or",
 	"directory and can also represent the filesystem or device based on the type",
 	"",
 	"-t <TYPE>       list properties for the given object type (inode, subvol,",
 	"                filesystem, device)",
+	"-f              force the change, could potentially break something\n",
 	NULL
 };
 
@@ -548,11 +621,12 @@ static int cmd_property_set(const struct cmd_struct *cmd,
 	char *name = NULL;
 	char *value = NULL;
 	int types = 0;
+	bool force = false;
 
-	if (parse_args(cmd, argc, argv, &types, &object, &name, &value, 3))
+	if (parse_args(cmd, argc, argv, &types, &object, &name, &value, 3, &force))
 		return 1;
 
-	ret = setget_prop(types, object, name, value);
+	ret = setget_prop(types, object, name, value, force);
 
 	return ret;
 }
@@ -576,8 +650,9 @@ static int cmd_property_list(const struct cmd_struct *cmd,
 	int ret;
 	char *object = NULL;
 	int types = 0;
+	bool force;
 
-	if (parse_args(cmd, argc, argv, &types, &object, NULL, NULL, 1))
+	if (parse_args(cmd, argc, argv, &types, &object, NULL, NULL, 1, &force))
 		return 1;
 
 	ret = dump_props(types, object, 1);

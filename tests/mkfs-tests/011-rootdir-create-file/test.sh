@@ -7,9 +7,9 @@ source "$TEST_TOP/common"
 
 check_prereq mkfs.btrfs
 
-tmp=$(mktemp -d --tmpdir btrfs-progs-mkfs.rootdirXXXXXXX)
+tmp=$(_mktemp_dir mkfs-rootdir)
 # we can't use TEST_DEV, a file is needed
-img=$(mktemp btrfs-progs-mkfs.rootdirXXXXXXX)
+img=$(_mktemp mkfs-rootdir)
 run_check "$TOP/mkfs.btrfs" -f --rootdir "$INTERNAL_BIN/Documentation/" "$img"
 
 rm -rf -- "$img"

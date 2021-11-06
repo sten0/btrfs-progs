@@ -42,7 +42,8 @@ const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
 		.devs_increment	= 2,
 		.ncopies	= 2,
 		.nparity        = 0,
-		.raid_name	= "raid10",
+		.lower_name	= "raid10",
+		.upper_name	= "RAID10",
 		.bg_flag	= BTRFS_BLOCK_GROUP_RAID10,
 		.mindev_error	= BTRFS_ERROR_DEV_RAID10_MIN_NOT_MET,
 	},
@@ -55,7 +56,8 @@ const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
 		.devs_increment	= 2,
 		.ncopies	= 2,
 		.nparity        = 0,
-		.raid_name	= "raid1",
+		.lower_name	= "raid1",
+		.upper_name	= "RAID1",
 		.bg_flag	= BTRFS_BLOCK_GROUP_RAID1,
 		.mindev_error	= BTRFS_ERROR_DEV_RAID1_MIN_NOT_MET,
 	},
@@ -68,7 +70,8 @@ const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
 		.devs_increment	= 3,
 		.ncopies	= 3,
 		.nparity        = 0,
-		.raid_name	= "raid1c3",
+		.lower_name	= "raid1c3",
+		.upper_name	= "RAID1C3",
 		.bg_flag	= BTRFS_BLOCK_GROUP_RAID1C3,
 		.mindev_error	= BTRFS_ERROR_DEV_RAID1C3_MIN_NOT_MET,
 	},
@@ -81,7 +84,8 @@ const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
 		.devs_increment	= 4,
 		.ncopies	= 4,
 		.nparity        = 0,
-		.raid_name	= "raid1c4",
+		.lower_name	= "raid1c4",
+		.upper_name	= "RAID1C4",
 		.bg_flag	= BTRFS_BLOCK_GROUP_RAID1C4,
 		.mindev_error	= BTRFS_ERROR_DEV_RAID1C4_MIN_NOT_MET,
 	},
@@ -94,7 +98,8 @@ const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
 		.devs_increment	= 1,
 		.ncopies	= 2,
 		.nparity        = 0,
-		.raid_name	= "dup",
+		.lower_name	= "dup",
+		.upper_name	= "DUP",
 		.bg_flag	= BTRFS_BLOCK_GROUP_DUP,
 		.mindev_error	= 0,
 	},
@@ -107,7 +112,8 @@ const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
 		.devs_increment	= 1,
 		.ncopies	= 1,
 		.nparity        = 0,
-		.raid_name	= "raid0",
+		.lower_name	= "raid0",
+		.upper_name	= "RAID0",
 		.bg_flag	= BTRFS_BLOCK_GROUP_RAID0,
 		.mindev_error	= 0,
 	},
@@ -120,7 +126,12 @@ const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
 		.devs_increment	= 1,
 		.ncopies	= 1,
 		.nparity        = 0,
-		.raid_name	= "single",
+		.lower_name	= "single",
+		/*
+		 * For historical reasons the single profile is lower case, this
+		 * may change some day.
+		 */
+		.upper_name	= "single",
 		.bg_flag	= 0,
 		.mindev_error	= 0,
 	},
@@ -133,7 +144,8 @@ const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
 		.devs_increment	= 1,
 		.ncopies	= 1,
 		.nparity        = 1,
-		.raid_name	= "raid5",
+		.lower_name	= "raid5",
+		.upper_name	= "RAID5",
 		.bg_flag	= BTRFS_BLOCK_GROUP_RAID5,
 		.mindev_error	= BTRFS_ERROR_DEV_RAID5_MIN_NOT_MET,
 	},
@@ -146,7 +158,8 @@ const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
 		.devs_increment	= 1,
 		.ncopies	= 1,
 		.nparity        = 2,
-		.raid_name	= "raid6",
+		.lower_name	= "raid6",
+		.upper_name	= "RAID6",
 		.bg_flag	= BTRFS_BLOCK_GROUP_RAID6,
 		.mindev_error	= BTRFS_ERROR_DEV_RAID6_MIN_NOT_MET,
 	},
@@ -207,7 +220,7 @@ const char *btrfs_bg_type_to_raid_name(u64 flags)
 	if (index >= BTRFS_NR_RAID_TYPES)
 		return NULL;
 
-	return btrfs_raid_array[index].raid_name;
+	return btrfs_raid_array[index].upper_name;
 }
 
 int btrfs_bg_type_to_tolerated_failures(u64 flags)
@@ -217,19 +230,61 @@ int btrfs_bg_type_to_tolerated_failures(u64 flags)
 	return btrfs_raid_array[index].tolerated_failures;
 }
 
-static inline int nr_parity_stripes(struct map_lookup *map)
+int btrfs_bg_type_to_devs_min(u64 flags)
 {
-	if (map->type & BTRFS_BLOCK_GROUP_RAID5)
-		return 1;
-	else if (map->type & BTRFS_BLOCK_GROUP_RAID6)
-		return 2;
-	else
-		return 0;
+	const int index = btrfs_bg_flags_to_raid_index(flags);
+
+	return btrfs_raid_array[index].devs_min;
+}
+
+int btrfs_bg_type_to_ncopies(u64 flags)
+{
+	const int index = btrfs_bg_flags_to_raid_index(flags);
+
+	return btrfs_raid_array[index].ncopies;
+}
+
+int btrfs_bg_type_to_nparity(u64 flags)
+{
+	const int index = btrfs_bg_flags_to_raid_index(flags);
+
+	return btrfs_raid_array[index].nparity;
+}
+
+int btrfs_bg_type_to_sub_stripes(u64 flags)
+{
+	const int index = btrfs_bg_flags_to_raid_index(flags);
+
+	return btrfs_raid_array[index].sub_stripes;
+}
+
+/*
+ * Number of stripes is not fixed and depends on the number of devices,
+ * utilizing as many as possible (RAID0/RAID10/RAID5/RAID6/...).
+ */
+bool btrfs_bg_type_is_stripey(u64 flags)
+{
+	const int index = btrfs_bg_flags_to_raid_index(flags);
+
+	return btrfs_raid_array[index].devs_max == 0;
+}
+
+u64 btrfs_bg_flags_for_device_num(int number)
+{
+	int i;
+	u64 ret = 0;
+
+	for (i = 0; i < ARRAY_SIZE(btrfs_raid_array); i++) {
+		if (number >= btrfs_raid_array[i].devs_min)
+			ret |= btrfs_raid_array[i].bg_flag;
+	}
+
+	return ret;
 }
 
 static inline int nr_data_stripes(struct map_lookup *map)
 {
-	return map->num_stripes - nr_parity_stripes(map);
+	return map->num_stripes - btrfs_bg_type_to_nparity(map->type);
 }
 
 #define is_parity_stripe(x) ( ((x) == BTRFS_RAID5_P_STRIPE) || ((x) == BTRFS_RAID6_Q_STRIPE) )
@@ -455,6 +510,9 @@ int btrfs_open_devices(struct btrfs_fs_info *fs_info,
 			continue;
 		}
 
+		if ((flags & O_RDWR) && zoned_model(device->name) == ZONED_HOST_MANAGED)
+			flags |= O_DIRECT;
+
 		fd = open(device->name, flags);
 		if (fd < 0) {
 			ret = -errno;
@@ -483,22 +541,20 @@ int btrfs_scan_one_device(int fd, const char *path,
 			  struct btrfs_fs_devices **fs_devices_ret,
 			  u64 *total_devs, u64 super_offset, unsigned sbflags)
 {
-	struct btrfs_super_block *disk_super;
-	char buf[BTRFS_SUPER_INFO_SIZE];
+	struct btrfs_super_block disk_super;
 	int ret;
 	u64 devid;
 
-	disk_super = (struct btrfs_super_block *)buf;
-	ret = btrfs_read_dev_super(fd, disk_super, super_offset, sbflags);
+	ret = btrfs_read_dev_super(fd, &disk_super, super_offset, sbflags);
 	if (ret < 0)
 		return -EIO;
-	devid = btrfs_stack_device_id(&disk_super->dev_item);
-	if (btrfs_super_flags(disk_super) & BTRFS_SUPER_FLAG_METADUMP)
+	devid = btrfs_stack_device_id(&disk_super.dev_item);
+	if (btrfs_super_flags(&disk_super) & BTRFS_SUPER_FLAG_METADUMP)
 		*total_devs = 1;
 	else
-		*total_devs = btrfs_super_num_devices(disk_super);
+		*total_devs = btrfs_super_num_devices(&disk_super);
 
-	ret = device_list_add(path, disk_super, devid, fs_devices_ret);
+	ret = device_list_add(path, &disk_super, devid, fs_devices_ret);
 
 	return ret;
 }
@@ -1039,10 +1095,8 @@ static u64 chunk_bytes_by_type(struct alloc_chunk_ctl *ctl)
 		return stripe_size;
 	else if (type & BTRFS_BLOCK_GROUP_RAID10)
 		return stripe_size * (ctl->num_stripes / ctl->sub_stripes);
-	else if (type & BTRFS_BLOCK_GROUP_RAID5)
-		return stripe_size * (ctl->num_stripes - 1);
-	else if (type & BTRFS_BLOCK_GROUP_RAID6)
-		return stripe_size * (ctl->num_stripes - 2);
+	else if (type & BTRFS_BLOCK_GROUP_RAID56_MASK)
+		return stripe_size * (ctl->num_stripes - btrfs_bg_type_to_nparity(type));
 	else
 		return stripe_size * ctl->num_stripes;
 }
@@ -2042,6 +2096,8 @@ int btrfs_check_chunk_valid(struct btrfs_fs_info *fs_info,
 	u64 type;
 	u32 chunk_ondisk_size;
 	u32 sectorsize = fs_info->sectorsize;
+	int min_devs;
+	int table_sub_stripes;
 
 	/*
 	 * Basic chunk item size check.  Note that btrfs_chunk already contains
@@ -2049,7 +2105,7 @@ int btrfs_check_chunk_valid(struct btrfs_fs_info *fs_info,
 	 */
 	if (slot >= 0 &&
 	    btrfs_item_size_nr(leaf, slot) < sizeof(struct btrfs_chunk)) {
-		error("invalid chunk item size, have %u expect [%zu, %lu)",
+		error("invalid chunk item size, have %u expect [%zu, %u)",
 			btrfs_item_size_nr(leaf, slot),
 			sizeof(struct btrfs_chunk),
 			BTRFS_LEAF_DATA_SIZE(fs_info));
@@ -2136,13 +2192,15 @@ int btrfs_check_chunk_valid(struct btrfs_fs_info *fs_info,
 	/*
 	 * Device number check against profile
 	 */
-	if ((type & BTRFS_BLOCK_GROUP_RAID10 && (sub_stripes != 2 ||
+	min_devs = btrfs_bg_type_to_devs_min(type);
+	table_sub_stripes = btrfs_bg_type_to_sub_stripes(type);
+	if ((type & BTRFS_BLOCK_GROUP_RAID10 && (sub_stripes != table_sub_stripes ||
 		  !IS_ALIGNED(num_stripes, sub_stripes))) ||
-	    (type & BTRFS_BLOCK_GROUP_RAID1 && num_stripes < 1) ||
-	    (type & BTRFS_BLOCK_GROUP_RAID1C3 && num_stripes < 3) ||
-	    (type & BTRFS_BLOCK_GROUP_RAID1C4 && num_stripes < 4) ||
-	    (type & BTRFS_BLOCK_GROUP_RAID5 && num_stripes < 2) ||
-	    (type & BTRFS_BLOCK_GROUP_RAID6 && num_stripes < 3) ||
+	    (type & BTRFS_BLOCK_GROUP_RAID1 && num_stripes < min_devs) ||
+	    (type & BTRFS_BLOCK_GROUP_RAID1C3 && num_stripes < min_devs) ||
+	    (type & BTRFS_BLOCK_GROUP_RAID1C4 && num_stripes < min_devs) ||
+	    (type & BTRFS_BLOCK_GROUP_RAID5 && num_stripes < min_devs) ||
+	    (type & BTRFS_BLOCK_GROUP_RAID6 && num_stripes < min_devs) ||
 	    (type & BTRFS_BLOCK_GROUP_DUP && num_stripes > 2) ||
 	    ((type & BTRFS_BLOCK_GROUP_PROFILE_MASK) == 0 &&
 	     num_stripes != 1)) {
@@ -2567,6 +2625,7 @@ static int split_eb_for_raid56(struct btrfs_fs_info *info,
 		eb->flags = 0;
 		eb->fd = -1;
 		eb->dev_bytenr = (u64)-1;
+		eb->fs_info = info;
 
 		this_eb_start = raid_map[i];
 
@@ -2638,6 +2697,7 @@ int write_raid56_with_parity(struct btrfs_fs_info *info,
 		new_eb->fd = multi->stripes[i].dev->fd;
 		multi->stripes[i].dev->total_ios++;
 		new_eb->len = stripe_len;
+		new_eb->fs_info = info;
 
 		if (raid_map[i] == BTRFS_RAID5_P_STRIPE)
 			p_eb = new_eb;
@@ -2710,10 +2770,8 @@ u64 btrfs_stripe_length(struct btrfs_fs_info *fs_info,
 		stripe_len = chunk_len / num_stripes;
 		break;
 	case BTRFS_BLOCK_GROUP_RAID5:
-		stripe_len = chunk_len / (num_stripes - 1);
-		break;
 	case BTRFS_BLOCK_GROUP_RAID6:
-		stripe_len = chunk_len / (num_stripes - 2);
+		stripe_len = chunk_len / (num_stripes - btrfs_bg_type_to_nparity(profile));
 		break;
 	case BTRFS_BLOCK_GROUP_RAID10:
 		stripe_len = chunk_len / (num_stripes /

@@ -142,8 +142,7 @@ btrfs_lookup_csum(struct btrfs_trans_handle *trans,
 	struct btrfs_csum_item *item;
 	struct extent_buffer *leaf;
 	u64 csum_offset = 0;
-	u16 csum_size =
-		btrfs_super_csum_size(root->fs_info->super_copy);
+	u16 csum_size = root->fs_info->csum_size;
 	int csums_in_item;
 
 	file_key.objectid = BTRFS_EXTENT_CSUM_OBJECTID;
@@ -199,11 +198,8 @@ int btrfs_csum_file_block(struct btrfs_trans_handle *trans,
 	u32 sectorsize = root->fs_info->sectorsize;
 	u32 nritems;
 	u32 ins_size;
-	u16 csum_size =
-		btrfs_super_csum_size(root->fs_info->super_copy);
-
-	u16 csum_type =
-		btrfs_super_csum_type(root->fs_info->super_copy);
+	u16 csum_size = root->fs_info->csum_size;
+	u16 csum_type = root->fs_info->csum_type;
 
 	path = btrfs_alloc_path();
 	if (!path)
@@ -341,8 +337,7 @@ static noinline int truncate_one_csum(struct btrfs_root *root,
 				      u64 bytenr, u64 len)
 {
 	struct extent_buffer *leaf;
-	u16 csum_size =
-		btrfs_super_csum_size(root->fs_info->super_copy);
+	u16 csum_size = root->fs_info->csum_size;
 	u64 csum_end;
 	u64 end_byte = bytenr + len;
 	u32 blocksize = root->fs_info->sectorsize;
@@ -362,7 +357,7 @@ static noinline int truncate_one_csum(struct btrfs_root *root,
 		 */
 		u32 new_size = (bytenr - key->offset) / blocksize;
 		new_size *= csum_size;
-		ret = btrfs_truncate_item(root, path, new_size, 1);
+		ret = btrfs_truncate_item(path, new_size, 1);
 		BUG_ON(ret);
 	} else if (key->offset >= bytenr && csum_end > end_byte &&
 		   end_byte > key->offset) {
@@ -375,7 +370,7 @@ static noinline int truncate_one_csum(struct btrfs_root *root,
 		u32 new_size = (csum_end - end_byte) / blocksize;
 		new_size *= csum_size;
 
-		ret = btrfs_truncate_item(root, path, new_size, 0);
+		ret = btrfs_truncate_item(path, new_size, 0);
 		BUG_ON(ret);
 
 		key->offset = end_byte;
@@ -399,7 +394,7 @@ int btrfs_del_csums(struct btrfs_trans_handle *trans, u64 bytenr, u64 len)
 	u64 csum_end;
 	struct extent_buffer *leaf;
 	int ret;
-	u16 csum_size = btrfs_super_csum_size(trans->fs_info->super_copy);
+	u16 csum_size = trans->fs_info->csum_size;
 	int blocksize = trans->fs_info->sectorsize;
 	struct btrfs_root *csum_root = trans->fs_info->csum_root;
 

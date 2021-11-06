@@ -1506,8 +1506,7 @@ static int recover_prepare(struct recover_control *rc, const char *path)
 {
 	int ret;
 	int fd;
-	struct btrfs_super_block *sb;
-	char buf[BTRFS_SUPER_INFO_SIZE];
+	struct btrfs_super_block sb;
 	struct btrfs_fs_devices *fs_devices;
 
 	ret = 0;
@@ -1517,23 +1516,22 @@ static int recover_prepare(struct recover_control *rc, const char *path)
 		return -1;
 	}
 
-	sb = (struct btrfs_super_block*)buf;
-	ret = btrfs_read_dev_super(fd, sb, BTRFS_SUPER_INFO_OFFSET,
+	ret = btrfs_read_dev_super(fd, &sb, BTRFS_SUPER_INFO_OFFSET,
 			SBREAD_RECOVER);
 	if (ret) {
 		fprintf(stderr, "read super block error\n");
 		goto out_close_fd;
 	}
 
-	rc->sectorsize = btrfs_super_sectorsize(sb);
-	rc->nodesize = btrfs_super_nodesize(sb);
-	rc->generation = btrfs_super_generation(sb);
-	rc->chunk_root_generation = btrfs_super_chunk_root_generation(sb);
-	rc->csum_size = btrfs_super_csum_size(sb);
-	rc->csum_type = btrfs_super_csum_type(sb);
+	rc->sectorsize = btrfs_super_sectorsize(&sb);
+	rc->nodesize = btrfs_super_nodesize(&sb);
+	rc->generation = btrfs_super_generation(&sb);
+	rc->chunk_root_generation = btrfs_super_chunk_root_generation(&sb);
+	rc->csum_size = btrfs_super_csum_size(&sb);
+	rc->csum_type = btrfs_super_csum_type(&sb);
 
 	/* if seed, the result of scanning below will be partial */
-	if (btrfs_super_flags(sb) & BTRFS_SUPER_FLAG_SEEDING) {
+	if (btrfs_super_flags(&sb) & BTRFS_SUPER_FLAG_SEEDING) {
 		fprintf(stderr, "this device is seed device\n");
 		ret = -1;
 		goto out_close_fd;
@@ -1572,9 +1570,7 @@ static int btrfs_get_device_extents(u64 chunk_object,
 
 static int calc_num_stripes(u64 type)
 {
-	if (type & (BTRFS_BLOCK_GROUP_RAID0 |
-		    BTRFS_BLOCK_GROUP_RAID10 |
-		    BTRFS_BLOCK_GROUP_RAID56_MASK))
+	if (btrfs_bg_type_is_stripey(type))
 		return 0;
 	else if (type & (BTRFS_BLOCK_GROUP_RAID1 |
 			 BTRFS_BLOCK_GROUP_DUP))
@@ -1583,14 +1579,6 @@ static int calc_num_stripes(u64 type)
 		return 3;
 	else if (type & (BTRFS_BLOCK_GROUP_RAID1C4))
 		return 4;
-	else
-		return 1;
-}
-
-static inline int calc_sub_nstripes(u64 type)
-{
-	if (type & BTRFS_BLOCK_GROUP_RAID10)
-		return 2;
 	else
 		return 1;
 }
@@ -1657,13 +1645,11 @@ static int btrfs_calc_stripe_index(struct chunk_record *chunk, u64 logical)
 	} else if (chunk->type_flags & BTRFS_BLOCK_GROUP_RAID10) {
 		index = stripe_nr % (chunk->num_stripes / chunk->sub_stripes);
 		index *= chunk->sub_stripes;
-	} else if (chunk->type_flags & BTRFS_BLOCK_GROUP_RAID5) {
-		nr_data_stripes = chunk->num_stripes - 1;
-		index = stripe_nr % nr_data_stripes;
-		stripe_nr /= nr_data_stripes;
-		index = (index + stripe_nr) % chunk->num_stripes;
-	} else if (chunk->type_flags & BTRFS_BLOCK_GROUP_RAID6) {
-		nr_data_stripes = chunk->num_stripes - 2;
+	} else if (chunk->type_flags & BTRFS_BLOCK_GROUP_RAID56_MASK) {
+		int parity;
+
+		parity = btrfs_bg_type_to_nparity(chunk->type_flags);
+		nr_data_stripes = chunk->num_stripes - parity;
 		index = stripe_nr % nr_data_stripes;
 		stripe_nr /= nr_data_stripes;
 		index = (index + stripe_nr) % chunk->num_stripes;
@@ -1791,11 +1777,6 @@ no_extent_record:
 	return 0;
 }
 
-#define BTRFS_ORDERED_RAID	(BTRFS_BLOCK_GROUP_RAID0 |	\
-				 BTRFS_BLOCK_GROUP_RAID10 |	\
-				 BTRFS_BLOCK_GROUP_RAID5 |	\
-				 BTRFS_BLOCK_GROUP_RAID6)
-
 static int btrfs_rebuild_chunk_stripes(struct recover_control *rc,
 				       struct chunk_record *chunk)
 {
@@ -1807,10 +1788,10 @@ static int btrfs_rebuild_chunk_stripes(struct recover_control *rc,
 	 * is we can reorder the stripes in the system metadata chunk.
 	 */
 	if ((chunk->type_flags & BTRFS_BLOCK_GROUP_METADATA) &&
-	    (chunk->type_flags & BTRFS_ORDERED_RAID))
+	    btrfs_bg_type_is_stripey(chunk->type_flags))
 		ret =btrfs_rebuild_ordered_meta_chunk_stripes(rc, chunk);
 	else if ((chunk->type_flags & BTRFS_BLOCK_GROUP_DATA) &&
-		 (chunk->type_flags & BTRFS_ORDERED_RAID))
+		 btrfs_bg_type_is_stripey(chunk->type_flags))
 		ret = 1;	/* Be handled after the fs is opened. */
 	else
 		ret = btrfs_rebuild_unordered_chunk_stripes(rc, chunk);
@@ -1831,7 +1812,7 @@ static int next_csum(struct btrfs_root *root,
 	struct btrfs_root *csum_root = root->fs_info->csum_root;
 	struct btrfs_csum_item *csum_item;
 	u32 blocksize = root->fs_info->sectorsize;
-	u16 csum_size = btrfs_super_csum_size(root->fs_info->super_copy);
+	u16 csum_size = root->fs_info->csum_size;
 	int csums_in_item = btrfs_item_size_nr(*leaf, *slot) / csum_size;
 
 	if (*csum_offset >= csums_in_item) {
@@ -1873,11 +1854,7 @@ static u64 calc_data_offset(struct btrfs_key *key,
 	data_offset = key->offset + csum_offset * blocksize - chunk->offset;
 	nr_data_stripes = chunk->num_stripes;
 
-	if (chunk->type_flags & BTRFS_BLOCK_GROUP_RAID5)
-		nr_data_stripes -= 1;
-	else if (chunk->type_flags & BTRFS_BLOCK_GROUP_RAID6)
-		nr_data_stripes -= 2;
-
+	nr_data_stripes -= btrfs_bg_type_to_nparity(chunk->type_flags);
 	logical_stripe_nr = data_offset / chunk->stripe_len;
 	dev_stripe_nr = logical_stripe_nr / nr_data_stripes;
 
@@ -1919,7 +1896,7 @@ out:
 static u64 item_end_offset(struct btrfs_root *root, struct btrfs_key *key,
 			   struct extent_buffer *leaf, int slot) {
 	u32 blocksize = root->fs_info->sectorsize;
-	u16 csum_size = btrfs_super_csum_size(root->fs_info->super_copy);
+	u16 csum_size = root->fs_info->csum_size;
 
 	u64 offset = btrfs_item_size_nr(leaf, slot);
 	offset /= csum_size;
@@ -2189,8 +2166,8 @@ static int btrfs_rebuild_ordered_data_chunk_stripes(struct recover_control *rc,
 	u8 flags;
 
 	list_for_each_entry_safe(chunk, next, &rc->unrepaired_chunks, list) {
-		if ((chunk->type_flags & BTRFS_BLOCK_GROUP_DATA)
-		 && (chunk->type_flags & BTRFS_ORDERED_RAID)) {
+		if ((chunk->type_flags & BTRFS_BLOCK_GROUP_DATA) &&
+		    btrfs_bg_type_is_stripey(chunk->type_flags)) {
 			flags = 0;
 			err = rebuild_raid_data_chunk_stripes(rc, root, chunk,
 							      &flags);
@@ -2242,7 +2219,7 @@ static int btrfs_recover_chunks(struct recover_control *rc)
 		chunk->io_width = BTRFS_STRIPE_LEN;
 		chunk->io_align = BTRFS_STRIPE_LEN;
 		chunk->sector_size = rc->sectorsize;
-		chunk->sub_stripes = calc_sub_nstripes(bg->flags);
+		chunk->sub_stripes = btrfs_bg_type_to_sub_stripes(bg->flags);
 
 		ret = insert_cache_extent(&rc->chunk, &chunk->cache);
 		if (ret == -EEXIST) {

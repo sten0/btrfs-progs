@@ -37,6 +37,7 @@
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
 #include "kernel-shared/zoned.h"
+#include "crypto/crc32c.h"
 #include "common/utils.h"
 #include "common/path-utils.h"
 #include "common/device-utils.h"
@@ -52,8 +53,6 @@
 #include "common/units.h"
 #include "check/qgroup-verify.h"
 
-static int verbose = 1;
-
 struct mkfs_allocation {
 	u64 data;
 	u64 metadata;
@@ -61,7 +60,7 @@ struct mkfs_allocation {
 	u64 system;
 };
 
-static int create_metadata_block_groups(struct btrfs_root *root, int mixed,
+static int create_metadata_block_groups(struct btrfs_root *root, bool mixed,
 				struct mkfs_allocation *allocation)
 {
 	struct btrfs_fs_info *fs_info = root->fs_info;
@@ -141,7 +140,7 @@ err:
 }
 
 static int create_data_block_groups(struct btrfs_trans_handle *trans,
-		struct btrfs_root *root, int mixed,
+		struct btrfs_root *root, bool mixed,
 		struct mkfs_allocation *allocation)
 {
 	struct btrfs_fs_info *fs_info = root->fs_info;
@@ -210,22 +209,59 @@ err:
 	return ret;
 }
 
-static int __recow_root(struct btrfs_trans_handle *trans,
-			 struct btrfs_root *root)
+static int __recow_root(struct btrfs_trans_handle *trans, struct btrfs_root *root)
 {
-	struct extent_buffer *tmp;
+	struct btrfs_path path;
+	struct btrfs_key key;
 	int ret;
 
-	if (trans->transid != btrfs_root_generation(&root->root_item)) {
-		extent_buffer_get(root->node);
-		ret = __btrfs_cow_block(trans, root, root->node,
-					NULL, 0, &tmp, 0, 0);
-		if (ret)
-			return ret;
-		free_extent_buffer(tmp);
-	}
+	btrfs_init_path(&path);
+	key.objectid = 0;
+	key.type = 0;
+	key.offset = 0;
 
-	return 0;
+	/* Get a path to the left-most leaves */
+	ret = btrfs_search_slot(NULL, root, &key, &path, 0, 0);
+	if (ret < 0)
+		return ret;
+
+	while (true) {
+		struct btrfs_key found_key;
+
+		/*
+		 * Our parent nodes must not be newer than the leaf, thus if
+		 * the leaf is as new as the transaction, no need to re-COW.
+		 */
+		if (btrfs_header_generation(path.nodes[0]) == trans->transid)
+			goto next;
+
+		/*
+		 * Grab the key of current tree block and do a COW search to
+		 * the current tree block.
+		 */
+		btrfs_item_key_to_cpu(path.nodes[0], &key, 0);
+		btrfs_release_path(&path);
+
+		/* This will ensure this leaf and all its parent get COWed */
+		ret = btrfs_search_slot(trans, root, &key, &path, 0, 1);
+		if (ret < 0)
+			goto out;
+		ret = 0;
+		btrfs_item_key_to_cpu(path.nodes[0], &found_key, 0);
+		ASSERT(btrfs_comp_cpu_keys(&key, &found_key) == 0);
+
+next:
+		ret = btrfs_next_leaf(root, &path);
+		if (ret < 0)
+			goto out;
+		if (ret > 0) {
+			ret = 0;
+			goto out;
+		}
+	}
+out:
+	btrfs_release_path(&path);
+	return ret;
 }
 
 static int recow_roots(struct btrfs_trans_handle *trans,
@@ -303,10 +339,10 @@ static int create_one_raid_group(struct btrfs_trans_handle *trans,
 
 static int create_raid_groups(struct btrfs_trans_handle *trans,
 			      struct btrfs_root *root, u64 data_profile,
-			      u64 metadata_profile, int mixed,
+			      u64 metadata_profile, bool mixed,
 			      struct mkfs_allocation *allocation)
 {
-	int ret;
+	int ret = 0;
 
 	if (metadata_profile) {
 		u64 meta_flags = BTRFS_BLOCK_GROUP_METADATA;
@@ -333,7 +369,6 @@ static int create_raid_groups(struct btrfs_trans_handle *trans,
 		if (ret)
 			return ret;
 	}
-	ret = recow_roots(trans, root);
 
 	return ret;
 }
@@ -363,6 +398,7 @@ static void print_usage(int ret)
 	printf("\t-f|--force                  force overwrite of existing filesystem\n");
 	printf("  general:\n");
 	printf("\t-q|--quiet                  no messages except errors\n");
+	printf("\t-v|--verbose                increase verbosity level, default is 1\n");
 	printf("\t-V|--version                print the mkfs.btrfs version and exit\n");
 	printf("\t--help                      print this help and exit\n");
 	printf("  deprecated:\n");
@@ -422,14 +458,14 @@ static int zero_output_file(int out_fd, u64 size)
 	return ret;
 }
 
-static int is_ssd(const char *file)
+static bool is_ssd(const char *file)
 {
 	char rotational;
 	int ret;
 
 	ret = device_get_queue_param(file, "rotational", &rotational, 1);
 	if (ret < 1)
-		return 0;
+		return false;
 
 	return rotational == '0';
 }
@@ -880,19 +916,20 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	u32 nodesize = 0;
 	u32 sectorsize = 0;
 	u32 stripesize = 4096;
-	int zero_end = 1;
+	bool zero_end = true;
 	int fd = -1;
 	int ret = 0;
 	int close_ret;
 	int i;
-	int mixed = 0;
-	int nodesize_forced = 0;
-	int data_profile_opt = 0;
-	int metadata_profile_opt = 0;
-	int discard = 1;
-	int ssd = 0;
-	int zoned = 0;
-	int force_overwrite = 0;
+	bool mixed = false;
+	bool nodesize_forced = false;
+	bool data_profile_opt = false;
+	bool metadata_profile_opt = false;
+	bool discard = true;
+	bool ssd = false;
+	bool zoned = false;
+	bool force_overwrite = false;
+	int oflags;
 	char *source_dir = NULL;
 	bool source_dir_set = false;
 	bool shrink_rootdir = false;
@@ -903,13 +940,14 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	int saved_optind;
 	char fs_uuid[BTRFS_UUID_UNPARSED_SIZE] = { 0 };
 	u64 features = BTRFS_MKFS_DEFAULT_FEATURES;
-	u64 runtime_features = 0;
+	u64 runtime_features = BTRFS_MKFS_DEFAULT_RUNTIME_FEATURES;
 	struct mkfs_allocation allocation = { 0 };
 	struct btrfs_mkfs_config mkfs_cfg;
 	enum btrfs_csum_type csum_type = BTRFS_CSUM_TYPE_CRC32;
 	u64 system_group_size;
 
 	crc32c_optimization_init();
+	btrfs_config_init();
 
 	while(1) {
 		int c;
@@ -935,39 +973,40 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 			{ "runtime-features", required_argument, NULL, 'R' },
 			{ "uuid", required_argument, NULL, 'U' },
 			{ "quiet", 0, NULL, 'q' },
+			{ "verbose", 0, NULL, 'v' },
 			{ "shrink", no_argument, NULL, GETOPT_VAL_SHRINK },
 			{ "help", no_argument, NULL, GETOPT_VAL_HELP },
 			{ NULL, 0, NULL, 0}
 		};
 
-		c = getopt_long(argc, argv, "A:b:fl:n:s:m:d:L:R:O:r:U:VMKq",
+		c = getopt_long(argc, argv, "A:b:fl:n:s:m:d:L:R:O:r:U:VvMKq",
 				long_options, NULL);
 		if (c < 0)
 			break;
 		switch(c) {
 			case 'f':
-				force_overwrite = 1;
+				force_overwrite = true;
 				break;
 			case 'd':
 				data_profile = parse_profile(optarg);
-				data_profile_opt = 1;
+				data_profile_opt = true;
 				break;
 			case 'l':
 				warning("--leafsize is deprecated, use --nodesize");
 				/* fall through */
 			case 'n':
 				nodesize = parse_size_from_string(optarg);
-				nodesize_forced = 1;
+				nodesize_forced = true;
 				break;
 			case 'L':
 				label = parse_label(optarg);
 				break;
 			case 'm':
 				metadata_profile = parse_profile(optarg);
-				metadata_profile_opt = 1;
+				metadata_profile_opt = true;
 				break;
 			case 'M':
-				mixed = 1;
+				mixed = true;
 				break;
 			case 'O': {
 				char *orig = strdup(optarg);
@@ -1011,7 +1050,10 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 				break;
 			case 'b':
 				block_count = parse_size_from_string(optarg);
-				zero_end = 0;
+				zero_end = false;
+				break;
+			case 'v':
+				bconf_be_verbose();
 				break;
 			case 'V':
 				printf("mkfs.btrfs, part of %s\n",
@@ -1026,10 +1068,10 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 					BTRFS_UUID_UNPARSED_SIZE - 1);
 				break;
 			case 'K':
-				discard = 0;
+				discard = false;
 				break;
 			case 'q':
-				verbose = 0;
+				bconf_be_quiet();
 				break;
 			case GETOPT_VAL_SHRINK:
 				shrink_rootdir = true;
@@ -1043,7 +1085,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		}
 	}
 
-	if (verbose) {
+	if (bconf.verbose) {
 		printf("%s\n", PACKAGE_STRING);
 		printf("See %s for more information.\n\n", PACKAGE_URL);
 	}
@@ -1062,7 +1104,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	if (dev_cnt == 0)
 		print_usage(1);
 
-	zoned = (features & BTRFS_FEATURE_INCOMPAT_ZONED);
+	zoned = !!(features & BTRFS_FEATURE_INCOMPAT_ZONED);
 
 	if (source_dir_set && dev_cnt > 1) {
 		error("the option -r is limited to a single device");
@@ -1110,11 +1152,11 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 			exit(1);
 		}
 	} else if (zoned_model(file) == ZONED_HOST_MANAGED) {
-		if (verbose)
+		if (bconf.verbose)
 			printf(
 	"Zoned: %s: host-managed device detected, setting zoned feature\n",
 			       file);
-		zoned = 1;
+		zoned = true;
 		features |= BTRFS_FEATURE_INCOMPAT_ZONED;
 	}
 
@@ -1126,19 +1168,10 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		u64 tmp;
 
 		if (!metadata_profile_opt) {
-			if (dev_cnt == 1 && ssd && verbose)
-				printf("Detected a SSD, turning off metadata "
-				"duplication.  Mkfs with -m dup if you want to "
-				"force metadata duplication.\n");
-
-			if (dev_cnt > 1) {
+			if (dev_cnt > 1)
 				tmp = BTRFS_MKFS_DEFAULT_META_MULTI_DEVICE;
-			} else {
-				if (ssd)
-					tmp = BTRFS_MKFS_DEFAULT_META_ONE_DEVICE_SSD;
-				else
-					tmp = BTRFS_MKFS_DEFAULT_META_ONE_DEVICE;
-			}
+			else
+				tmp = BTRFS_MKFS_DEFAULT_META_ONE_DEVICE;
 			metadata_profile = tmp;
 		}
 		if (!data_profile_opt) {
@@ -1309,12 +1342,16 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 
 	dev_cnt--;
 
+	oflags = O_RDWR;
+	if (zoned && zoned_model(file) == ZONED_HOST_MANAGED)
+		oflags |= O_DIRECT;
+
 	/*
 	 * Open without O_EXCL so that the problem should not occur by the
 	 * following operation in kernel:
 	 * (btrfs_register_one_device() fails if O_EXCL is on)
 	 */
-	fd = open(file, O_RDWR);
+	fd = open(file, oflags);
 	if (fd < 0) {
 		error("unable to open %s: %m", file);
 		goto error;
@@ -1322,7 +1359,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	ret = btrfs_prepare_device(fd, file, &dev_block_count, block_count,
 			(zero_end ? PREP_DEVICE_ZERO_END : 0) |
 			(discard ? PREP_DEVICE_DISCARD : 0) |
-			(verbose ? PREP_DEVICE_VERBOSE : 0) |
+			(bconf.verbose ? PREP_DEVICE_VERBOSE : 0) |
 			(zoned ? PREP_DEVICE_ZONED : 0));
 	if (ret)
 		goto error;
@@ -1345,6 +1382,13 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	    btrfs_bg_type_to_tolerated_failures(data_profile))
 		warning("metadata has lower redundancy than data!\n");
 
+	printf("NOTE: several default settings have changed in version 5.15, please make sure\n");
+	printf("      this does not affect your deployments:\n");
+	printf("      - DUP for metadata (-m dup)\n");
+	printf("      - enabled no-holes (-O no-holes)\n");
+	printf("      - enabled free-space-tree (-R free-space-tree)\n");
+	printf("\n");
+
 	mkfs_cfg.label = label;
 	memcpy(mkfs_cfg.fs_uuid, fs_uuid, sizeof(mkfs_cfg.fs_uuid));
 	mkfs_cfg.num_bytes = dev_block_count;
@@ -1354,7 +1398,10 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	mkfs_cfg.features = features;
 	mkfs_cfg.runtime_features = runtime_features;
 	mkfs_cfg.csum_type = csum_type;
-	mkfs_cfg.zone_size = zone_size(file);
+	if (zoned)
+		mkfs_cfg.zone_size = zone_size(file);
+	else
+		mkfs_cfg.zone_size = 0;
 
 	ret = make_btrfs(fd, &mkfs_cfg);
 	if (ret) {
@@ -1436,7 +1483,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		}
 		ret = btrfs_prepare_device(fd, file, &dev_block_count,
 				block_count,
-				(verbose ? PREP_DEVICE_VERBOSE : 0) |
+				(bconf.verbose ? PREP_DEVICE_VERBOSE : 0) |
 				(zero_end ? PREP_DEVICE_ZERO_END : 0) |
 				(discard ? PREP_DEVICE_DISCARD : 0) |
 				(zoned ? PREP_DEVICE_ZONED : 0));
@@ -1450,7 +1497,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 			error("unable to add %s to filesystem: %d", file, ret);
 			goto error;
 		}
-		if (verbose >= 2) {
+		if (bconf.verbose >= 2) {
 			struct btrfs_device *device;
 
 			device = container_of(fs_info->fs_devices->devices.next,
@@ -1465,6 +1512,33 @@ raid_groups:
 			 metadata_profile, mixed, &allocation);
 	if (ret) {
 		error("unable to create raid groups: %d", ret);
+		goto out;
+	}
+
+	/*
+	 * Commit current transaction so we can COW all existing tree blocks
+	 * to newly created raid groups.
+	 * As currently we use btrfs_search_slot() to COW tree blocks in
+	 * recow_roots(), if a tree block is already modified in current trans,
+	 * it won't be re-COWed, thus it will stay in temporary chunks.
+	 */
+	ret = btrfs_commit_transaction(trans, root);
+	if (ret) {
+		errno = -ret;
+		error("unable to commit transaction before recowing trees: %m");
+		goto out;
+	}
+	trans = btrfs_start_transaction(root, 1);
+	if (IS_ERR(trans)) {
+		errno = -PTR_ERR(trans);
+		error("failed to start transaction: %m");
+		goto error;
+	}
+	/* COW all tree blocks to newly created chunks */
+	ret = recow_roots(trans, root);
+	if (ret) {
+		errno = -ret;
+		error("unable to COW tree blocks to new profiles: %m");
 		goto out;
 	}
 
@@ -1493,7 +1567,7 @@ raid_groups:
 	}
 
 	if (source_dir_set) {
-		ret = btrfs_mkfs_fill_dir(source_dir, root, verbose);
+		ret = btrfs_mkfs_fill_dir(source_dir, root, bconf.verbose);
 		if (ret) {
 			error("error while filling filesystem: %d", ret);
 			goto out;
@@ -1516,7 +1590,7 @@ raid_groups:
 			goto out;
 		}
 	}
-	if (verbose) {
+	if (bconf.verbose) {
 		char features_buf[64];
 
 		update_chunk_allocation(fs_info, &allocation);

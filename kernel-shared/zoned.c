@@ -267,6 +267,7 @@ static int report_zones(int fd, const char *file,
 	u64 zone_bytes = zone_size(file);
 	size_t rep_size;
 	u64 sector = 0;
+	struct stat st;
 	struct blk_zone_report *rep;
 	struct blk_zone *zone;
 	unsigned int i, n = 0;
@@ -291,11 +292,13 @@ static int report_zones(int fd, const char *file,
 		exit(1);
 	}
 
-	/*
-	 * No need to use btrfs_device_size() here, since it is ensured
-	 * that the file is block device.
-	 */
-	device_size = device_get_partition_size_fd(fd);
+	ret = fstat(fd, &st);
+	if (ret < 0) {
+		error("error when reading zone info on %s: %m", file);
+		return -EIO;
+	}
+
+	device_size = btrfs_device_size(fd, &st);
 	if (device_size == 0) {
 		error("zoned: failed to read size of %s: %m", file);
 		exit(1);
@@ -303,13 +306,11 @@ static int report_zones(int fd, const char *file,
 
 	/* Allocate the zone information array */
 	zinfo->zone_size = zone_bytes;
-	zinfo->max_zone_append_size = max_zone_append_size(file);
 	zinfo->nr_zones = device_size / zone_bytes;
 	if (device_size & (zone_bytes - 1))
 		zinfo->nr_zones++;
 
-	if (zoned_model(file) != ZONED_NONE &&
-	    zinfo->max_zone_append_size == 0) {
+	if (zoned_model(file) != ZONED_NONE && max_zone_append_size(file) == 0) {
 		error(
 		"zoned: device %s does not support ZONE_APPEND command", file);
 		exit(1);
@@ -343,6 +344,7 @@ static int report_zones(int fd, const char *file,
 				error("zoned: ioctl BLKREPORTZONE failed (%m)");
 				exit(1);
 			}
+			zinfo->emulated = false;
 		} else {
 			ret = emulate_report_zones(file, fd,
 						   sector << SECTOR_SHIFT,
@@ -351,6 +353,7 @@ static int report_zones(int fd, const char *file,
 				error("zoned: failed to emulate BLKREPORTZONE");
 				exit(1);
 			}
+			zinfo->emulated = true;
 		}
 
 		if (!rep->nr_zones)
@@ -421,7 +424,7 @@ int zero_zone_blocks(int fd, struct btrfs_zoned_device_info *zinfo, off_t start,
 			count = zone_len - (ofst & (zone_len - 1));
 
 		if (!zone_is_sequential(zinfo, ofst)) {
-			ret = device_zero_blocks(fd, ofst, count);
+			ret = device_zero_blocks(fd, ofst, count, true);
 			if (ret != 0)
 				return ret;
 		}
@@ -590,9 +593,9 @@ size_t btrfs_sb_io(int fd, void *buf, off_t offset, int rw)
 		return ret;
 
 	if (rw == READ)
-		ret_sz = pread64(fd, buf, count, mapped);
+		ret_sz = btrfs_pread(fd, buf, count, mapped, true);
 	else
-		ret_sz = pwrite64(fd, buf, count, mapped);
+		ret_sz = btrfs_pwrite(fd, buf, count, mapped, true);
 
 	if (ret_sz != count)
 		return ret_sz;
@@ -805,6 +808,17 @@ out:
 	return ret;
 }
 
+static bool profile_supported(u64 flags)
+{
+	flags &= BTRFS_BLOCK_GROUP_PROFILE_MASK;
+
+	/* SINGLE */
+	if (flags == 0)
+		return true;
+	/* non-single profiles are not supported yet */
+	return false;
+}
+
 int btrfs_load_block_group_zone_info(struct btrfs_fs_info *fs_info,
 				     struct btrfs_block_group *cache)
 {
@@ -916,23 +930,13 @@ int btrfs_load_block_group_zone_info(struct btrfs_fs_info *fs_info,
 		}
 	}
 
-	switch (map->type & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
-	case 0: /* single */
-		cache->alloc_offset = alloc_offsets[0];
-		break;
-	case BTRFS_BLOCK_GROUP_DUP:
-	case BTRFS_BLOCK_GROUP_RAID1:
-	case BTRFS_BLOCK_GROUP_RAID0:
-	case BTRFS_BLOCK_GROUP_RAID10:
-	case BTRFS_BLOCK_GROUP_RAID5:
-	case BTRFS_BLOCK_GROUP_RAID6:
-		/* non-single profiles are not supported yet */
-	default:
+	if (!profile_supported(map->type)) {
 		error("zoned: profile %s not yet supported",
 		      btrfs_group_profile_str(map->type));
 		ret = -EINVAL;
 		goto out;
 	}
+	cache->alloc_offset = alloc_offsets[0];
 
 out:
 	/* An extent is allocated after the write pointer */
@@ -1116,7 +1120,6 @@ int btrfs_check_zoned_mode(struct btrfs_fs_info *fs_info)
 	u64 zoned_devices = 0;
 	u64 nr_devices = 0;
 	u64 zone_size = 0;
-	u64 max_zone_append_size = 0;
 	const bool incompat_zoned = btrfs_fs_incompat(fs_info, ZONED);
 	int ret = 0;
 
@@ -1151,11 +1154,6 @@ int btrfs_check_zoned_mode(struct btrfs_fs_info *fs_info)
 				ret = -EINVAL;
 				goto out;
 			}
-			if (!max_zone_append_size ||
-			    (zone_info->max_zone_append_size &&
-			     zone_info->max_zone_append_size < max_zone_append_size))
-				max_zone_append_size =
-					zone_info->max_zone_append_size;
 		}
 		nr_devices++;
 	}
@@ -1201,7 +1199,6 @@ int btrfs_check_zoned_mode(struct btrfs_fs_info *fs_info)
 	}
 
 	fs_info->zone_size = zone_size;
-	fs_info->max_zone_append_size = max_zone_append_size;
 	fs_info->fs_devices->chunk_alloc_policy = BTRFS_CHUNK_ALLOC_ZONED;
 
 out:

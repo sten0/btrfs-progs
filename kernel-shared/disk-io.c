@@ -35,6 +35,7 @@
 #include "kernel-shared/print-tree.h"
 #include "common/rbtree-utils.h"
 #include "common/device-scan.h"
+#include "common/device-utils.h"
 #include "crypto/hash.h"
 
 /* specified errno for check_tree_block */
@@ -208,8 +209,8 @@ int verify_tree_block_csum_silent(struct extent_buffer *buf, u16 csum_size,
 int csum_tree_block(struct btrfs_fs_info *fs_info,
 		    struct extent_buffer *buf, int verify)
 {
-	u16 csum_size = btrfs_super_csum_size(fs_info->super_copy);
-	u16 csum_type = btrfs_super_csum_type(fs_info->super_copy);
+	u16 csum_size = fs_info->csum_size;
+	u16 csum_type = fs_info->csum_type;
 
 	if (verify && fs_info->suppress_check_block_errors)
 		return verify_tree_block_csum_silent(buf, csum_size, csum_type);
@@ -476,7 +477,8 @@ int read_extent_data(struct btrfs_fs_info *fs_info, char *data, u64 logical,
 		goto err;
 	}
 
-	ret = pread64(device->fd, data, *len, multi->stripes[0].physical);
+	ret = btrfs_pread(device->fd, data, *len, multi->stripes[0].physical,
+			  fs_info->zoned);
 	if (ret != *len)
 		ret = -EIO;
 	else
@@ -1295,14 +1297,28 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, struct open_ctree_flags *oc
 	fs_info->sectorsize = btrfs_super_sectorsize(disk_super);
 	fs_info->nodesize = btrfs_super_nodesize(disk_super);
 	fs_info->stripesize = btrfs_super_stripesize(disk_super);
+	fs_info->csum_type = btrfs_super_csum_type(disk_super);
+	fs_info->csum_size = btrfs_super_csum_size(disk_super);
 
 	ret = btrfs_check_fs_compatibility(fs_info->super_copy, flags);
 	if (ret)
 		goto out_devices;
 
+	/*
+	 * fs_info->zone_size (and zoned) are not known before reading the
+	 * chunk tree, so it's 0 at this point. But, fs_info->zoned == 0
+	 * will cause btrfs_pread() not to use an aligned bounce buffer,
+	 * causing EINVAL when the file is opened with O_DIRECT. Temporarily
+	 * set zoned = 1 in that case.
+	 */
+	if (fcntl(fp, F_GETFL) & O_DIRECT)
+		fs_info->zoned = 1;
+
 	ret = btrfs_setup_chunk_tree_and_device_map(fs_info, ocf->chunk_tree_bytenr);
 	if (ret)
 		goto out_chunk;
+
+	fs_info->zoned = 0;
 
 	/* Chunk tree root is unable to read, return directly */
 	if (!fs_info->chunk_root)
@@ -1367,6 +1383,9 @@ struct btrfs_fs_info *open_ctree_fs_info(struct open_ctree_flags *ocf)
 
 	if (!(ocf->flags & OPEN_CTREE_WRITES))
 		oflags = O_RDONLY;
+
+	if ((oflags & O_RDWR) && zoned_model(ocf->filename) == ZONED_HOST_MANAGED)
+		oflags |= O_DIRECT;
 
 	fp = open(ocf->filename, oflags);
 	if (fp < 0) {
@@ -1602,8 +1621,7 @@ int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 	u8 fsid[BTRFS_FSID_SIZE];
 	u8 metadata_uuid[BTRFS_FSID_SIZE];
 	int fsid_is_initialized = 0;
-	char tmp[BTRFS_SUPER_INFO_SIZE];
-	struct btrfs_super_block *buf = (struct btrfs_super_block *)tmp;
+	struct btrfs_super_block buf;
 	int i;
 	int ret;
 	int max_super = sbflags & SBREAD_RECOVER ? BTRFS_SUPER_MIRROR_MAX : 1;
@@ -1612,7 +1630,7 @@ int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 	u64 bytenr;
 
 	if (sb_bytenr != BTRFS_SUPER_INFO_OFFSET) {
-		ret = sbread(fd, buf, sb_bytenr);
+		ret = sbread(fd, &buf, sb_bytenr);
 		/* real error */
 		if (ret < 0)
 			return -errno;
@@ -1621,13 +1639,13 @@ int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 		if (ret < BTRFS_SUPER_INFO_SIZE)
 			return -ENOENT;
 
-		if (btrfs_super_bytenr(buf) != sb_bytenr)
+		if (btrfs_super_bytenr(&buf) != sb_bytenr)
 			return -EIO;
 
-		ret = btrfs_check_super(buf, sbflags);
+		ret = btrfs_check_super(&buf, sbflags);
 		if (ret < 0)
 			return ret;
-		memcpy(sb, buf, BTRFS_SUPER_INFO_SIZE);
+		memcpy(sb, &buf, BTRFS_SUPER_INFO_SIZE);
 		return 0;
 	}
 
@@ -1640,31 +1658,31 @@ int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 
 	for (i = 0; i < max_super; i++) {
 		bytenr = btrfs_sb_offset(i);
-		ret = sbread(fd, buf, bytenr);
+		ret = sbread(fd, &buf, bytenr);
 
 		if (ret < BTRFS_SUPER_INFO_SIZE)
 			break;
 
-		if (btrfs_super_bytenr(buf) != bytenr )
+		if (btrfs_super_bytenr(&buf) != bytenr )
 			continue;
 		/* if magic is NULL, the device was removed */
-		if (btrfs_super_magic(buf) == 0 && i == 0)
+		if (btrfs_super_magic(&buf) == 0 && i == 0)
 			break;
-		if (btrfs_check_super(buf, sbflags))
+		if (btrfs_check_super(&buf, sbflags))
 			continue;
 
 		if (!fsid_is_initialized) {
-			if (btrfs_super_incompat_flags(buf) &
+			if (btrfs_super_incompat_flags(&buf) &
 			    BTRFS_FEATURE_INCOMPAT_METADATA_UUID) {
 				metadata_uuid_set = true;
-				memcpy(metadata_uuid, buf->metadata_uuid,
+				memcpy(metadata_uuid, buf.metadata_uuid,
 				       sizeof(metadata_uuid));
 			}
-			memcpy(fsid, buf->fsid, sizeof(fsid));
+			memcpy(fsid, buf.fsid, sizeof(fsid));
 			fsid_is_initialized = 1;
-		} else if (memcmp(fsid, buf->fsid, sizeof(fsid)) ||
+		} else if (memcmp(fsid, buf.fsid, sizeof(fsid)) ||
 			   (metadata_uuid_set && memcmp(metadata_uuid,
-							buf->metadata_uuid,
+							buf.metadata_uuid,
 							sizeof(metadata_uuid)))) {
 			/*
 			 * the superblocks (the original one and
@@ -1674,9 +1692,9 @@ int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 			continue;
 		}
 
-		if (btrfs_super_generation(buf) > transid) {
-			memcpy(sb, buf, BTRFS_SUPER_INFO_SIZE);
-			transid = btrfs_super_generation(buf);
+		if (btrfs_super_generation(&buf) > transid) {
+			memcpy(sb, &buf, BTRFS_SUPER_INFO_SIZE);
+			transid = btrfs_super_generation(&buf);
 		}
 	}
 

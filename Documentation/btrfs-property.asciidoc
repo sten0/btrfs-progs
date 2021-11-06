@@ -41,7 +41,8 @@ all properties for the given object are printed. 'name' is one of
 the following:
 
 ro::::
-read-only flag of subvolume: true or false
+read-only flag of subvolume: true or false. Please also see section 'SUBVOLUME FLAGS'
+in `btrfs-subvolume`(8) for possible implications regarding incremental send.
 label::::
 label of the filesystem. For an unmounted filesystem, provide a path to a block
 device as object. For a mounted filesystem, specify a mount point.
@@ -54,10 +55,16 @@ Lists available properties with their descriptions for the given object.
 +
 See the description of *get* subcommand for the meaning of each option.
 
-*set* [-t <type>] <object> <name> <value>::
+*set* [-f] [-t <type>] <object> <name> <value>::
 Sets a property on a btrfs object.
 +
 See the description of *get* subcommand for the meaning of each option.
++
+`Options`
++
+-f::::
+Force the change. Changing some properties may involve safety checks or
+additional changes that depend on the properties semantics.
 
 EXIT STATUS
 -----------

@@ -26,6 +26,7 @@
 #include <getopt.h>
 #include <uuid/uuid.h>
 #include <time.h>
+#include "kernel-lib/radix-tree.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/volumes.h"
 #include "common/repair.h"
@@ -4196,8 +4197,7 @@ static int swap_values(struct btrfs_root *root, struct btrfs_path *path,
 			struct btrfs_disk_key key;
 
 			btrfs_node_key(buf, &key, 0);
-			btrfs_fixup_low_keys(root, path, &key,
-					     btrfs_header_level(buf) + 1);
+			btrfs_fixup_low_keys(path, &key, btrfs_header_level(buf) + 1);
 		}
 	} else {
 		struct btrfs_item *item1, *item2;
@@ -4301,7 +4301,7 @@ static int delete_bogus_item(struct btrfs_root *root,
 		struct btrfs_disk_key disk_key;
 
 		btrfs_item_key(buf, &disk_key, 0);
-		btrfs_fixup_low_keys(root, path, &disk_key, 1);
+		btrfs_fixup_low_keys(path, &disk_key, 1);
 	}
 	btrfs_mark_buffer_dirty(buf);
 	return 0;
@@ -5762,8 +5762,8 @@ static int check_extent_csums(struct btrfs_root *root, u64 bytenr,
 			struct extent_buffer *eb)
 {
 	u64 offset = 0;
-	u16 csum_size = btrfs_super_csum_size(gfs_info->super_copy);
-	u16 csum_type = btrfs_super_csum_type(gfs_info->super_copy);
+	u16 csum_size = gfs_info->csum_size;
+	u16 csum_type = gfs_info->csum_type;
 	u8 *data;
 	unsigned long csum_offset;
 	u8 result[BTRFS_CSUM_SIZE];
@@ -5981,7 +5981,7 @@ static int check_csums(struct btrfs_root *root)
 	struct btrfs_key key;
 	u64 last_data_end = 0;
 	u64 offset = 0, num_bytes = 0;
-	u16 csum_size = btrfs_super_csum_size(gfs_info->super_copy);
+	u16 csum_size = gfs_info->csum_size;
 	int errors = 0;
 	int ret;
 	u64 data_len;
@@ -6494,7 +6494,7 @@ static int run_next_block(struct btrfs_root *root,
 			if (btrfs_item_size_nr(buf, i) < inline_offset) {
 				ret = -EUCLEAN;
 				error(
-		"invalid file extent item size, have %u expect (%lu, %lu]",
+		"invalid file extent item size, have %u expect (%lu, %u]",
 					btrfs_item_size_nr(buf, i),
 					inline_offset,
 					BTRFS_LEAF_DATA_SIZE(gfs_info));
@@ -10354,7 +10354,7 @@ static const char * const cmd_check_usage[] = {
 	"       --init-csum-tree            create a new CRC tree",
 	"       --init-extent-tree          create a new extent tree",
 	"       --clear-space-cache v1|v2   clear space cache for v1 or v2",
-	"       --clear-ino-cache 	    clear ino cache leftover items",
+	"       --clear-ino-cache           clear ino cache leftover items",
 	"  check and reporting options:",
 	"       --check-data-csum           verify checksums of data blocks",
 	"       -Q|--qgroup-report          print a report on qgroup consistency",

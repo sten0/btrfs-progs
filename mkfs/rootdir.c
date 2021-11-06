@@ -36,6 +36,7 @@
 #include "mkfs/rootdir.h"
 #include "mkfs/common.h"
 #include "common/send-utils.h"
+#include "common/path-utils.h"
 
 static u32 fs_block_size;
 
@@ -396,6 +397,7 @@ again:
 
 		eb->start = first_block + bytes_read;
 		eb->len = sectorsize;
+		eb->fs_info = root->fs_info;
 
 		/*
 		 * we're doing the csum before we record the extent, but

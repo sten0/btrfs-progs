@@ -37,7 +37,6 @@
 #include "kernel-shared/ctree.h"
 #include "cmds/commands.h"
 #include "common/utils.h"
-#include "btrfs-list.h"
 #include "common/help.h"
 #include "common/path-utils.h"
 #include "common/device-scan.h"
@@ -505,212 +504,6 @@ keep_fd:
 }
 static DEFINE_SIMPLE_COMMAND(subvol_delete, "delete");
 
-/*
- * Naming of options:
- * - uppercase for filters and sort options
- * - lowercase for enabling specific items in the output
- */
-static const char * const cmd_subvol_list_usage[] = {
-	"btrfs subvolume list [options] <path>",
-	"List subvolumes and snapshots in the filesystem.",
-	"",
-	"Path filtering:",
-	"-o           print only subvolumes below specified path",
-	"-a           print all the subvolumes in the filesystem and",
-	"             distinguish absolute and relative path with respect",
-	"             to the given <path>",
-	"",
-	"Field selection:",
-	"-p           print parent ID",
-	"-c           print the ogeneration of the subvolume",
-	"-g           print the generation of the subvolume",
-	"-u           print the uuid of subvolumes (and snapshots)",
-	"-q           print the parent uuid of the snapshots",
-	"-R           print the uuid of the received snapshots",
-	"",
-	"Type filtering:",
-	"-s           list only snapshots",
-	"-r           list readonly subvolumes (including snapshots)",
-	"-d           list deleted subvolumes that are not yet cleaned",
-	"",
-	"Other:",
-	"-t           print the result as a table",
-	"",
-	"Sorting:",
-	"-G [+|-]value",
-	"             filter the subvolumes by generation",
-	"             (+value: >= value; -value: <= value; value: = value)",
-	"-C [+|-]value",
-	"             filter the subvolumes by ogeneration",
-	"             (+value: >= value; -value: <= value; value: = value)",
-	"--sort=gen,ogen,rootid,path",
-	"             list the subvolume in order of gen, ogen, rootid or path",
-	"             you also can add '+' or '-' in front of each items.",
-	"             (+:ascending, -:descending, ascending default)",
-	NULL,
-};
-
-static int cmd_subvol_list(const struct cmd_struct *cmd, int argc, char **argv)
-{
-	struct btrfs_list_filter_set *filter_set;
-	struct btrfs_list_comparer_set *comparer_set;
-	u64 flags = 0;
-	int fd = -1;
-	u64 top_id;
-	int ret = -1, uerr = 0;
-	char *subvol;
-	int is_list_all = 0;
-	int is_only_in_path = 0;
-	DIR *dirstream = NULL;
-	enum btrfs_list_layout layout = BTRFS_LIST_LAYOUT_DEFAULT;
-
-	filter_set = btrfs_list_alloc_filter_set();
-	comparer_set = btrfs_list_alloc_comparer_set();
-
-	optind = 0;
-	while(1) {
-		int c;
-		static const struct option long_options[] = {
-			{"sort", required_argument, NULL, 'S'},
-			{NULL, 0, NULL, 0}
-		};
-
-		c = getopt_long(argc, argv,
-				    "acdgopqsurRG:C:t", long_options, NULL);
-		if (c < 0)
-			break;
-
-		switch(c) {
-		case 'p':
-			btrfs_list_setup_print_column(BTRFS_LIST_PARENT);
-			break;
-		case 'a':
-			is_list_all = 1;
-			break;
-		case 'c':
-			btrfs_list_setup_print_column(BTRFS_LIST_OGENERATION);
-			break;
-		case 'd':
-			btrfs_list_setup_filter(&filter_set,
-						BTRFS_LIST_FILTER_DELETED,
-						0);
-			break;
-		case 'g':
-			btrfs_list_setup_print_column(BTRFS_LIST_GENERATION);
-			break;
-		case 'o':
-			is_only_in_path = 1;
-			break;
-		case 't':
-			layout = BTRFS_LIST_LAYOUT_TABLE;
-			break;
-		case 's':
-			btrfs_list_setup_filter(&filter_set,
-						BTRFS_LIST_FILTER_SNAPSHOT_ONLY,
-						0);
-			btrfs_list_setup_print_column(BTRFS_LIST_OGENERATION);
-			btrfs_list_setup_print_column(BTRFS_LIST_OTIME);
-			break;
-		case 'u':
-			btrfs_list_setup_print_column(BTRFS_LIST_UUID);
-			break;
-		case 'q':
-			btrfs_list_setup_print_column(BTRFS_LIST_PUUID);
-			break;
-		case 'R':
-			btrfs_list_setup_print_column(BTRFS_LIST_RUUID);
-			break;
-		case 'r':
-			flags |= BTRFS_ROOT_SUBVOL_RDONLY;
-			break;
-		case 'G':
-			btrfs_list_setup_print_column(BTRFS_LIST_GENERATION);
-			ret = btrfs_list_parse_filter_string(optarg,
-							&filter_set,
-							BTRFS_LIST_FILTER_GEN);
-			if (ret) {
-				uerr = 1;
-				goto out;
-			}
-			break;
-
-		case 'C':
-			btrfs_list_setup_print_column(BTRFS_LIST_OGENERATION);
-			ret = btrfs_list_parse_filter_string(optarg,
-							&filter_set,
-							BTRFS_LIST_FILTER_CGEN);
-			if (ret) {
-				uerr = 1;
-				goto out;
-			}
-			break;
-		case 'S':
-			ret = btrfs_list_parse_sort_string(optarg,
-							   &comparer_set);
-			if (ret) {
-				uerr = 1;
-				goto out;
-			}
-			break;
-
-		default:
-			uerr = 1;
-			goto out;
-		}
-	}
-
-	if (check_argc_exact(argc - optind, 1))
-		goto out;
-
-	subvol = argv[optind];
-	fd = btrfs_open_dir(subvol, &dirstream, 1);
-	if (fd < 0) {
-		ret = -1;
-		error("can't access '%s'", subvol);
-		goto out;
-	}
-
-	if (flags)
-		btrfs_list_setup_filter(&filter_set, BTRFS_LIST_FILTER_FLAGS,
-					flags);
-
-	ret = lookup_path_rootid(fd, &top_id);
-	if (ret) {
-		errno = -ret;
-		error("cannot resolve rootid for path: %m");
-		goto out;
-	}
-
-	if (is_list_all)
-		btrfs_list_setup_filter(&filter_set,
-					BTRFS_LIST_FILTER_FULL_PATH,
-					top_id);
-	else if (is_only_in_path)
-		btrfs_list_setup_filter(&filter_set,
-					BTRFS_LIST_FILTER_TOPID_EQUAL,
-					top_id);
-
-	/* by default we shall print the following columns*/
-	btrfs_list_setup_print_column(BTRFS_LIST_OBJECTID);
-	btrfs_list_setup_print_column(BTRFS_LIST_GENERATION);
-	btrfs_list_setup_print_column(BTRFS_LIST_TOP_LEVEL);
-	btrfs_list_setup_print_column(BTRFS_LIST_PATH);
-
-	ret = btrfs_list_subvols_print(fd, filter_set, comparer_set,
-			layout, !is_list_all && !is_only_in_path, NULL);
-
-out:
-	close_file_or_dir(fd, dirstream);
-	if (filter_set)
-		free(filter_set);
-	if (comparer_set)
-		free(comparer_set);
-	if (uerr)
-		usage(cmd);
-	return !!ret;
-}
-static DEFINE_SIMPLE_COMMAND(subvol_list, "list");
-
 static const char * const cmd_subvol_snapshot_usage[] = {
 	"btrfs subvolume snapshot [-r] [-i <qgroupid>] <source> <dest>|[<dest>/]<name>",
 	"Create a snapshot of the subvolume",
@@ -991,6 +784,415 @@ static const char * const cmd_subvol_find_new_usage[] = {
 	NULL
 };
 
+/* finding the generation for a given path is a two step process.
+ * First we use the inode lookup routine to find out the root id
+ *
+ * Then we use the tree search ioctl to scan all the root items for a
+ * given root id and spit out the latest generation we can find
+ */
+static u64 find_root_gen(int fd)
+{
+	struct btrfs_ioctl_ino_lookup_args ino_args;
+	int ret;
+	struct btrfs_ioctl_search_args args;
+	struct btrfs_ioctl_search_key *sk = &args.key;
+	struct btrfs_ioctl_search_header sh;
+	unsigned long off = 0;
+	u64 max_found = 0;
+	int i;
+
+	memset(&ino_args, 0, sizeof(ino_args));
+	ino_args.objectid = BTRFS_FIRST_FREE_OBJECTID;
+
+	/* this ioctl fills in ino_args->treeid */
+	ret = ioctl(fd, BTRFS_IOC_INO_LOOKUP, &ino_args);
+	if (ret < 0) {
+		error("failed to lookup path for dirid %llu: %m",
+			(unsigned long long)BTRFS_FIRST_FREE_OBJECTID);
+		return 0;
+	}
+
+	memset(&args, 0, sizeof(args));
+
+	sk->tree_id = BTRFS_ROOT_TREE_OBJECTID;
+
+	/*
+	 * there may be more than one ROOT_ITEM key if there are
+	 * snapshots pending deletion, we have to loop through
+	 * them.
+	 */
+	sk->min_objectid = ino_args.treeid;
+	sk->max_objectid = ino_args.treeid;
+	sk->max_type = BTRFS_ROOT_ITEM_KEY;
+	sk->min_type = BTRFS_ROOT_ITEM_KEY;
+	sk->max_offset = (u64)-1;
+	sk->max_transid = (u64)-1;
+	sk->nr_items = 4096;
+
+	while (1) {
+		ret = ioctl(fd, BTRFS_IOC_TREE_SEARCH, &args);
+		if (ret < 0) {
+			error("can't perform the search: %m");
+			return 0;
+		}
+		/* the ioctl returns the number of item it found in nr_items */
+		if (sk->nr_items == 0)
+			break;
+
+		off = 0;
+		for (i = 0; i < sk->nr_items; i++) {
+			struct btrfs_root_item *item;
+
+			memcpy(&sh, args.buf + off, sizeof(sh));
+			off += sizeof(sh);
+			item = (struct btrfs_root_item *)(args.buf + off);
+			off += sh.len;
+
+			sk->min_objectid = sh.objectid;
+			sk->min_type = sh.type;
+			sk->min_offset = sh.offset;
+
+			if (sh.objectid > ino_args.treeid)
+				break;
+
+			if (sh.objectid == ino_args.treeid &&
+			    sh.type == BTRFS_ROOT_ITEM_KEY) {
+				max_found = max(max_found,
+						btrfs_root_generation(item));
+			}
+		}
+		if (sk->min_offset < (u64)-1)
+			sk->min_offset++;
+		else
+			break;
+
+		if (sk->min_type != BTRFS_ROOT_ITEM_KEY)
+			break;
+		if (sk->min_objectid != ino_args.treeid)
+			break;
+	}
+	return max_found;
+}
+
+/* pass in a directory id and this will return
+ * the full path of the parent directory inside its
+ * subvolume root.
+ *
+ * It may return NULL if it is in the root, or an ERR_PTR if things
+ * go badly.
+ */
+static char *__ino_resolve(int fd, u64 dirid)
+{
+	struct btrfs_ioctl_ino_lookup_args args;
+	int ret;
+	char *full;
+
+	memset(&args, 0, sizeof(args));
+	args.objectid = dirid;
+
+	ret = ioctl(fd, BTRFS_IOC_INO_LOOKUP, &args);
+	if (ret < 0) {
+		error("failed to lookup path for dirid %llu: %m",
+			(unsigned long long)dirid);
+		return ERR_PTR(ret);
+	}
+
+	if (args.name[0]) {
+		/*
+		 * we're in a subdirectory of ref_tree, the kernel ioctl
+		 * puts a / in there for us
+		 */
+		full = strdup(args.name);
+		if (!full) {
+			perror("malloc failed");
+			return ERR_PTR(-ENOMEM);
+		}
+	} else {
+		/* we're at the root of ref_tree */
+		full = NULL;
+	}
+	return full;
+}
+
+/*
+ * simple string builder, returning a new string with both
+ * dirid and name
+ */
+static char *build_name(const char *dirid, const char *name)
+{
+	char *full;
+
+	if (!dirid)
+		return strdup(name);
+
+	full = malloc(strlen(dirid) + strlen(name) + 1);
+	if (!full)
+		return NULL;
+	strcpy(full, dirid);
+	strcat(full, name);
+	return full;
+}
+
+/*
+ * given an inode number, this returns the full path name inside the subvolume
+ * to that file/directory.  cache_dirid and cache_name are used to
+ * cache the results so we can avoid tree searches if a later call goes
+ * to the same directory or file name
+ */
+static char *ino_resolve(int fd, u64 ino, u64 *cache_dirid, char **cache_name)
+
+{
+	u64 dirid;
+	char *dirname;
+	char *name;
+	char *full;
+	int ret;
+	struct btrfs_ioctl_search_args args;
+	struct btrfs_ioctl_search_key *sk = &args.key;
+	struct btrfs_ioctl_search_header *sh;
+	unsigned long off = 0;
+	int namelen;
+
+	memset(&args, 0, sizeof(args));
+
+	sk->tree_id = 0;
+
+	/*
+	 * step one, we search for the inode back ref.  We just use the first
+	 * one
+	 */
+	sk->min_objectid = ino;
+	sk->max_objectid = ino;
+	sk->max_type = BTRFS_INODE_REF_KEY;
+	sk->max_offset = (u64)-1;
+	sk->min_type = BTRFS_INODE_REF_KEY;
+	sk->max_transid = (u64)-1;
+	sk->nr_items = 1;
+
+	ret = ioctl(fd, BTRFS_IOC_TREE_SEARCH, &args);
+	if (ret < 0) {
+		error("can't perform the search: %m");
+		return NULL;
+	}
+	/* the ioctl returns the number of item it found in nr_items */
+	if (sk->nr_items == 0)
+		return NULL;
+
+	off = 0;
+	sh = (struct btrfs_ioctl_search_header *)(args.buf + off);
+
+	if (btrfs_search_header_type(sh) == BTRFS_INODE_REF_KEY) {
+		struct btrfs_inode_ref *ref;
+		dirid = btrfs_search_header_offset(sh);
+
+		ref = (struct btrfs_inode_ref *)(sh + 1);
+		namelen = btrfs_stack_inode_ref_name_len(ref);
+
+		name = (char *)(ref + 1);
+		name = strndup(name, namelen);
+
+		/* use our cached value */
+		if (dirid == *cache_dirid && *cache_name) {
+			dirname = *cache_name;
+			goto build;
+		}
+	} else {
+		return NULL;
+	}
+	/*
+	 * the inode backref gives us the file name and the parent directory id.
+	 * From here we use __ino_resolve to get the path to the parent
+	 */
+	dirname = __ino_resolve(fd, dirid);
+build:
+	full = build_name(dirname, name);
+	if (*cache_name && dirname != *cache_name)
+		free(*cache_name);
+
+	*cache_name = dirname;
+	*cache_dirid = dirid;
+	free(name);
+
+	return full;
+}
+
+static int print_one_extent(int fd, struct btrfs_ioctl_search_header *sh,
+			    struct btrfs_file_extent_item *item,
+			    u64 found_gen, u64 *cache_dirid,
+			    char **cache_dir_name, u64 *cache_ino,
+			    char **cache_full_name)
+{
+	u64 len = 0;
+	u64 disk_start = 0;
+	u64 disk_offset = 0;
+	u8 type;
+	int compressed = 0;
+	int flags = 0;
+	char *name = NULL;
+
+	if (btrfs_search_header_objectid(sh) == *cache_ino) {
+		name = *cache_full_name;
+	} else if (*cache_full_name) {
+		free(*cache_full_name);
+		*cache_full_name = NULL;
+	}
+	if (!name) {
+		name = ino_resolve(fd, btrfs_search_header_objectid(sh),
+				   cache_dirid,
+				   cache_dir_name);
+		*cache_full_name = name;
+		*cache_ino = btrfs_search_header_objectid(sh);
+	}
+	if (!name)
+		return -EIO;
+
+	type = btrfs_stack_file_extent_type(item);
+	compressed = btrfs_stack_file_extent_compression(item);
+
+	if (type == BTRFS_FILE_EXTENT_REG ||
+	    type == BTRFS_FILE_EXTENT_PREALLOC) {
+		disk_start = btrfs_stack_file_extent_disk_bytenr(item);
+		disk_offset = btrfs_stack_file_extent_offset(item);
+		len = btrfs_stack_file_extent_num_bytes(item);
+	} else if (type == BTRFS_FILE_EXTENT_INLINE) {
+		disk_start = 0;
+		disk_offset = 0;
+		len = btrfs_stack_file_extent_ram_bytes(item);
+	} else {
+		error(
+	"unhandled extent type %d for inode %llu file offset %llu gen %llu",
+			type,
+			(unsigned long long)btrfs_search_header_objectid(sh),
+			(unsigned long long)btrfs_search_header_offset(sh),
+			(unsigned long long)found_gen);
+
+		return -EIO;
+	}
+	printf("inode %llu file offset %llu len %llu disk start %llu "
+	       "offset %llu gen %llu flags ",
+	       (unsigned long long)btrfs_search_header_objectid(sh),
+	       (unsigned long long)btrfs_search_header_offset(sh),
+	       (unsigned long long)len,
+	       (unsigned long long)disk_start,
+	       (unsigned long long)disk_offset,
+	       (unsigned long long)found_gen);
+
+	if (compressed) {
+		printf("COMPRESS");
+		flags++;
+	}
+	if (type == BTRFS_FILE_EXTENT_PREALLOC) {
+		printf("%sPREALLOC", flags ? "|" : "");
+		flags++;
+	}
+	if (type == BTRFS_FILE_EXTENT_INLINE) {
+		printf("%sINLINE", flags ? "|" : "");
+		flags++;
+	}
+	if (!flags)
+		printf("NONE");
+
+	printf(" %s\n", name);
+	return 0;
+}
+
+static int btrfs_list_find_updated_files(int fd, u64 root_id, u64 oldest_gen)
+{
+	int ret;
+	struct btrfs_ioctl_search_args args;
+	struct btrfs_ioctl_search_key *sk = &args.key;
+	struct btrfs_ioctl_search_header sh;
+	struct btrfs_file_extent_item *item;
+	unsigned long off = 0;
+	u64 found_gen;
+	u64 max_found = 0;
+	int i;
+	u64 cache_dirid = 0;
+	u64 cache_ino = 0;
+	char *cache_dir_name = NULL;
+	char *cache_full_name = NULL;
+	struct btrfs_file_extent_item backup;
+
+	memset(&backup, 0, sizeof(backup));
+	memset(&args, 0, sizeof(args));
+
+	sk->tree_id = root_id;
+
+	/*
+	 * set all the other params to the max, we'll take any objectid
+	 * and any trans
+	 */
+	sk->max_objectid = (u64)-1;
+	sk->max_offset = (u64)-1;
+	sk->max_transid = (u64)-1;
+	sk->max_type = BTRFS_EXTENT_DATA_KEY;
+	sk->min_transid = oldest_gen;
+	/* just a big number, doesn't matter much */
+	sk->nr_items = 4096;
+
+	max_found = find_root_gen(fd);
+	while(1) {
+		ret = ioctl(fd, BTRFS_IOC_TREE_SEARCH, &args);
+		if (ret < 0) {
+			error("can't perform the search: %m");
+			break;
+		}
+		/* the ioctl returns the number of item it found in nr_items */
+		if (sk->nr_items == 0)
+			break;
+
+		off = 0;
+
+		/*
+		 * for each item, pull the key out of the header and then
+		 * read the root_ref item it contains
+		 */
+		for (i = 0; i < sk->nr_items; i++) {
+			memcpy(&sh, args.buf + off, sizeof(sh));
+			off += sizeof(sh);
+
+			/*
+			 * just in case the item was too big, pass something other
+			 * than garbage
+			 */
+			if (sh.len == 0)
+				item = &backup;
+			else
+				item = (struct btrfs_file_extent_item *)(args.buf +
+								 off);
+			found_gen = btrfs_stack_file_extent_generation(item);
+			if (sh.type == BTRFS_EXTENT_DATA_KEY &&
+			    found_gen >= oldest_gen) {
+				print_one_extent(fd, &sh, item, found_gen,
+						 &cache_dirid, &cache_dir_name,
+						 &cache_ino, &cache_full_name);
+			}
+			off += sh.len;
+
+			/*
+			 * record the mins in sk so we can make sure the
+			 * next search doesn't repeat this root
+			 */
+			sk->min_objectid = sh.objectid;
+			sk->min_offset = sh.offset;
+			sk->min_type = sh.type;
+		}
+		sk->nr_items = 4096;
+		if (sk->min_offset < (u64)-1)
+			sk->min_offset++;
+		else if (sk->min_objectid < (u64)-1) {
+			sk->min_objectid++;
+			sk->min_offset = 0;
+			sk->min_type = 0;
+		} else
+			break;
+	}
+	free(cache_dir_name);
+	free(cache_full_name);
+	printf("transid marker was %llu\n", (unsigned long long)max_found);
+	return ret;
+}
+
 static int cmd_subvol_find_new(const struct cmd_struct *cmd,
 			       int argc, char **argv)
 {
@@ -1165,6 +1367,14 @@ static int cmd_subvol_show(const struct cmd_struct *cmd, int argc, char **argv)
 
 	}
 
+	/* Warn if it's a read-write subvolume with received_uuid */
+	if (!uuid_is_null(subvol.received_uuid) &&
+	    !(subvol.flags & BTRFS_ROOT_SUBVOL_RDONLY)) {
+		warning("the subvolume is read-write and has received_uuid set,\n"
+			"\t don't use it for incremental send. Please see section\n"
+			"\t 'SUBVOLUME FLAGS' in manual page btrfs-subvolume for\n"
+			"\t further information.");
+	}
 	/* print the info */
 	printf("%s\n", subvol.id == BTRFS_FS_TREE_OBJECTID ? "/" : subvol_path);
 	printf("\tName: \t\t\t%s\n",
@@ -1208,6 +1418,27 @@ static int cmd_subvol_show(const struct cmd_struct *cmd, int argc, char **argv)
 		printf("\tFlags: \t\t\treadonly\n");
 	else
 		printf("\tFlags: \t\t\t-\n");
+
+	printf("\tSend transid: \t\t%" PRIu64 "\n", subvol.stransid);
+	printf("\tSend time: \t\t%s\n", tstr);
+	if (subvol.stime.tv_sec) {
+		struct tm tm;
+
+		localtime_r(&subvol.stime.tv_sec, &tm);
+		strftime(tstr, 256, "%Y-%m-%d %X %z", &tm);
+	} else {
+		strcpy(tstr, "-");
+	}
+	printf("\tReceive transid: \t%" PRIu64 "\n", subvol.rtransid);
+	if (subvol.rtime.tv_sec) {
+		struct tm tm;
+
+		localtime_r(&subvol.rtime.tv_sec, &tm);
+		strftime(tstr, 256, "%Y-%m-%d %X %z", &tm);
+	} else {
+		strcpy(tstr, "-");
+	}
+	printf("\tReceive time: \t\t%s\n", tstr);
 
 	/* print the snapshots of the given subvol if any*/
 	printf("\tSnapshot(s):\n");

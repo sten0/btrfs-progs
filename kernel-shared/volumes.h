@@ -21,6 +21,7 @@
 
 #include "kerncompat.h"
 #include "kernel-shared/ctree.h"
+#include "kernel-lib/sizes.h"
 
 #define BTRFS_STRIPE_LEN	SZ_64K
 
@@ -133,11 +134,13 @@ struct btrfs_raid_attr {
 	int nparity;		/* number of stripes worth of bytes to store
 				 * parity information */
 	int mindev_error;	/* error code if min devs requisite is unmet */
-	const char raid_name[8]; /* name of the raid */
+	const char lower_name[8]; /* name of the profile in lower case*/
+	const char upper_name[8]; /* name of the profile in upper case*/
 	u64 bg_flag;		/* block group flag of the raid */
 };
 
 extern const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES];
+int btrfs_bg_type_to_nparity(u64 flags);
 
 #define btrfs_multi_bio_size(n) (sizeof(struct btrfs_multi_bio) + \
 			    (sizeof(struct btrfs_bio_stripe) * (n)))
@@ -220,12 +223,9 @@ static inline u64 calc_stripe_length(u64 type, u64 length, int num_stripes)
 	} else if (type & BTRFS_BLOCK_GROUP_RAID10) {
 		stripe_size = length * 2;
 		stripe_size /= num_stripes;
-	} else if (type & BTRFS_BLOCK_GROUP_RAID5) {
+	} else if (type & BTRFS_BLOCK_GROUP_RAID56_MASK) {
 		stripe_size = length;
-		stripe_size /= (num_stripes - 1);
-	} else if (type & BTRFS_BLOCK_GROUP_RAID6) {
-		stripe_size = length;
-		stripe_size /= (num_stripes - 2);
+		stripe_size /= (num_stripes - btrfs_bg_type_to_nparity(type));
 	} else {
 		stripe_size = length;
 	}
@@ -309,5 +309,11 @@ enum btrfs_raid_types btrfs_bg_flags_to_raid_index(u64 flags);
 int btrfs_bg_type_to_factor(u64 flags);
 const char *btrfs_bg_type_to_raid_name(u64 flags);
 int btrfs_bg_type_to_tolerated_failures(u64 flags);
+int btrfs_bg_type_to_devs_min(u64 flags);
+int btrfs_bg_type_to_ncopies(u64 flags);
+int btrfs_bg_type_to_nparity(u64 flags);
+int btrfs_bg_type_to_sub_stripes(u64 flags);
+u64 btrfs_bg_flags_for_device_num(int number);
+bool btrfs_bg_type_is_stripey(u64 flags);
 
 #endif

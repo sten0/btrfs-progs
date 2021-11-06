@@ -438,8 +438,7 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 	memset(fi_args, 0, sizeof(*fi_args));
 
 	if (path_is_block_device(path) == 1) {
-		struct btrfs_super_block *disk_super;
-		char buf[BTRFS_SUPER_INFO_SIZE];
+		struct btrfs_super_block disk_super;
 
 		/* Ensure it's mounted, then set path to the mountpoint */
 		fd = open(path, O_RDONLY);
@@ -460,14 +459,13 @@ int get_fs_info(const char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 		/* Only fill in this one device */
 		fi_args->num_devices = 1;
 
-		disk_super = (struct btrfs_super_block *)buf;
-		ret = btrfs_read_dev_super(fd, disk_super,
+		ret = btrfs_read_dev_super(fd, &disk_super,
 					   BTRFS_SUPER_INFO_OFFSET, 0);
 		if (ret < 0) {
 			ret = -EIO;
 			goto out;
 		}
-		last_devid = btrfs_stack_device_id(&disk_super->dev_item);
+		last_devid = btrfs_stack_device_id(&disk_super.dev_item);
 		fi_args->max_id = last_devid;
 
 		memcpy(fi_args->fsid, fs_devices_mnt->fsid, BTRFS_FSID_SIZE);
@@ -576,49 +574,13 @@ int get_fsid(const char *path, u8 *fsid, int silent)
 	return ret;
 }
 
-static int group_profile_devs_min(u64 flag)
-{
-	switch (flag & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
-	case 0: /* single */
-	case BTRFS_BLOCK_GROUP_DUP:
-		return 1;
-	case BTRFS_BLOCK_GROUP_RAID0:
-	case BTRFS_BLOCK_GROUP_RAID1:
-	case BTRFS_BLOCK_GROUP_RAID5:
-		return 2;
-	case BTRFS_BLOCK_GROUP_RAID6:
-	case BTRFS_BLOCK_GROUP_RAID1C3:
-		return 3;
-	case BTRFS_BLOCK_GROUP_RAID10:
-	case BTRFS_BLOCK_GROUP_RAID1C4:
-		return 4;
-	default:
-		return -1;
-	}
-}
-
 int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 	u64 dev_cnt, int mixed, int ssd)
 {
-	u64 allowed = 0;
+	u64 allowed;
 	u64 profile = metadata_profile | data_profile;
 
-	switch (dev_cnt) {
-	default:
-	case 4:
-		allowed |= BTRFS_BLOCK_GROUP_RAID10;
-		allowed |= BTRFS_BLOCK_GROUP_RAID10 | BTRFS_BLOCK_GROUP_RAID1C4;
-		/* fallthrough */
-	case 3:
-		allowed |= BTRFS_BLOCK_GROUP_RAID6 | BTRFS_BLOCK_GROUP_RAID1C3;
-		/* fallthrough */
-	case 2:
-		allowed |= BTRFS_BLOCK_GROUP_RAID0 | BTRFS_BLOCK_GROUP_RAID1 |
-			BTRFS_BLOCK_GROUP_RAID5 | BTRFS_BLOCK_GROUP_RAID10;
-		/* fallthrough */
-	case 1:
-		allowed |= BTRFS_BLOCK_GROUP_DUP | BTRFS_BLOCK_GROUP_RAID0;
-	}
+	allowed = btrfs_bg_flags_for_device_num(dev_cnt);
 
 	if (dev_cnt > 1 && profile & BTRFS_BLOCK_GROUP_DUP) {
 		warning("DUP is not recommended on filesystem with multiple devices");
@@ -628,7 +590,7 @@ int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 			"ERROR: unable to create FS with metadata profile %s "
 			"(have %llu devices but %d devices are required)\n",
 			btrfs_group_profile_str(metadata_profile), dev_cnt,
-			group_profile_devs_min(metadata_profile));
+			btrfs_bg_type_to_devs_min(metadata_profile));
 		return 1;
 	}
 	if (data_profile & ~allowed) {
@@ -636,7 +598,7 @@ int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 			"ERROR: unable to create FS with data profile %s "
 			"(have %llu devices but %d devices are required)\n",
 			btrfs_group_profile_str(data_profile), dev_cnt,
-			group_profile_devs_min(data_profile));
+			btrfs_bg_type_to_devs_min(data_profile));
 		return 1;
 	}
 
@@ -1064,28 +1026,14 @@ const char* btrfs_group_type_str(u64 flag)
 
 const char* btrfs_group_profile_str(u64 flag)
 {
-	switch (flag & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
-	case 0:
-		return "single";
-	case BTRFS_BLOCK_GROUP_RAID0:
-		return "RAID0";
-	case BTRFS_BLOCK_GROUP_RAID1:
-		return "RAID1";
-	case BTRFS_BLOCK_GROUP_RAID1C3:
-		return "RAID1C3";
-	case BTRFS_BLOCK_GROUP_RAID1C4:
-		return "RAID1C4";
-	case BTRFS_BLOCK_GROUP_RAID5:
-		return "RAID5";
-	case BTRFS_BLOCK_GROUP_RAID6:
-		return "RAID6";
-	case BTRFS_BLOCK_GROUP_DUP:
-		return "DUP";
-	case BTRFS_BLOCK_GROUP_RAID10:
-		return "RAID10";
-	default:
-		return "unknown";
-	}
+	int index;
+
+	flag &= ~(BTRFS_BLOCK_GROUP_TYPE_MASK | BTRFS_BLOCK_GROUP_RESERVED);
+	if (flag & ~BTRFS_BLOCK_GROUP_PROFILE_MASK)
+		return "UNKNOWN";
+
+	index = btrfs_bg_flags_to_raid_index(flag);
+	return btrfs_raid_array[index].upper_name;
 }
 
 u64 div_factor(u64 num, int factor)
@@ -1310,14 +1258,14 @@ static char *sprint_profiles(u64 profiles)
 		return NULL;
 
 	for (i = 0; i < BTRFS_NR_RAID_TYPES; i++)
-		maxlen += strlen(btrfs_raid_array[i].raid_name) + 2;
+		maxlen += strlen(btrfs_raid_array[i].lower_name) + 2;
 
 	ptr = calloc(1, maxlen);
 	if (!ptr)
 		return NULL;
 
 	if (profiles & BTRFS_AVAIL_ALLOC_BIT_SINGLE)
-		strcat(ptr, btrfs_raid_array[BTRFS_RAID_SINGLE].raid_name);
+		strcat(ptr, btrfs_raid_array[BTRFS_RAID_SINGLE].lower_name);
 
 	for (i = 0; i < BTRFS_NR_RAID_TYPES; i++) {
 		if (!(btrfs_raid_array[i].bg_flag & profiles))
@@ -1325,7 +1273,7 @@ static char *sprint_profiles(u64 profiles)
 
 		if (ptr[0])
 			strcat(ptr, ", ");
-		strcat(ptr, btrfs_raid_array[i].raid_name);
+		strcat(ptr, btrfs_raid_array[i].lower_name);
 	}
 
 	return ptr;
@@ -1645,4 +1593,61 @@ out:
 	close(sysfs_fd);
 
 	return ret;
+}
+
+/*
+ * This function should be only used when parsing command arg, it won't return
+ * error to its caller and rather exit directly just like usage().
+ */
+u64 arg_strtou64(const char *str)
+{
+	u64 value;
+	char *ptr_parse_end = NULL;
+
+	value = strtoull(str, &ptr_parse_end, 0);
+	if (ptr_parse_end && *ptr_parse_end != '\0') {
+		fprintf(stderr, "ERROR: %s is not a valid numeric value.\n",
+			str);
+		exit(1);
+	}
+
+	/*
+	 * if we pass a negative number to strtoull, it will return an
+	 * unexpected number to us, so let's do the check ourselves.
+	 */
+	if (str[0] == '-') {
+		fprintf(stderr, "ERROR: %s: negative value is invalid.\n",
+			str);
+		exit(1);
+	}
+	if (value == ULLONG_MAX) {
+		fprintf(stderr, "ERROR: %s is too large.\n", str);
+		exit(1);
+	}
+	return value;
+}
+
+/*
+ * For a given:
+ * - file or directory return the containing tree root id
+ * - subvolume return its own tree id
+ * - BTRFS_EMPTY_SUBVOL_DIR_OBJECTID (directory with ino == 2) the result is
+ *   undefined and function returns -1
+ */
+int lookup_path_rootid(int fd, u64 *rootid)
+{
+	struct btrfs_ioctl_ino_lookup_args args;
+	int ret;
+
+	memset(&args, 0, sizeof(args));
+	args.treeid = 0;
+	args.objectid = BTRFS_FIRST_FREE_OBJECTID;
+
+	ret = ioctl(fd, BTRFS_IOC_INO_LOOKUP, &args);
+	if (ret < 0)
+		return -errno;
+
+	*rootid = args.treeid;
+
+	return 0;
 }

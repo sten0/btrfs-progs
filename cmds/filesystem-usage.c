@@ -33,6 +33,7 @@
 #include "cmds/filesystem-usage.h"
 #include "cmds/commands.h"
 #include "kernel-shared/disk-io.h"
+#include "kernel-shared/volumes.h"
 #include "common/open-utils.h"
 #include "common/units.h"
 #include "version.h"
@@ -354,13 +355,12 @@ static void get_raid56_space_info(struct btrfs_ioctl_space_args *sargs,
 		u64 size;
 		double l_data_ratio, l_metadata_ratio, l_system_ratio, rt;
 
+		parities_count = btrfs_bg_type_to_nparity(info_ptr->type);
 		if (info_ptr->type & BTRFS_BLOCK_GROUP_RAID5) {
-			parities_count = 1;
 			l_data_ratio = l_data_ratio_r5;
 			l_metadata_ratio = l_metadata_ratio_r5;
 			l_system_ratio = l_system_ratio_r5;
 		} else if (info_ptr->type & BTRFS_BLOCK_GROUP_RAID6) {
-			parities_count = 2;
 			l_data_ratio = l_data_ratio_r6;
 			l_metadata_ratio = l_metadata_ratio_r6;
 			l_system_ratio = l_system_ratio_r6;
@@ -499,27 +499,15 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		int ratio;
 		u64 flags = sargs->spaces[i].flags;
 
+		ratio = btrfs_bg_type_to_ncopies(flags);
+
 		/*
 		 * The RAID5/6 ratio depends on the number of stripes and is
 		 * computed separately. Setting ratio to 0 will not account
 		 * the chunks in this loop.
 		 */
-		if (flags & BTRFS_BLOCK_GROUP_RAID0)
-			ratio = 1;
-		else if (flags & BTRFS_BLOCK_GROUP_RAID1)
-			ratio = 2;
-		else if (flags & BTRFS_BLOCK_GROUP_RAID1C3)
-			ratio = 3;
-		else if (flags & BTRFS_BLOCK_GROUP_RAID1C4)
-			ratio = 4;
-		else if (flags & BTRFS_BLOCK_GROUP_RAID5)
+		if (flags & BTRFS_BLOCK_GROUP_RAID56_MASK)
 			ratio = 0;
-		else if (flags & BTRFS_BLOCK_GROUP_RAID6)
-			ratio = 0;
-		else if (flags & BTRFS_BLOCK_GROUP_DUP)
-			ratio = 2;
-		else if (flags & BTRFS_BLOCK_GROUP_RAID10)
-			ratio = 2;
 		else
 			ratio = 1;
 
@@ -680,8 +668,7 @@ static int cmp_device_info(const void *a, const void *b)
 
 int dev_to_fsid(const char *dev, u8 *fsid)
 {
-	struct btrfs_super_block *disk_super;
-	char buf[BTRFS_SUPER_INFO_SIZE];
+	struct btrfs_super_block disk_super;
 	int ret;
 	int fd;
 
@@ -691,13 +678,12 @@ int dev_to_fsid(const char *dev, u8 *fsid)
 		return ret;
 	}
 
-	disk_super = (struct btrfs_super_block *)buf;
-	ret = btrfs_read_dev_super(fd, disk_super,
+	ret = btrfs_read_dev_super(fd, &disk_super,
 				   BTRFS_SUPER_INFO_OFFSET, SBREAD_DEFAULT);
 	if (ret)
 		goto out;
 
-	memcpy(fsid, disk_super->fsid, BTRFS_FSID_SIZE);
+	memcpy(fsid, disk_super.fsid, BTRFS_FSID_SIZE);
 	ret = 0;
 
 out:
@@ -822,19 +808,13 @@ int load_chunk_and_device_info(int fd, struct chunk_info **chunkinfo,
  */
 static u64 calc_chunk_size(struct chunk_info *ci)
 {
-	if (ci->type & BTRFS_BLOCK_GROUP_RAID0)
-		return ci->size / ci->num_stripes;
-	else if (ci->type & BTRFS_BLOCK_GROUP_RAID1_MASK)
-		return ci->size ;
-	else if (ci->type & BTRFS_BLOCK_GROUP_DUP)
-		return ci->size ;
-	else if (ci->type & BTRFS_BLOCK_GROUP_RAID5)
-		return ci->size / (ci->num_stripes -1);
-	else if (ci->type & BTRFS_BLOCK_GROUP_RAID6)
-		return ci->size / (ci->num_stripes -2);
-	else if (ci->type & BTRFS_BLOCK_GROUP_RAID10)
-		return ci->size / (ci->num_stripes / 2);
-	return ci->size;
+	u32 div;
+
+	/* No parity + sub_stripes, so order of "-" and "/" does not matter */
+	div = (ci->num_stripes - btrfs_bg_type_to_nparity(ci->type)) /
+	      btrfs_bg_type_to_sub_stripes(ci->type);
+
+	return ci->size / div;
 }
 
 /*
@@ -1240,11 +1220,7 @@ void print_device_chunks(struct device_info *devinfo,
 		size = calc_chunk_size(chunks_info_ptr+i);
 		num_stripes = chunks_info_ptr[i].num_stripes;
 
-		switch (profile) {
-		case BTRFS_BLOCK_GROUP_RAID0:
-		case BTRFS_BLOCK_GROUP_RAID5:
-		case BTRFS_BLOCK_GROUP_RAID6:
-		case BTRFS_BLOCK_GROUP_RAID10:
+		if (btrfs_bg_type_is_stripey(profile)) {
 			printf("   %s,%s/%llu:%*s%10s\n",
 				   description,
 				   r_mode,
@@ -1252,14 +1228,12 @@ void print_device_chunks(struct device_info *devinfo,
 				   (int)(20 - strlen(description) - strlen(r_mode)
 						 - count_digits(num_stripes) - 1), "",
 				   pretty_size_mode(size, unit_mode));
-			break;
-		default:
+		} else {
 			printf("   %s,%s:%*s%10s\n",
 				   description,
 				   r_mode,
 				   (int)(20 - strlen(description) - strlen(r_mode)), "",
 				   pretty_size_mode(size, unit_mode));
-			break;
 		}
 
 		allocated += size;

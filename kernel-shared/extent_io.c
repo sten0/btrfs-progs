@@ -29,6 +29,7 @@
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/volumes.h"
 #include "common/utils.h"
+#include "common/device-utils.h"
 #include "common/internal.h"
 
 void extent_io_tree_init(struct extent_io_tree *tree)
@@ -792,7 +793,8 @@ int read_extent_from_disk(struct extent_buffer *eb,
 			  unsigned long offset, unsigned long len)
 {
 	int ret;
-	ret = pread(eb->fd, eb->data + offset, len, eb->dev_bytenr);
+	ret = btrfs_pread(eb->fd, eb->data + offset, len, eb->dev_bytenr,
+			  eb->fs_info->zoned);
 	if (ret < 0) {
 		ret = -errno;
 		goto out;
@@ -809,7 +811,8 @@ out:
 int write_extent_to_disk(struct extent_buffer *eb)
 {
 	int ret;
-	ret = pwrite(eb->fd, eb->data, eb->len, eb->dev_bytenr);
+	ret = btrfs_pwrite(eb->fd, eb->data, eb->len, eb->dev_bytenr,
+			   eb->fs_info->zoned);
 	if (ret < 0)
 		goto out;
 	if (ret != eb->len) {
@@ -848,8 +851,8 @@ int read_data_from_disk(struct btrfs_fs_info *info, void *buf, u64 offset,
 			return -EIO;
 		}
 
-		ret = pread(device->fd, buf + total_read, read_len,
-			    multi->stripes[0].physical);
+		ret = btrfs_pread(device->fd, buf + total_read, read_len,
+				  multi->stripes[0].physical, info->zoned);
 		kfree(multi);
 		if (ret < 0) {
 			fprintf(stderr, "Error reading %llu, %d\n", offset,
@@ -932,7 +935,8 @@ int write_data_to_disk(struct btrfs_fs_info *info, void *buf, u64 offset,
 			this_len = min(this_len, bytes_left);
 			dev_nr++;
 
-			ret = pwrite(device->fd, buf + total_write, this_len, dev_bytenr);
+			ret = btrfs_pwrite(device->fd, buf + total_write,
+					   this_len, dev_bytenr, info->zoned);
 			if (ret != this_len) {
 				if (ret < 0) {
 					fprintf(stderr, "Error writing to "

@@ -317,6 +317,16 @@ fi
 AS_IF([test "x$enable_zstd" = xyes], [BTRFSRESTORE_ZSTD=1], [BTRFSRESTORE_ZSTD=0])
 AC_SUBST(BTRFSRESTORE_ZSTD)
 
+AC_ARG_ENABLE([libudev],
+      AS_HELP_STRING([--disable-libudev], [build without libudev support (for multipath)]),
+      [], [enable_libudev=yes]
+)
+
+if test "x$enable_libudev" = xyes; then
+	PKG_CHECK_MODULES([LIBUDEV], [libudev])
+	AC_DEFINE([HAVE_LIBUDEV], [1], [Define to 1 if libudev is available])
+fi
+
 AC_ARG_ENABLE([python],
 	AS_HELP_STRING([--disable-python], [do not build libbtrfsutil Python bindings]),
 	[], [enable_python=$enable_shared]
@@ -407,8 +417,8 @@ AC_MSG_RESULT([
 	pkgconfigdir:       ${pkgconfigdir}
 
 	compiler:           ${CC}
-	cflags:             ${CFLAGS}
-	ldflags:            ${LDFLAGS}
+	CFLAGS:             ${CFLAGS}
+	LDFLAGS:            ${LDFLAGS}
 
 	programs:           ${enable_programs}
 	shared libraries:   ${enable_shared}
@@ -421,6 +431,7 @@ AC_MSG_RESULT([
 	Python bindings:    ${enable_python}
 	Python interpreter: ${PYTHON}
 	crypto provider:    ${cryptoprovider} ${cryptoproviderversion}
+	libudev:            ${enable_libudev}
 	zoned device:       ${enable_zoned}
 	${experimental_msg}
 	Type 'make' to compile.
