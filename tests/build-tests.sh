@@ -1,6 +1,6 @@
 #!/bin/sh
-# test various compilation options
-# - 32bit, 64bit
+# Test various compilation options:
+# - native arch
 # - dynamic, static
 # - various configure options
 #
@@ -8,7 +8,6 @@
 #
 # Requirements for full coverage:
 # - static version of all libs
-# - 32bit/64bit libraries, also the static variants
 
 make=make
 opts="-j16 $@"
@@ -57,12 +56,6 @@ build_make_targets() {
 	# defaults, busybox
 	target='btrfs.box btrfs.box.static'
 	buildme
-	# defaults, 32bit
-	target="EXTRA_CFLAGS=-m32"
-	buildme
-	# defaults, 64bit
-	target="EXTRA_CFLAGS=-m64"
-	buildme
 	# defaults, library
 	target="library-test"
 	buildme
@@ -88,6 +81,15 @@ conf='--disable-backtrace'
 build_make_targets
 
 conf='--disable-convert'
+build_make_targets
+
+conf='--disable-zoned'
+build_make_targets
+
+conf='--disable-udev'
+build_make_targets
+
+conf='--disable-python'
 build_make_targets
 
 conf='--with-convert=ext2'

@@ -555,6 +555,7 @@ static int check_chunk_by_metadata(struct recover_control *rc,
 				   struct btrfs_root *root,
 				   struct chunk_record *chunk, int bg_only)
 {
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	int ret;
 	int i;
 	int slot;
@@ -616,7 +617,8 @@ bg_check:
 	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
 	key.offset = chunk->length;
 
-	ret = btrfs_search_slot(NULL, root->fs_info->extent_root, &key, &path,
+	root = btrfs_extent_root(fs_info, key.objectid);
+	ret = btrfs_search_slot(NULL, root, &key, &path,
 				0, 0);
 	if (ret < 0) {
 		fprintf(stderr, "Search block group failed(%d)\n", ret);
@@ -997,7 +999,7 @@ static int block_group_remove_all_extent_items(struct btrfs_trans_handle *trans,
 	int del_s, del_nr;
 
 	btrfs_init_path(&path);
-	root = root->fs_info->extent_root;
+	root = btrfs_extent_root(fs_info, start);
 
 	key.objectid = start;
 	key.offset = 0;
@@ -1382,6 +1384,7 @@ static int rebuild_block_group(struct btrfs_trans_handle *trans,
 			       struct recover_control *rc,
 			       struct btrfs_root *root)
 {
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	struct chunk_record *chunk_rec;
 	struct btrfs_key search_key;
 	struct btrfs_path path;
@@ -1396,12 +1399,11 @@ static int rebuild_block_group(struct btrfs_trans_handle *trans,
 		search_key.objectid = chunk_rec->offset;
 		search_key.type = BTRFS_EXTENT_ITEM_KEY;
 		search_key.offset = 0;
-		ret = btrfs_search_slot(NULL, root->fs_info->extent_root,
-					&search_key, &path, 0, 0);
+		root = btrfs_extent_root(fs_info, chunk_rec->offset);
+		ret = btrfs_search_slot(NULL, root, &search_key, &path, 0, 0);
 		if (ret < 0)
 			goto out;
-		ret = calculate_bg_used(root->fs_info->extent_root,
-					chunk_rec, &path, &used);
+		ret = calculate_bg_used(root, chunk_rec, &path, &used);
 		/*
 		 * Extent tree is damaged, better to rebuild the whole extent
 		 * tree. Currently, change the used to chunk's len to prevent
@@ -1417,9 +1419,7 @@ static int rebuild_block_group(struct btrfs_trans_handle *trans,
 			used = chunk_rec->length;
 		}
 		btrfs_release_path(&path);
-		ret = __insert_block_group(trans, chunk_rec,
-					   root->fs_info->extent_root,
-					   used);
+		ret = __insert_block_group(trans, chunk_rec, root, used);
 		if (ret < 0)
 			goto out;
 	}
@@ -1799,7 +1799,7 @@ static int btrfs_rebuild_chunk_stripes(struct recover_control *rc,
 	return ret;
 }
 
-static int next_csum(struct btrfs_root *root,
+static int next_csum(struct btrfs_root *csum_root,
 		     struct extent_buffer **leaf,
 		     struct btrfs_path *path,
 		     int *slot,
@@ -1809,10 +1809,9 @@ static int next_csum(struct btrfs_root *root,
 		     struct btrfs_key *key)
 {
 	int ret = 0;
-	struct btrfs_root *csum_root = root->fs_info->csum_root;
 	struct btrfs_csum_item *csum_item;
-	u32 blocksize = root->fs_info->sectorsize;
-	u16 csum_size = root->fs_info->csum_size;
+	u32 blocksize = csum_root->fs_info->sectorsize;
+	u16 csum_size = csum_root->fs_info->csum_size;
 	int csums_in_item = btrfs_item_size_nr(*leaf, *slot) / csum_size;
 
 	if (*csum_offset >= csums_in_item) {
@@ -1992,7 +1991,6 @@ static int rebuild_raid_data_chunk_stripes(struct recover_control *rc,
 	LIST_HEAD(unordered);
 	LIST_HEAD(candidates);
 
-	csum_root = root->fs_info->csum_root;
 	btrfs_init_path(&path);
 	list_splice_init(&chunk->dextents, &candidates);
 again:
@@ -2003,6 +2001,7 @@ again:
 	key.type = BTRFS_EXTENT_CSUM_KEY;
 	key.offset = start;
 
+	csum_root = btrfs_csum_root(root->fs_info, start);
 	ret = btrfs_search_slot(NULL, csum_root, &key, &path, 0, 0);
 	if (ret < 0) {
 		fprintf(stderr, "Search csum failed(%d)\n", ret);
@@ -2020,8 +2019,8 @@ again:
 			} else if (ret > 0) {
 				slot = btrfs_header_nritems(leaf) - 1;
 				btrfs_item_key_to_cpu(leaf, &key, slot);
-				if (item_end_offset(root, &key, leaf, slot)
-								> start) {
+				if (item_end_offset(csum_root, &key,
+						    leaf, slot) > start) {
 					csum_offset = start - key.offset;
 					csum_offset /= blocksize;
 					goto next_csum;
@@ -2059,8 +2058,8 @@ again:
 			goto out;
 	}
 next_csum:
-	ret = next_csum(root, &leaf, &path, &slot, &csum_offset, &tree_csum,
-			end, &key);
+	ret = next_csum(csum_root, &leaf, &path, &slot, &csum_offset,
+			&tree_csum, end, &key);
 	if (ret < 0) {
 		fprintf(stderr, "Fetch csum failed\n");
 		goto fail_out;

@@ -19,6 +19,11 @@
 #ifndef __KERNCOMPAT_H__
 #define __KERNCOMPAT_H__
 
+#ifndef __SANE_USERSPACE_TYPES__
+/* For PPC64 to get LL64 types */
+#define __SANE_USERSPACE_TYPES__
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -28,7 +33,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <linux/types.h>
-#include <linux/kernel.h>
+#include <linux/const.h>
 #include <stdint.h>
 
 #include <features.h>
@@ -359,7 +364,14 @@ do {					\
 
 /* Alignment check */
 #define IS_ALIGNED(x, a)                (((x) & ((typeof(x))(a) - 1)) == 0)
-#define ALIGN(x, a)		__ALIGN_KERNEL((x), (a))
+
+/*
+ * Alignment, copied and renamed from /usr/include/linux/const.h to work around
+ * issues caused by moving the definition in 5.12
+ */
+#define __ALIGN_KERNEL__(x, a)		__ALIGN_KERNEL_MASK__(x, (typeof(x))(a) - 1)
+#define __ALIGN_KERNEL_MASK__(x, mask)	(((x) + (mask)) & ~(mask))
+#define ALIGN(x, a)		__ALIGN_KERNEL__((x), (a))
 
 static inline int is_power_of_2(unsigned long n)
 {

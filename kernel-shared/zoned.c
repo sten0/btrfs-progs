@@ -757,7 +757,7 @@ static int calculate_alloc_pointer(struct btrfs_fs_info *fs_info,
 				   struct btrfs_block_group *cache,
 				   u64 *offset_ret)
 {
-	struct btrfs_root *root = fs_info->extent_root;
+	struct btrfs_root *root = btrfs_extent_root(fs_info, cache->start);
 	struct btrfs_path *path;
 	struct btrfs_key key;
 	struct btrfs_key found_key;
@@ -808,14 +808,20 @@ out:
 	return ret;
 }
 
-static bool profile_supported(u64 flags)
+bool zoned_profile_supported(u64 map_type)
 {
-	flags &= BTRFS_BLOCK_GROUP_PROFILE_MASK;
+	bool data = (map_type & BTRFS_BLOCK_GROUP_DATA);
+	u64 flags = (map_type & BTRFS_BLOCK_GROUP_PROFILE_MASK);
 
 	/* SINGLE */
 	if (flags == 0)
 		return true;
-	/* non-single profiles are not supported yet */
+
+	/* We can support DUP on metadata */
+	if (!data && (flags & BTRFS_BLOCK_GROUP_DUP))
+		return true;
+
+	/* All other profiles are not supported yet */
 	return false;
 }
 
@@ -930,7 +936,7 @@ int btrfs_load_block_group_zone_info(struct btrfs_fs_info *fs_info,
 		}
 	}
 
-	if (!profile_supported(map->type)) {
+	if (!zoned_profile_supported(map->type)) {
 		error("zoned: profile %s not yet supported",
 		      btrfs_group_profile_str(map->type));
 		ret = -EINVAL;

@@ -65,7 +65,7 @@ OPTIONS
 
                 Note that the rotational status can be arbitrarily set by the underlying block
                 device driver and may not reflect the true status (network block device, memory-backed
-                SCSI devices, real block device behind some additonal device mapper layer,
+                SCSI devices, real block device behind some additional device mapper layer,
                 etc). It's recommended to always set the options *--data/--metadata* to avoid
                 confusion and unexpected results.
 
@@ -161,8 +161,7 @@ OPTIONS
 -R|--runtime-features <feature1>[,<feature2>...]
         A list of features that be can enabled at mkfs time, otherwise would have
         to be turned on on a mounted filesystem.
-        Although no runtime feature is enabled by default,
-        to disable a feature, prefix it with *^*.
+        To disable a feature, prefix it with *^*.
 
         See section *RUNTIME FEATURES* for more details.  To see all available
         runtime features that **mkfs.btrfs** supports run:

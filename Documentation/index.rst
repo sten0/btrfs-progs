@@ -5,14 +5,46 @@ Welcome to BTRFS documentation!
 
 .. toctree::
    :maxdepth: 1
-   :caption: Contents:
+   :caption: Overview
 
+   Introduction
    man-index
-   wiki-index
+   Administration
 
+.. toctree::
+   :maxdepth: 1
+   :caption: Features:
 
-Indices and tables
-==================
+   Common-features
+   Custom-ioctls
+   Auto-repair
+   Balance
+   Compression
+   Checksumming
+   Convert
+   Deduplication
+   Defragmentation
+   Inline-files
+   Qgroups
+   Reflink
+   Resize
+   Scrub
+   Seeding-device
+   Send-receive
+   Subvolumes
+   Swapfile
+   Tree-checker
+   Trim
+   Volume-management
+   Zoned-mode
 
-* :ref:`genindex`
-* :ref:`search`
+.. toctree::
+   :maxdepth: 1
+   :caption: TODO
+
+   Quick-start
+   Interoperability
+   Glossary
+   Flexibility
+   project-index
+   trouble-index

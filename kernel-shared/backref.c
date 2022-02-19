@@ -192,7 +192,10 @@ static int __add_prelim_ref(struct pref_state *prefstate, u64 root_id,
 	ref->root_id = root_id;
 	if (key) {
 		ref->key_for_search = *key;
-		head = &prefstate->pending;
+		if (parent)
+			head = &prefstate->pending;
+		else
+			head = &prefstate->pending_indirect_refs;
 	} else if (parent) {
 		memset(&ref->key_for_search, 0, sizeof(ref->key_for_search));
 		head = &prefstate->pending;
@@ -467,7 +470,10 @@ static int __add_missing_keys(struct btrfs_fs_info *fs_info,
 		else
 			btrfs_node_key_to_cpu(eb, &ref->key_for_search, 0);
 		free_extent_buffer(eb);
-		list_move(&ref->list, &prefstate->pending);
+		if (ref->parent)
+			list_move(&ref->list, &prefstate->pending);
+		else
+			list_move(&ref->list, &prefstate->pending_indirect_refs);
 	}
 	return 0;
 }
@@ -645,7 +651,7 @@ static int __add_keyed_refs(struct btrfs_fs_info *fs_info,
 			    struct btrfs_path *path, u64 bytenr,
 			    int info_level)
 {
-	struct btrfs_root *extent_root = fs_info->extent_root;
+	struct btrfs_root *extent_root = btrfs_extent_root(fs_info, bytenr);
 	int ret;
 	int slot;
 	struct extent_buffer *leaf;
@@ -734,6 +740,7 @@ static int find_parent_nodes(struct btrfs_trans_handle *trans,
 			     u64 time_seq, struct ulist *refs,
 			     struct ulist *roots, const u64 *extent_item_pos)
 {
+	struct btrfs_root *extent_root = btrfs_extent_root(fs_info, bytenr);
 	struct btrfs_key key;
 	struct btrfs_path *path;
 	int info_level = 0;
@@ -756,7 +763,7 @@ static int find_parent_nodes(struct btrfs_trans_handle *trans,
 	if (!path)
 		return -ENOMEM;
 
-	ret = btrfs_search_slot(trans, fs_info->extent_root, &key, path, 0, 0);
+	ret = btrfs_search_slot(trans, extent_root, &key, path, 0, 0);
 	if (ret < 0)
 		goto out;
 	BUG_ON(ret == 0);
@@ -1136,6 +1143,7 @@ int extent_from_logical(struct btrfs_fs_info *fs_info, u64 logical,
 			struct btrfs_path *path, struct btrfs_key *found_key,
 			u64 *flags_ret)
 {
+	struct btrfs_root *extent_root = btrfs_extent_root(fs_info, logical);
 	int ret;
 	u64 flags;
 	u64 size = 0;
@@ -1151,11 +1159,11 @@ int extent_from_logical(struct btrfs_fs_info *fs_info, u64 logical,
 	key.objectid = logical;
 	key.offset = (u64)-1;
 
-	ret = btrfs_search_slot(NULL, fs_info->extent_root, &key, path, 0, 0);
+	ret = btrfs_search_slot(NULL, extent_root, &key, path, 0, 0);
 	if (ret < 0)
 		return ret;
 
-	ret = btrfs_previous_extent_item(fs_info->extent_root, path, 0);
+	ret = btrfs_previous_extent_item(extent_root, path, 0);
 	if (ret) {
 		if (ret > 0)
 			ret = -ENOENT;

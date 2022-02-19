@@ -1,3 +1,43 @@
+btrfs-progs-5.16.2 (2022-02-16)
+* mkfs: fix detection of profile type for zoned mode when creating DUP
+* build:
+  * add missing stub for zoned mode helper when zoned mode not enabled
+  * fix 64bit types on MIPS and PowerPC
+  * improved zoned mode support autodetection, for systems with existing
+    blkzone.h header but missing support for zone capacity
+* other:
+  * doc updates
+  * test updates
+
+btrfs-progs-5.16.1 (2022-02-04)
+* mkfs: support DUP on metadata on zoned devices
+* subvol delete: drop warning for root when search ioctl fails
+* check:
+  * fix --init-csum-tree to not create checksums for extents that are not
+    supposed to have them
+  * add check for metadata item levels
+* add udev rule for zoned devices as they require mq-deadline
+* build: fix redefinition of ALIGN on mixed old/new kernel/userspace (5.11)
+* other:
+  * typo fixes
+  * new tests
+  * CI targets updated
+
+btrfs-progs-5.16 (2022-01-12)
+* rescue: new subcommand clear-uuid-tree to fix failed mount due to bad uuid
+  subvolume keys, caught by tree-checker
+* fi du: skip inaccessible files
+* prop: properly resolve to symlink targets
+* send, receive: fix crash after parent subvolume lookup errors
+* build:
+  * fix build on 5.12+ kernels due to changes in linux/kernel.h
+  * fix build on musl with old kernel headers
+* other:
+  * error handling fixes, cleanups, refactoring
+  * extent tree v2 preparatory work
+  * lots of RST documentation updates (last release with asciidoc sources),
+    https://btrfs.readthedocs.io
+
 btrfs-progs-5.15.1 (2021-11-22)
 * fixes:
   * fi usage: fix wrongly reported space of used or unallocated space
@@ -95,7 +135,7 @@ btrfs-progs-5.13.1 (2021-07-30)
 * build: fix build on musl libc due to missing definition of NAME_MAX
 * check:
   * batch more work into one transaction when clearing v1 free space inodes
-  * detect directoris with wrong number of links
+  * detect directories with wrong number of links
 * libbtrfsutil: fix race between subvolume iterator and deletion
 * mkfs: be more specific about supported profiles for zoned device
 * other:
@@ -200,7 +240,7 @@ btrfs-progs-5.10 (2021-01-18)
     * print percentage of progress
     * add size unit options
   * fi usage: also print free space from statfs
-  * convert: copy full 64 bit timestamp from ext4 if availalble
+  * convert: copy full 64 bit timestamp from ext4 if available
   * check:
     * add ability to repair extent item generation
     * new option to remove leftovers from inode number cache (-o inode_cache)

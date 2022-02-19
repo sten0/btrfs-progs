@@ -109,6 +109,7 @@
 #include "common/device-scan.h"
 #include "common/box.h"
 #include "common/open-utils.h"
+#include "common/repair.h"
 
 extern const struct btrfs_convert_operations ext2_convert_ops;
 extern const struct btrfs_convert_operations reiserfs_convert_ops;
@@ -187,7 +188,6 @@ static int csum_disk_extent(struct btrfs_trans_handle *trans,
 		if (ret)
 			break;
 		ret = btrfs_csum_file_block(trans,
-					    root->fs_info->csum_root,
 					    disk_bytenr + num_bytes,
 					    disk_bytenr + offset,
 					    buffer, blocksize);
@@ -945,7 +945,6 @@ static int make_convert_data_block_groups(struct btrfs_trans_handle *trans,
 					  struct btrfs_mkfs_config *cfg,
 					  struct btrfs_convert_context *cctx)
 {
-	struct btrfs_root *extent_root = fs_info->extent_root;
 	struct cache_tree *data_chunks = &cctx->data_chunks;
 	struct cache_extent *cache;
 	u64 max_chunk_size;
@@ -957,8 +956,7 @@ static int make_convert_data_block_groups(struct btrfs_trans_handle *trans,
 	 */
 	max_chunk_size = cfg->num_bytes / 10;
 	max_chunk_size = min((u64)(SZ_1G), max_chunk_size);
-	max_chunk_size = round_down(max_chunk_size,
-				    extent_root->fs_info->sectorsize);
+	max_chunk_size = round_down(max_chunk_size, fs_info->sectorsize);
 
 	for (cache = first_cache_extent(data_chunks); cache;
 	     cache = next_cache_extent(cache)) {
