@@ -1,3 +1,12 @@
+btrfs-progs (5.16.2-1) unstable; urgency=medium
+
+  * New upstream release.
+    + Fix warning on deleting a subvolume as non-root (closes: #998840).
+  * Drop pre-oldstable Breaks/Replaces.
+  * Install udev rules in initramfs hook (closes: #1000961).
+
+ -- Adam Borowski <kilobyte@angband.pl>  Thu, 24 Feb 2022 18:39:55 +0100
+
 btrfs-progs (5.15.1-1) unstable; urgency=medium
 
   * New upstream bugfix release.
