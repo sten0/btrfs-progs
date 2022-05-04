@@ -1,3 +1,10 @@
+btrfs-progs (5.17-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Switch from asciidoc[tor] to sphinx.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Wed, 04 May 2022 16:07:45 +0200
+
 btrfs-progs (5.16.2-1) unstable; urgency=medium
 
   * New upstream release.
