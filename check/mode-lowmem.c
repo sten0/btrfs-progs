@@ -98,7 +98,7 @@ static int calc_extent_flag(struct btrfs_root *root, struct extent_buffer *eb,
 		goto full_backref;
 
 	ptr = (unsigned long)(ei + 1);
-	end = (unsigned long)ei + btrfs_item_size_nr(eb, slot);
+	end = (unsigned long)ei + btrfs_item_size(eb, slot);
 
 	if (key.type == BTRFS_EXTENT_ITEM_KEY)
 		ptr += sizeof(struct btrfs_tree_block_info);
@@ -266,7 +266,7 @@ static int modify_block_group_cache(struct btrfs_block_group *block_group, int c
  */
 static int modify_block_groups_cache(u64 flags, int cache)
 {
-	struct btrfs_root *root = btrfs_extent_root(gfs_info, 0);
+	struct btrfs_root *root = btrfs_block_group_root(gfs_info);
 	struct btrfs_key key;
 	struct btrfs_path path;
 	struct btrfs_block_group *bg_cache;
@@ -331,7 +331,7 @@ static int clear_block_groups_full(u64 flags)
 static int create_chunk_and_block_group(u64 flags, u64 *start, u64 *nbytes)
 {
 	struct btrfs_trans_handle *trans;
-	struct btrfs_root *root = btrfs_extent_root(gfs_info, 0);
+	struct btrfs_root *root = btrfs_block_group_root(gfs_info);
 	int ret;
 
 	if ((flags & BTRFS_BLOCK_GROUP_TYPE_MASK) == 0)
@@ -419,7 +419,7 @@ static int is_chunk_almost_full(u64 start)
 {
 	struct btrfs_path path;
 	struct btrfs_key key;
-	struct btrfs_root *root = btrfs_extent_root(gfs_info, 0);
+	struct btrfs_root *root = btrfs_block_group_root(gfs_info);
 	struct btrfs_block_group_item *bi;
 	struct btrfs_block_group_item bg_item;
 	struct extent_buffer *eb;
@@ -844,7 +844,7 @@ loop:
 	node = path.nodes[0];
 	slot = path.slots[0];
 	di = btrfs_item_ptr(node, slot, struct btrfs_dir_item);
-	total = btrfs_item_size_nr(node, slot);
+	total = btrfs_item_size(node, slot);
 	while (cur < total) {
 		ret = -ENOENT;
 		len = btrfs_dir_name_len(node, di);
@@ -940,7 +940,7 @@ static int find_dir_item(struct btrfs_root *root, struct btrfs_key *key,
 	node = path.nodes[0];
 	slot = path.slots[0];
 	di = btrfs_item_ptr(node, slot, struct btrfs_dir_item);
-	total = btrfs_item_size_nr(node, slot);
+	total = btrfs_item_size(node, slot);
 	while (cur < total) {
 		ret = key->type == BTRFS_DIR_ITEM_KEY ?
 			DIR_ITEM_MISMATCH : DIR_INDEX_MISMATCH;
@@ -1147,7 +1147,7 @@ begin:
 
 	memset(namebuf, 0, sizeof(namebuf) / sizeof(*namebuf));
 	ref = btrfs_item_ptr(node, slot, struct btrfs_inode_ref);
-	total = btrfs_item_size_nr(node, slot);
+	total = btrfs_item_size(node, slot);
 
 next:
 	/* Update inode ref count */
@@ -1256,7 +1256,7 @@ static int check_inode_extref(struct btrfs_root *root,
 	location.offset = 0;
 
 	extref = btrfs_item_ptr(node, slot, struct btrfs_inode_extref);
-	total = btrfs_item_size_nr(node, slot);
+	total = btrfs_item_size(node, slot);
 
 next:
 	/* update inode ref count */
@@ -1352,7 +1352,7 @@ static int find_inode_ref(struct btrfs_root *root, struct btrfs_key *key,
 	slot = path.slots[0];
 
 	ref = btrfs_item_ptr(node, slot, struct btrfs_inode_ref);
-	total = btrfs_item_size_nr(node, slot);
+	total = btrfs_item_size(node, slot);
 
 	/* Iterate all entry of INODE_REF */
 	while (cur < total) {
@@ -1418,7 +1418,7 @@ extref:
 
 	extref = btrfs_item_ptr(node, slot, struct btrfs_inode_extref);
 	cur = 0;
-	total = btrfs_item_size_nr(node, slot);
+	total = btrfs_item_size(node, slot);
 
 	/* Iterate all entry of INODE_EXTREF */
 	while (cur < total) {
@@ -1710,7 +1710,7 @@ begin:
 	slot = path->slots[0];
 
 	di = btrfs_item_ptr(node, slot, struct btrfs_dir_item);
-	total = btrfs_item_size_nr(node, slot);
+	total = btrfs_item_size(node, slot);
 	memset(namebuf, 0, sizeof(namebuf) / sizeof(*namebuf));
 
 	while (cur < total) {
@@ -1877,7 +1877,6 @@ static int repair_inline_ram_bytes(struct btrfs_root *root,
 	struct btrfs_trans_handle *trans;
 	struct btrfs_key key;
 	struct btrfs_file_extent_item *fi;
-	struct btrfs_item *item;
 	u32 on_disk_data_len;
 	int ret;
 	int recover_ret;
@@ -1899,9 +1898,8 @@ static int repair_inline_ram_bytes(struct btrfs_root *root,
 	if (ret < 0)
 		goto recover;
 
-	item = btrfs_item_nr(path->slots[0]);
 	on_disk_data_len = btrfs_file_extent_inline_item_len(path->nodes[0],
-			item);
+							     path->slots[0]);
 
 	fi = btrfs_item_ptr(path->nodes[0], path->slots[0],
 			    struct btrfs_file_extent_item);
@@ -1943,7 +1941,6 @@ static int check_file_extent_inline(struct btrfs_root *root,
 	u32 max_inline_extent_size = min_t(u32, gfs_info->sectorsize - 1,
 				BTRFS_MAX_INLINE_DATA_SIZE(gfs_info));
 	struct extent_buffer *node = path->nodes[0];
-	struct btrfs_item *e = btrfs_item_nr(path->slots[0]);
 	struct btrfs_file_extent_item *fi;
 	struct btrfs_key fkey;
 	u64 extent_num_bytes;
@@ -1953,7 +1950,7 @@ static int check_file_extent_inline(struct btrfs_root *root,
 	int err = 0;
 
 	fi = btrfs_item_ptr(node, path->slots[0], struct btrfs_file_extent_item);
-	item_inline_len = btrfs_file_extent_inline_item_len(node, e);
+	item_inline_len = btrfs_file_extent_inline_item_len(node, path->slots[0]);
 	extent_num_bytes = btrfs_file_extent_ram_bytes(node, fi);
 	compressed = btrfs_file_extent_compression(node, fi);
 	btrfs_item_key_to_cpu(node, &fkey, path->slots[0]);
@@ -2209,7 +2206,7 @@ loop:
 special_case:
 	di = btrfs_item_ptr(path.nodes[0], path.slots[0], struct btrfs_dir_item);
 	cur = 0;
-	total = btrfs_item_size_nr(path.nodes[0], path.slots[0]);
+	total = btrfs_item_size(path.nodes[0], path.slots[0]);
 
 	while (cur < total) {
 		len = btrfs_dir_name_len(path.nodes[0], di);
@@ -2727,6 +2724,8 @@ static int check_inode_item(struct btrfs_root *root, struct btrfs_path *path)
 					imode_to_type(mode), key.objectid,
 					key.offset);
 			}
+			if (is_orphan && key.type == BTRFS_DIR_INDEX_KEY)
+				break;
 			ret = check_dir_item(root, &key, path, &size);
 			err |= ret;
 			break;
@@ -2769,7 +2768,7 @@ out:
 				&nlink);
 		}
 
-		if (nlink != 1) {
+		if (nlink > 1) {
 			err |= LINK_COUNT_ERROR;
 			error("root %llu DIR INODE[%llu] shouldn't have more than one link(%llu)",
 			      root->objectid, inode_id, nlink);
@@ -2785,7 +2784,7 @@ out:
 				gfs_info->nodesize);
 		}
 
-		if (isize != size) {
+		if (isize != size && !is_orphan) {
 			if (repair)
 				ret = repair_dir_isize_lowmem(root, path,
 							      inode_id, size);
@@ -3107,7 +3106,7 @@ static int check_tree_block_ref(struct btrfs_root *root,
 	/*
 	 * Iterate the extent/metadata item to find the exact backref
 	 */
-	item_size = btrfs_item_size_nr(leaf, slot);
+	item_size = btrfs_item_size(leaf, slot);
 	ptr = (unsigned long)iref;
 	end = (unsigned long)ei + item_size;
 
@@ -3449,7 +3448,7 @@ static int check_extent_data_item(struct btrfs_root *root,
 	}
 
 	/* Check data backref inside that extent item */
-	item_size = btrfs_item_size_nr(leaf, path.slots[0]);
+	item_size = btrfs_item_size(leaf, path.slots[0]);
 	iref = (struct btrfs_extent_inline_ref *)(ei + 1);
 	ptr = (unsigned long)iref;
 	end = (unsigned long)ei + item_size;
@@ -4231,7 +4230,7 @@ static int check_extent_item(struct btrfs_path *path)
 	int slot = path->slots[0];
 	int type;
 	u32 nodesize = btrfs_super_nodesize(gfs_info->super_copy);
-	u32 item_size = btrfs_item_size_nr(eb, slot);
+	u32 item_size = btrfs_item_size(eb, slot);
 	u64 flags;
 	u64 offset;
 	u64 parent;
@@ -4392,7 +4391,7 @@ next:
 			eb = path->nodes[0];
 			slot = path->slots[0];
 			ei = btrfs_item_ptr(eb, slot, struct btrfs_extent_item);
-			item_size = btrfs_item_size_nr(eb, slot);
+			item_size = btrfs_item_size(eb, slot);
 			goto next;
 		}
 	}
@@ -4409,7 +4408,7 @@ next:
 		eb = path->nodes[0];
 		slot = path->slots[0];
 		ei = btrfs_item_ptr(eb, slot, struct btrfs_extent_item);
-		item_size = btrfs_item_size_nr(eb, slot);
+		item_size = btrfs_item_size(eb, slot);
 		ptr_offset += btrfs_extent_inline_ref_size(type);
 		goto next;
 	}
@@ -4602,7 +4601,7 @@ next:
 static int find_block_group_item(struct btrfs_path *path, u64 bytenr, u64 len,
 				 u64 type)
 {
-	struct btrfs_root *root = btrfs_extent_root(gfs_info, 0);
+	struct btrfs_root *root = btrfs_block_group_root(gfs_info);
 	struct btrfs_block_group_item bgi;
 	struct btrfs_key key;
 	int ret;
@@ -4847,7 +4846,7 @@ again:
 		err |= ret;
 		break;
 	case BTRFS_EXTENT_CSUM_KEY:
-		total_csum_bytes += btrfs_item_size_nr(eb, slot);
+		total_csum_bytes += btrfs_item_size(eb, slot);
 		err |= ret;
 		break;
 	case BTRFS_TREE_BLOCK_REF_KEY:
@@ -5541,7 +5540,7 @@ int check_chunks_and_extents_lowmem(void)
 	key.offset = 0;
 	key.type = BTRFS_ROOT_ITEM_KEY;
 
-	ret = btrfs_search_slot(NULL, root, &key, &path, 0, 0);
+	ret = btrfs_search_slot(NULL, gfs_info->tree_root, &key, &path, 0, 0);
 	if (ret) {
 		error("cannot find extent tree in tree_root");
 		goto out;
@@ -5576,7 +5575,7 @@ int check_chunks_and_extents_lowmem(void)
 		if (ret)
 			goto out;
 next:
-		ret = btrfs_next_item(root, &path);
+		ret = btrfs_next_item(gfs_info->tree_root, &path);
 		if (ret)
 			goto out;
 	}

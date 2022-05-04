@@ -302,7 +302,6 @@ static void zero_items(struct metadump_struct *md, u8 *dst,
 		       struct extent_buffer *src)
 {
 	struct btrfs_file_extent_item *fi;
-	struct btrfs_item *item;
 	struct btrfs_key key;
 	u32 nritems = btrfs_header_nritems(src);
 	size_t size;
@@ -310,12 +309,11 @@ static void zero_items(struct metadump_struct *md, u8 *dst,
 	int i, extent_type;
 
 	for (i = 0; i < nritems; i++) {
-		item = btrfs_item_nr(i);
 		btrfs_item_key_to_cpu(src, &key, i);
 		if (key.type == BTRFS_CSUM_ITEM_KEY) {
-			size = btrfs_item_size_nr(src, i);
+			size = btrfs_item_size(src, i);
 			memset(dst + btrfs_leaf_data(src) +
-			       btrfs_item_offset_nr(src, i), 0, size);
+			       btrfs_item_offset(src, i), 0, size);
 			continue;
 		}
 
@@ -334,7 +332,7 @@ static void zero_items(struct metadump_struct *md, u8 *dst,
 			continue;
 
 		ptr = btrfs_file_extent_inline_start(fi);
-		size = btrfs_file_extent_inline_item_len(src, item);
+		size = btrfs_file_extent_inline_item_len(src, i);
 		memset(dst + ptr, 0, size);
 	}
 }
@@ -361,9 +359,9 @@ static void copy_buffer(struct metadump_struct *md, u8 *dst,
 		memset(dst + size, 0, src->len - size);
 	} else if (level == 0) {
 		size = btrfs_leaf_data(src) +
-			btrfs_item_offset_nr(src, nritems - 1) -
-			btrfs_item_nr_offset(nritems);
-		memset(dst + btrfs_item_nr_offset(nritems), 0, size);
+			btrfs_item_offset(src, nritems - 1) -
+			btrfs_item_nr_offset(src, nritems);
+		memset(dst + btrfs_item_nr_offset(src, nritems), 0, size);
 		zero_items(md, dst, src);
 	} else {
 		size = offsetof(struct btrfs_node, ptrs) +
@@ -617,7 +615,7 @@ static int read_data_extent(struct metadump_struct *md,
 	for (cur_mirror = 1; cur_mirror <= num_copies; cur_mirror++) {
 		while (bytes_left) {
 			read_len = bytes_left;
-			ret = read_extent_data(fs_info,
+			ret = read_data_from_disk(fs_info,
 					(char *)(async->buffer + offset),
 					logical, &read_len, cur_mirror);
 			if (ret < 0)
@@ -973,7 +971,7 @@ static int copy_from_extent_tree(struct metadump_struct *metadump,
 			break;
 		}
 
-		if (btrfs_item_size_nr(leaf, path->slots[0]) >= sizeof(*ei)) {
+		if (btrfs_item_size(leaf, path->slots[0]) >= sizeof(*ei)) {
 			ei = btrfs_item_ptr(leaf, path->slots[0],
 					    struct btrfs_extent_item);
 			if (btrfs_extent_flags(leaf, ei) &
@@ -1218,7 +1216,6 @@ static struct extent_buffer *alloc_dummy_eb(u64 bytenr, u32 size)
 
 static void truncate_item(struct extent_buffer *eb, int slot, u32 new_size)
 {
-	struct btrfs_item *item;
 	u32 nritems;
 	u32 old_size;
 	u32 old_data_start;
@@ -1226,28 +1223,26 @@ static void truncate_item(struct extent_buffer *eb, int slot, u32 new_size)
 	u32 data_end;
 	int i;
 
-	old_size = btrfs_item_size_nr(eb, slot);
+	old_size = btrfs_item_size(eb, slot);
 	if (old_size == new_size)
 		return;
 
 	nritems = btrfs_header_nritems(eb);
-	data_end = btrfs_item_offset_nr(eb, nritems - 1);
+	data_end = btrfs_item_offset(eb, nritems - 1);
 
-	old_data_start = btrfs_item_offset_nr(eb, slot);
+	old_data_start = btrfs_item_offset(eb, slot);
 	size_diff = old_size - new_size;
 
 	for (i = slot; i < nritems; i++) {
 		u32 ioff;
-		item = btrfs_item_nr(i);
-		ioff = btrfs_item_offset(eb, item);
-		btrfs_set_item_offset(eb, item, ioff + size_diff);
+		ioff = btrfs_item_offset(eb, i);
+		btrfs_set_item_offset(eb, i, ioff + size_diff);
 	}
 
 	memmove_extent_buffer(eb, btrfs_leaf_data(eb) + data_end + size_diff,
 			      btrfs_leaf_data(eb) + data_end,
 			      old_data_start + new_size - data_end);
-	item = btrfs_item_nr(slot);
-	btrfs_set_item_size(eb, item, new_size);
+	btrfs_set_item_size(eb, slot, new_size);
 }
 
 static int fixup_chunk_tree_block(struct mdrestore_struct *mdres,

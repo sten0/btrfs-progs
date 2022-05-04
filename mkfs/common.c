@@ -39,6 +39,7 @@ static u64 reference_root_table[] = {
 	[MKFS_FS_TREE]		=	BTRFS_FS_TREE_OBJECTID,
 	[MKFS_CSUM_TREE]	=	BTRFS_CSUM_TREE_OBJECTID,
 	[MKFS_FREE_SPACE_TREE]	=	BTRFS_FREE_SPACE_TREE_OBJECTID,
+	[MKFS_BLOCK_GROUP_TREE]	=	BTRFS_BLOCK_GROUP_TREE_OBJECTID,
 };
 
 static int btrfs_write_empty_tree(int fd, struct btrfs_mkfs_config *cfg,
@@ -93,20 +94,20 @@ static int btrfs_create_tree_root(int fd, struct btrfs_mkfs_config *cfg,
 
 	btrfs_set_disk_key_type(&disk_key, BTRFS_ROOT_ITEM_KEY);
 	btrfs_set_disk_key_offset(&disk_key, 0);
-	itemoff = __BTRFS_LEAF_DATA_SIZE(cfg->nodesize) - sizeof(root_item);
+	itemoff = cfg->leaf_data_size - sizeof(root_item);
 
 	for (i = 0; i < blocks_nr; i++) {
 		blk = blocks[i];
-		if (blk == MKFS_ROOT_TREE || blk == MKFS_CHUNK_TREE)
+		if (blk == MKFS_ROOT_TREE || blk == MKFS_CHUNK_TREE ||
+		    blk == MKFS_BLOCK_GROUP_TREE)
 			continue;
 
 		btrfs_set_root_bytenr(&root_item, cfg->blocks[blk]);
 		btrfs_set_disk_key_objectid(&disk_key,
 			reference_root_table[blk]);
 		btrfs_set_item_key(buf, &disk_key, nritems);
-		btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
-		btrfs_set_item_size(buf, btrfs_item_nr(nritems),
-				sizeof(root_item));
+		btrfs_set_item_offset(buf, nritems, itemoff);
+		btrfs_set_item_size(buf, nritems, sizeof(root_item));
 		if (blk == MKFS_FS_TREE) {
 			time_t now = time(NULL);
 
@@ -148,7 +149,7 @@ static int create_free_space_tree(int fd, struct btrfs_mkfs_config *cfg,
 {
 	struct btrfs_free_space_info *info;
 	struct btrfs_disk_key disk_key;
-	int itemoff = __BTRFS_LEAF_DATA_SIZE(cfg->nodesize);
+	int itemoff = cfg->leaf_data_size;
 	int nritems = 0;
 	int ret;
 
@@ -160,8 +161,8 @@ static int create_free_space_tree(int fd, struct btrfs_mkfs_config *cfg,
 	btrfs_set_disk_key_offset(&disk_key, group_size);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_FREE_SPACE_INFO_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
-	btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
-	btrfs_set_item_size(buf, btrfs_item_nr(nritems), sizeof(*info));
+	btrfs_set_item_offset(buf, nritems, itemoff);
+	btrfs_set_item_size(buf, nritems, sizeof(*info));
 
 	info = btrfs_item_ptr(buf, nritems, struct btrfs_free_space_info);
 	btrfs_set_free_space_extent_count(buf, info, 1);
@@ -172,8 +173,8 @@ static int create_free_space_tree(int fd, struct btrfs_mkfs_config *cfg,
 	btrfs_set_disk_key_offset(&disk_key, group_start + group_size - free_start);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_FREE_SPACE_EXTENT_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
-	btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
-	btrfs_set_item_size(buf, btrfs_item_nr(nritems), 0);
+	btrfs_set_item_offset(buf, nritems, itemoff);
+	btrfs_set_item_size(buf, nritems, 0);
 
 	nritems++;
 	btrfs_set_header_bytenr(buf, cfg->blocks[MKFS_FREE_SPACE_TREE]);
@@ -186,6 +187,77 @@ static int create_free_space_tree(int fd, struct btrfs_mkfs_config *cfg,
 	if (ret != cfg->nodesize)
 		return ret < 0 ? -errno : -EIO;
 	return 0;
+}
+
+static void write_block_group_item(struct extent_buffer *buf, u32 nr,
+				   u64 objectid, u64 offset, u64 used,
+				   u64 chunk_objectid, u32 itemoff)
+{
+	struct btrfs_block_group_item *bg_item;
+	struct btrfs_disk_key disk_key;
+
+	btrfs_set_disk_key_objectid(&disk_key, objectid);
+	btrfs_set_disk_key_offset(&disk_key, offset);
+	btrfs_set_disk_key_type(&disk_key, BTRFS_BLOCK_GROUP_ITEM_KEY);
+	btrfs_set_item_key(buf, &disk_key, nr);
+	btrfs_set_item_offset(buf, nr, itemoff);
+	btrfs_set_item_size(buf, nr, sizeof(*bg_item));
+
+	bg_item = btrfs_item_ptr(buf, nr, struct btrfs_block_group_item);
+	btrfs_set_block_group_used(buf, bg_item, used);
+	btrfs_set_block_group_flags(buf, bg_item, BTRFS_BLOCK_GROUP_SYSTEM);
+	btrfs_set_block_group_chunk_objectid(buf, bg_item, chunk_objectid);
+}
+
+static int create_block_group_tree(int fd, struct btrfs_mkfs_config *cfg,
+				   struct extent_buffer *buf,
+				   u64 bg_offset, u64 bg_size, u64 bg_used)
+{
+	int ret;
+
+	memset(buf->data + sizeof(struct btrfs_header), 0,
+		cfg->nodesize - sizeof(struct btrfs_header));
+	write_block_group_item(buf, 0, bg_offset, bg_size, bg_used, 0,
+			       cfg->leaf_data_size -
+			       sizeof(struct btrfs_block_group_item));
+	btrfs_set_header_bytenr(buf, cfg->blocks[MKFS_BLOCK_GROUP_TREE]);
+	btrfs_set_header_owner(buf, BTRFS_BLOCK_GROUP_TREE_OBJECTID);
+	btrfs_set_header_nritems(buf, 1);
+	csum_tree_block_size(buf, btrfs_csum_type_size(cfg->csum_type), 0,
+			     cfg->csum_type);
+	ret = pwrite(fd, buf->data, cfg->nodesize,
+		     cfg->blocks[MKFS_BLOCK_GROUP_TREE]);
+	if (ret != cfg->nodesize)
+		return ret < 0 ? -errno : -EIO;
+	return 0;
+}
+
+static u64 zoned_system_group_offset(u64 zone_size)
+{
+	const int zone_shift = ilog2(zone_size);
+	u32 zone_num = BTRFS_NR_SB_LOG_ZONES;
+	u64 start = (u64)zone_num * zone_size;
+	u32 sb_zones[BTRFS_SUPER_MIRROR_MAX];
+	int i;
+
+	for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++)
+		sb_zones[i] = sb_zone_number(zone_shift, i);
+
+	for (;;) {
+		for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++) {
+			if (zone_num == sb_zones[i] ||
+			    !(btrfs_sb_offset(i) + BTRFS_SUPER_INFO_SIZE <= start ||
+			      start + zone_size <= btrfs_sb_offset(i)))
+				goto next;
+		}
+
+		return start;
+next:
+		zone_num++;
+		start += zone_size;
+	}
+
+	__builtin_unreachable();
 }
 
 /*
@@ -240,13 +312,21 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	bool add_block_group = true;
 	bool free_space_tree = !!(cfg->runtime_features &
 				  BTRFS_RUNTIME_FEATURE_FREE_SPACE_TREE);
+	bool extent_tree_v2 = !!(cfg->features &
+				 BTRFS_FEATURE_INCOMPAT_EXTENT_TREE_V2);
 
 	/* Don't include the free space tree in the blocks to process. */
 	if (!free_space_tree)
 		blocks_nr--;
 
+	if (extent_tree_v2) {
+		blocks = extent_tree_v2_blocks;
+		blocks_nr = ARRAY_SIZE(extent_tree_v2_blocks);
+		add_block_group = false;
+	}
+
 	if ((cfg->features & BTRFS_FEATURE_INCOMPAT_ZONED)) {
-		system_group_offset = cfg->zone_size * BTRFS_NR_SB_LOG_ZONES;
+		system_group_offset = zoned_system_group_offset(cfg->zone_size);
 		system_group_size = cfg->zone_size;
 	}
 
@@ -301,6 +381,13 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 		btrfs_set_super_compat_ro_flags(&super, ro_flags);
 		btrfs_set_super_cache_generation(&super, 0);
 	}
+	if (extent_tree_v2) {
+		btrfs_set_super_nr_global_roots(&super, 1);
+		btrfs_set_super_block_group_root(&super,
+						 cfg->blocks[MKFS_BLOCK_GROUP_TREE]);
+		btrfs_set_super_block_group_root_generation(&super, 1);
+		btrfs_set_super_block_group_root_level(&super, 0);
+	}
 	if (cfg->label)
 		__strncpy_null(super.label, cfg->label, BTRFS_LABEL_SIZE - 1);
 
@@ -326,31 +413,19 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	memset(buf->data + sizeof(struct btrfs_header), 0,
 		cfg->nodesize - sizeof(struct btrfs_header));
 	nritems = 0;
-	itemoff = __BTRFS_LEAF_DATA_SIZE(cfg->nodesize);
+	itemoff = cfg->leaf_data_size;
 	for (i = 0; i < blocks_nr; i++) {
 		blk = blocks[i];
 
 		/* Add the block group item for our temporary chunk. */
 		if (cfg->blocks[blk] > system_group_offset && add_block_group) {
-			struct btrfs_block_group_item *bg_item;
-
+			itemoff -= sizeof(struct btrfs_block_group_item);
+			write_block_group_item(buf, nritems,
+					       system_group_offset,
+					       system_group_size, total_used,
+					       BTRFS_FIRST_CHUNK_TREE_OBJECTID,
+					       itemoff);
 			add_block_group = false;
-
-			itemoff -= sizeof(*bg_item);
-			btrfs_set_disk_key_objectid(&disk_key, system_group_offset);
-			btrfs_set_disk_key_offset(&disk_key, system_group_size);
-			btrfs_set_disk_key_type(&disk_key, BTRFS_BLOCK_GROUP_ITEM_KEY);
-			btrfs_set_item_key(buf, &disk_key, nritems);
-			btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
-			btrfs_set_item_size(buf, btrfs_item_nr(nritems), sizeof(*bg_item));
-
-			bg_item = btrfs_item_ptr(buf, nritems,
-						 struct btrfs_block_group_item);
-			btrfs_set_block_group_used(buf, bg_item, total_used);
-			btrfs_set_block_group_flags(buf, bg_item,
-						    BTRFS_BLOCK_GROUP_SYSTEM);
-			btrfs_set_block_group_chunk_objectid(buf, bg_item,
-					BTRFS_FIRST_CHUNK_TREE_OBJECTID);
 			nritems++;
 		}
 
@@ -387,10 +462,8 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 			btrfs_set_disk_key_offset(&disk_key, cfg->nodesize);
 		}
 		btrfs_set_item_key(buf, &disk_key, nritems);
-		btrfs_set_item_offset(buf, btrfs_item_nr(nritems),
-				      itemoff);
-		btrfs_set_item_size(buf, btrfs_item_nr(nritems),
-				    item_size);
+		btrfs_set_item_offset(buf, nritems, itemoff);
+		btrfs_set_item_size(buf, nritems, item_size);
 		extent_item = btrfs_item_ptr(buf, nritems,
 					     struct btrfs_extent_item);
 		btrfs_set_extent_refs(buf, extent_item, 1);
@@ -405,9 +478,8 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 		btrfs_set_disk_key_offset(&disk_key, ref_root);
 		btrfs_set_disk_key_type(&disk_key, BTRFS_TREE_BLOCK_REF_KEY);
 		btrfs_set_item_key(buf, &disk_key, nritems);
-		btrfs_set_item_offset(buf, btrfs_item_nr(nritems),
-				      itemoff);
-		btrfs_set_item_size(buf, btrfs_item_nr(nritems), 0);
+		btrfs_set_item_offset(buf, nritems, itemoff);
+		btrfs_set_item_size(buf, nritems, 0);
 		nritems++;
 	}
 	btrfs_set_header_bytenr(buf, cfg->blocks[MKFS_EXTENT_TREE]);
@@ -427,15 +499,15 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 		cfg->nodesize - sizeof(struct btrfs_header));
 	nritems = 0;
 	item_size = sizeof(*dev_item);
-	itemoff = __BTRFS_LEAF_DATA_SIZE(cfg->nodesize) - item_size;
+	itemoff = cfg->leaf_data_size - item_size;
 
 	/* first device 1 (there is no device 0) */
 	btrfs_set_disk_key_objectid(&disk_key, BTRFS_DEV_ITEMS_OBJECTID);
 	btrfs_set_disk_key_offset(&disk_key, 1);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_DEV_ITEM_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
-	btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
-	btrfs_set_item_size(buf, btrfs_item_nr(nritems), item_size);
+	btrfs_set_item_offset(buf, nritems, itemoff);
+	btrfs_set_item_size(buf, nritems, item_size);
 
 	dev_item = btrfs_item_ptr(buf, nritems, struct btrfs_dev_item);
 	btrfs_set_device_id(buf, dev_item, 1);
@@ -465,8 +537,8 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_disk_key_offset(&disk_key, system_group_offset);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_CHUNK_ITEM_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
-	btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
-	btrfs_set_item_size(buf, btrfs_item_nr(nritems), item_size);
+	btrfs_set_item_offset(buf, nritems, itemoff);
+	btrfs_set_item_size(buf, nritems, item_size);
 
 	chunk = btrfs_item_ptr(buf, nritems, struct btrfs_chunk);
 	btrfs_set_chunk_length(buf, chunk, system_group_size);
@@ -515,16 +587,14 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	memset(buf->data + sizeof(struct btrfs_header), 0,
 		cfg->nodesize - sizeof(struct btrfs_header));
 	nritems = 0;
-	itemoff = __BTRFS_LEAF_DATA_SIZE(cfg->nodesize) -
-		sizeof(struct btrfs_dev_extent);
+	itemoff = cfg->leaf_data_size - sizeof(struct btrfs_dev_extent);
 
 	btrfs_set_disk_key_objectid(&disk_key, 1);
 	btrfs_set_disk_key_offset(&disk_key, system_group_offset);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_DEV_EXTENT_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
-	btrfs_set_item_offset(buf, btrfs_item_nr(nritems), itemoff);
-	btrfs_set_item_size(buf, btrfs_item_nr(nritems),
-			    sizeof(struct btrfs_dev_extent));
+	btrfs_set_item_offset(buf, nritems, itemoff);
+	btrfs_set_item_size(buf, nritems, sizeof(struct btrfs_dev_extent));
 	dev_extent = btrfs_item_ptr(buf, nritems, struct btrfs_dev_extent);
 	btrfs_set_dev_extent_chunk_tree(buf, dev_extent,
 					BTRFS_CHUNK_TREE_OBJECTID);
@@ -567,6 +637,14 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 		ret = create_free_space_tree(fd, cfg, buf, system_group_offset,
 					     system_group_size,
 					     system_group_offset + total_used);
+		if (ret)
+			goto out;
+	}
+
+	if (extent_tree_v2) {
+		ret = create_block_group_tree(fd, cfg, buf,
+					      system_group_offset,
+					      system_group_size, total_used);
 		if (ret)
 			goto out;
 	}

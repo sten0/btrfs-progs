@@ -40,53 +40,34 @@ static int debug_corrupt_block(struct extent_buffer *eb,
 		struct btrfs_root *root, u64 bytenr, u32 blocksize, u64 copy)
 {
 	int ret;
-	u64 length;
-	struct btrfs_multi_bio *multi = NULL;
-	struct btrfs_device *device;
 	int num_copies;
 	int mirror_num = 1;
 
-	length = blocksize;
 	while (1) {
-		ret = btrfs_map_block(root->fs_info, READ, eb->start, &length,
-				      &multi, mirror_num, NULL);
-		if (ret) {
-			error("cannot map block %llu length %llu mirror %d: %d",
-					(unsigned long long)eb->start,
-					(unsigned long long)length,
-					mirror_num, ret);
-			return ret;
-		}
-		device = multi->stripes[0].dev;
-		eb->fd = device->fd;
-		device->total_ios++;
-		eb->dev_bytenr = multi->stripes[0].physical;
-
-		fprintf(stdout,
-			"mirror %d logical %llu physical %llu device %s\n",
-			mirror_num, (unsigned long long)bytenr,
-			(unsigned long long)eb->dev_bytenr, device->name);
-		free(multi);
-
 		if (!copy || mirror_num == copy) {
-			ret = read_extent_from_disk(eb, 0, eb->len);
+			u64 read_len = eb->len;
+
+			ret = read_data_from_disk(eb->fs_info, eb->data,
+						  eb->start, &read_len,
+						  mirror_num);
+			if (read_len < eb->len)
+				ret = -EIO;
 			if (ret < 0) {
 				errno = -ret;
 				error("cannot read eb bytenr %llu: %m",
-					(unsigned long long)eb->dev_bytenr);
+					(unsigned long long)eb->start);
 				return ret;
 			}
 			printf("corrupting %llu copy %d\n", eb->start,
 			       mirror_num);
 			memset(eb->data, 0, eb->len);
-			ret = write_extent_to_disk(eb);
+			ret = write_and_map_eb(eb->fs_info, eb);
 			if (ret < 0) {
 				errno = -ret;
 				error("cannot write eb bytenr %llu: %m",
-					(unsigned long long)eb->dev_bytenr);
+					(unsigned long long)eb->start);
 				return ret;
 			}
-			fsync(eb->fd);
 		}
 
 		num_copies = btrfs_num_copies(root->fs_info, eb->start,
@@ -162,7 +143,7 @@ static void corrupt_keys(struct btrfs_trans_handle *trans,
 		u16 csum_type = fs_info->csum_type;
 
 		csum_tree_block_size(eb, csum_size, 0, csum_type);
-		write_extent_to_disk(eb);
+		write_and_map_eb(eb->fs_info, eb);
 	}
 }
 
@@ -246,7 +227,7 @@ static int corrupt_extent(struct btrfs_trans_handle *trans,
 				"corrupting extent record: key %llu %u %llu\n",
 				key.objectid, key.type, key.offset);
 			ptr = btrfs_item_ptr_offset(leaf, slot);
-			item_size = btrfs_item_size_nr(leaf, slot);
+			item_size = btrfs_item_size(leaf, slot);
 			memset_extent_buffer(leaf, 0, ptr, item_size);
 			btrfs_mark_buffer_dirty(leaf);
 		}
@@ -827,18 +808,18 @@ static void shift_items(struct btrfs_root *root, struct extent_buffer *eb)
 	int shift_space = btrfs_leaf_free_space(eb) / 2;
 	int slot = nritems / 2;
 	int i = 0;
-	unsigned int data_end = btrfs_item_offset_nr(eb, nritems - 1);
+	unsigned int data_end = btrfs_item_offset(eb, nritems - 1);
 
 	/* Shift the item data up to and including slot back by shift space */
 	memmove_extent_buffer(eb, btrfs_leaf_data(eb) + data_end - shift_space,
 			      btrfs_leaf_data(eb) + data_end,
-			      btrfs_item_offset_nr(eb, slot - 1) - data_end);
+			      btrfs_item_offset(eb, slot - 1) - data_end);
 
 	/* Now update the item pointers. */
 	for (i = nritems - 1; i >= slot; i--) {
-		u32 offset = btrfs_item_offset_nr(eb, i);
+		u32 offset = btrfs_item_offset(eb, i);
 		offset -= shift_space;
-		btrfs_set_item_offset(eb, btrfs_item_nr(i), offset);
+		btrfs_set_item_offset(eb, i, offset);
 	}
 }
 
@@ -978,10 +959,9 @@ static int corrupt_btrfs_item(struct btrfs_root *root, struct btrfs_key *key,
 	ret = 0;
 	switch (corrupt_field) {
 	case BTRFS_ITEM_OFFSET:
-		orig = btrfs_item_offset_nr(path->nodes[0], path->slots[0]);
+		orig = btrfs_item_offset(path->nodes[0], path->slots[0]);
 		bogus = generate_u32(orig);
-		btrfs_set_item_offset(path->nodes[0],
-				      btrfs_item_nr(path->slots[0]), bogus);
+		btrfs_set_item_offset(path->nodes[0], path->slots[0], bogus);
 		break;
 	default:
 		ret = -EINVAL;
@@ -1083,7 +1063,7 @@ static int corrupt_item_nocow(struct btrfs_trans_handle *trans,
 		fprintf(stdout, "Corrupting key and data [%llu, %u, %llu].\n",
 			key.objectid, key.type, key.offset);
 		ptr = btrfs_item_ptr_offset(leaf, slot);
-		item_size = btrfs_item_size_nr(leaf, slot);
+		item_size = btrfs_item_size(leaf, slot);
 		memset_extent_buffer(leaf, 0, ptr, item_size);
 		btrfs_mark_buffer_dirty(leaf);
 	}

@@ -25,23 +25,24 @@ struct btrfs_trans_handle* btrfs_start_transaction(struct btrfs_root *root,
 		int num_blocks)
 {
 	struct btrfs_fs_info *fs_info = root->fs_info;
-	struct btrfs_trans_handle *h = kzalloc(sizeof(*h), GFP_NOFS);
+	struct btrfs_trans_handle *h;
 
 	if (fs_info->transaction_aborted)
 		return ERR_PTR(-EROFS);
 
-	if (!h)
-		return ERR_PTR(-ENOMEM);
 	if (root->commit_root) {
 		error("commit_root already set when starting transaction");
-		kfree(h);
 		return ERR_PTR(-EINVAL);
 	}
 	if (fs_info->running_transaction) {
 		error("attempt to start transaction over already running one");
-		kfree(h);
 		return ERR_PTR(-EINVAL);
 	}
+
+	h = kzalloc(sizeof(*h), GFP_NOFS);
+	if (!h)
+		return ERR_PTR(-ENOMEM);
+
 	h->fs_info = fs_info;
 	fs_info->running_transaction = h;
 	fs_info->generation++;
@@ -184,6 +185,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans,
 	if (root == root->fs_info->tree_root)
 		goto commit_tree;
 	if (root == root->fs_info->chunk_root)
+		goto commit_tree;
+	if (root == root->fs_info->block_group_root)
 		goto commit_tree;
 
 	free_extent_buffer(root->commit_root);

@@ -977,7 +977,10 @@ loop:
 					ret = add_qgroup_relation(key.objectid,
 								  key.offset);
 					if (ret) {
-						error("out of memory");
+						errno = -ret;
+						error(
+		"failed to add qgroup relation, member=%llu parent=%llu: %m",
+						      key.objectid, key.offset);
 						goto out;
 					}
 				}
@@ -1041,7 +1044,7 @@ static int add_inline_refs(struct btrfs_fs_info *info,
 	struct btrfs_extent_inline_ref *iref;
 	struct btrfs_extent_data_ref *dref;
 	u64 flags, root_obj, offset, parent;
-	u32 item_size = btrfs_item_size_nr(ei_leaf, slot);
+	u32 item_size = btrfs_item_size(ei_leaf, slot);
 	int type;
 	unsigned long end;
 	unsigned long ptr;
@@ -1400,6 +1403,7 @@ static bool is_bad_qgroup(struct qgroup_count *count)
  */
 int qgroup_verify_all(struct btrfs_fs_info *info)
 {
+	struct rb_node *n;
 	int ret;
 	bool found_err = false;
 	bool skip_err = false;
@@ -1430,10 +1434,17 @@ int qgroup_verify_all(struct btrfs_fs_info *info)
 	/*
 	 * Put all extent refs into our rbtree
 	 */
-	ret = scan_extents(info, 0, ~0ULL);
-	if (ret) {
-		fprintf(stderr, "ERROR: while scanning extent tree: %d\n", ret);
-		goto out;
+	for (n = rb_first(&info->block_group_cache_tree); n; n = rb_next(n)) {
+		struct btrfs_block_group *bg;
+
+		bg = rb_entry(n, struct btrfs_block_group, cache_node);
+		ret = scan_extents(info, bg->start,
+				   bg->start + bg->length - 1);
+		if (ret) {
+			fprintf(stderr, "ERROR: while scanning extent tree: %d\n",
+				ret);
+			goto out;
+		}
 	}
 
 	ret = map_implied_refs(info);
@@ -1507,6 +1518,7 @@ static void print_subvol_info(u64 subvolid, u64 bytenr, u64 num_bytes,
 
 int print_extent_state(struct btrfs_fs_info *info, u64 subvol)
 {
+	struct rb_node *n;
 	int ret;
 
 	tree_blocks = ulist_alloc(0);
@@ -1519,10 +1531,17 @@ int print_extent_state(struct btrfs_fs_info *info, u64 subvol)
 	/*
 	 * Put all extent refs into our rbtree
 	 */
-	ret = scan_extents(info, 0, ~0ULL);
-	if (ret) {
-		fprintf(stderr, "ERROR: while scanning extent tree: %d\n", ret);
-		goto out;
+	for (n = rb_first(&info->block_group_cache_tree); n; n = rb_next(n)) {
+		struct btrfs_block_group *bg;
+
+		bg = rb_entry(n, struct btrfs_block_group, cache_node);
+		ret = scan_extents(info, bg->start,
+				   bg->start + bg->length - 1);
+		if (ret) {
+			fprintf(stderr, "ERROR: while scanning extent tree: %d\n",
+				ret);
+			goto out;
+		}
 	}
 
 	ret = map_implied_refs(info);

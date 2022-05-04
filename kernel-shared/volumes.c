@@ -30,6 +30,7 @@
 #include "kernel-shared/volumes.h"
 #include "zoned.h"
 #include "common/utils.h"
+#include "common/device-utils.h"
 #include "kernel-lib/raid56.h"
 
 const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
@@ -583,30 +584,19 @@ static bool dev_extent_hole_check_zoned(struct btrfs_device *device,
 					u64 *hole_start, u64 *hole_size,
 					u64 num_bytes)
 {
-	u64 zone_size = device->zone_info->zone_size;
 	u64 pos;
-	bool changed = false;
 
-	ASSERT(IS_ALIGNED(*hole_start, zone_size));
+	ASSERT(IS_ALIGNED(*hole_start, device->zone_info->zone_size));
 
-	while (*hole_size > 0) {
-		pos = btrfs_find_allocatable_zones(device, *hole_start,
-						   *hole_start + *hole_size,
-						   num_bytes);
-		if (pos != *hole_start) {
-			*hole_size = *hole_start + *hole_size - pos;
-			*hole_start = pos;
-			changed = true;
-			if (*hole_size < num_bytes)
-				break;
-		}
-
-		*hole_start += zone_size;
-		*hole_size -= zone_size;
-		changed = true;
+	pos = btrfs_find_allocatable_zones(device, *hole_start,
+					   *hole_start + *hole_size, num_bytes);
+	if (pos != *hole_start) {
+		*hole_size = *hole_start + *hole_size - pos;
+		*hole_start = pos;
+		return true;
 	}
 
-	return changed;
+	return false;
 }
 
 /**
@@ -774,13 +764,12 @@ next:
 	 * search_end may be smaller than search_start.
 	 */
 	if (search_end > search_start) {
+		hole_size = search_end - search_start;
 		if (dev_extent_hole_check(device, &search_start, &hole_size,
 					  num_bytes)) {
 			btrfs_release_path(path);
 			goto again;
 		}
-
-		hole_size = search_end - search_start;
 
 		if (hole_size > max_hole_size) {
 			max_hole_start = search_start;
@@ -1570,6 +1559,21 @@ again:
 	}
 
 	ret = create_chunk(trans, info, &ctl, &private_devs);
+
+	/*
+	 * This can happen if above create_chunk() failed, we need to move all
+	 * devices back to dev_list.
+	 */
+	while (!list_empty(&private_devs)) {
+		device = list_entry(private_devs.next, struct btrfs_device,
+				    dev_list);
+		list_move(&device->dev_list, dev_list);
+	}
+	/*
+	 * All private devs moved back to @dev_list, now dev_list should not be
+	 * empty.
+	 */
+	ASSERT(!list_empty(dev_list));
 	*start = ctl.start;
 	*num_bytes = ctl.num_bytes;
 
@@ -1807,6 +1811,7 @@ int __btrfs_map_block(struct btrfs_fs_info *fs_info, int rw,
 	int stripes_required = 1;
 	int stripe_index;
 	int i;
+	bool need_raid_map = false;
 	struct btrfs_multi_bio *multi = NULL;
 
 	if (multi_ret && rw == READ) {
@@ -1844,17 +1849,18 @@ again:
 	}
 	if (map->type & BTRFS_BLOCK_GROUP_RAID56_MASK
 	    && multi_ret && ((rw & WRITE) || mirror_num > 1) && raid_map_ret) {
-		    /* RAID[56] write or recovery. Return all stripes */
-		    stripes_required = map->num_stripes;
+		need_raid_map = true;
+		/* RAID[56] write or recovery. Return all stripes */
+		stripes_required = map->num_stripes;
 
-		    /* Only allocate the map if we've already got a large enough multi_ret */
-		    if (stripes_allocated >= stripes_required) {
-			    raid_map = kmalloc(sizeof(u64) * map->num_stripes, GFP_NOFS);
-			    if (!raid_map) {
-				    kfree(multi);
-				    return -ENOMEM;
-			    }
-		    }
+		/* Only allocate the map if we've already got a large enough multi_ret */
+		if (stripes_allocated >= stripes_required) {
+			raid_map = kmalloc(sizeof(u64) * map->num_stripes, GFP_NOFS);
+			if (!raid_map) {
+				kfree(multi);
+				return -ENOMEM;
+			}
+		}
 	}
 
 	/* if our multi bio struct is too small, back off and try again */
@@ -1892,6 +1898,7 @@ again:
 		goto out;
 
 	multi->num_stripes = 1;
+	multi->type = map->type;
 	stripe_index = 0;
 	if (map->type & BTRFS_BLOCK_GROUP_RAID1_MASK) {
 		if (rw == WRITE)
@@ -1918,7 +1925,7 @@ again:
 		else if (mirror_num)
 			stripe_index = mirror_num - 1;
 	} else if (map->type & BTRFS_BLOCK_GROUP_RAID56_MASK) {
-		if (raid_map) {
+		if (need_raid_map && raid_map) {
 			int rot;
 			u64 tmp;
 			u64 raid56_full_stripe_start;
@@ -2103,9 +2110,9 @@ int btrfs_check_chunk_valid(struct btrfs_fs_info *fs_info,
 	 * one stripe, so no "==" check.
 	 */
 	if (slot >= 0 &&
-	    btrfs_item_size_nr(leaf, slot) < sizeof(struct btrfs_chunk)) {
+	    btrfs_item_size(leaf, slot) < sizeof(struct btrfs_chunk)) {
 		error("invalid chunk item size, have %u expect [%zu, %u)",
-			btrfs_item_size_nr(leaf, slot),
+			btrfs_item_size(leaf, slot),
 			sizeof(struct btrfs_chunk),
 			BTRFS_LEAF_DATA_SIZE(fs_info));
 		return -EUCLEAN;
@@ -2122,9 +2129,9 @@ int btrfs_check_chunk_valid(struct btrfs_fs_info *fs_info,
 		return -EUCLEAN;
 	}
 	if (slot >= 0 && btrfs_chunk_item_size(num_stripes) !=
-	    btrfs_item_size_nr(leaf, slot)) {
+	    btrfs_item_size(leaf, slot)) {
 		error("invalid chunk item size, have %u expect %lu",
-			btrfs_item_size_nr(leaf, slot),
+			btrfs_item_size(leaf, slot),
 			btrfs_chunk_item_size(num_stripes));
 		return -EUCLEAN;
 	}
@@ -2184,7 +2191,7 @@ int btrfs_check_chunk_valid(struct btrfs_fs_info *fs_info,
 	 */
 	if (num_stripes < 1 ||
 	    (slot == -1 && chunk_ondisk_size > BTRFS_SYSTEM_CHUNK_ARRAY_SIZE) ||
-	    (slot >= 0 && chunk_ondisk_size > btrfs_item_size_nr(leaf, slot))) {
+	    (slot >= 0 && chunk_ondisk_size > btrfs_item_size(leaf, slot))) {
 		error("invalid num_stripes: %u", num_stripes);
 		return -EIO;
 	}
@@ -2622,8 +2629,6 @@ static int split_eb_for_raid56(struct btrfs_fs_info *info,
 		eb->len = stripe_len;
 		eb->refs = 1;
 		eb->flags = 0;
-		eb->fd = -1;
-		eb->dev_bytenr = (u64)-1;
 		eb->fs_info = info;
 
 		this_eb_start = raid_map[i];
@@ -2678,9 +2683,6 @@ int write_raid56_with_parity(struct btrfs_fs_info *info,
 	for (i = 0; i < multi->num_stripes; i++) {
 		struct extent_buffer *new_eb;
 		if (raid_map[i] < BTRFS_RAID5_P_STRIPE) {
-			ebs[i]->dev_bytenr = multi->stripes[i].physical;
-			ebs[i]->fd = multi->stripes[i].dev->fd;
-			multi->stripes[i].dev->total_ios++;
 			if (ebs[i]->start != raid_map[i]) {
 				ret = -EINVAL;
 				goto out_free_split;
@@ -2692,8 +2694,6 @@ int write_raid56_with_parity(struct btrfs_fs_info *info,
 			ret = -ENOMEM;
 			goto out_free_split;
 		}
-		new_eb->dev_bytenr = multi->stripes[i].physical;
-		new_eb->fd = multi->stripes[i].dev->fd;
 		multi->stripes[i].dev->total_ios++;
 		new_eb->len = stripe_len;
 		new_eb->fs_info = info;
@@ -2722,7 +2722,9 @@ int write_raid56_with_parity(struct btrfs_fs_info *info,
 	}
 
 	for (i = 0; i < multi->num_stripes; i++) {
-		ret = write_extent_to_disk(ebs[i]);
+		multi->stripes[i].dev->total_ios++;
+		ret = btrfs_pwrite(multi->stripes[i].dev->fd, ebs[i]->data, ebs[i]->len,
+				   multi->stripes[i].physical, info->zoned);
 		if (ret < 0)
 			goto out_free_split;
 	}

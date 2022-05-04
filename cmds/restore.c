@@ -302,7 +302,7 @@ static int copy_one_inline(struct btrfs_root *root, int fd,
 			    struct btrfs_file_extent_item);
 	ptr = btrfs_file_extent_inline_start(fi);
 	len = btrfs_file_extent_ram_bytes(leaf, fi);
-	inline_item_len = btrfs_file_extent_inline_item_len(leaf, btrfs_item_nr(path->slots[0]));
+	inline_item_len = btrfs_file_extent_inline_item_len(leaf, path->slots[0]);
 	read_extent_buffer(leaf, buf, ptr, inline_item_len);
 
 	compress = btrfs_file_extent_compression(leaf, fi);
@@ -407,8 +407,8 @@ again:
 	cur = bytenr;
 	while (cur < bytenr + size_left) {
 		length = bytenr + size_left - cur;
-		ret = read_extent_data(root->fs_info, inbuf + cur - bytenr, cur,
-				       &length, mirror_num);
+		ret = read_data_from_disk(root->fs_info, inbuf + cur - bytenr, cur,
+					  &length, mirror_num);
 		if (ret < 0) {
 			mirror_num++;
 			if (mirror_num > num_copies) {
@@ -512,7 +512,7 @@ static int set_file_xattrs(struct btrfs_root *root, u64 inode,
 		if (key.type != BTRFS_XATTR_ITEM_KEY || key.objectid != inode)
 			break;
 		cur = 0;
-		total_len = btrfs_item_size_nr(leaf, path.slots[0]);
+		total_len = btrfs_item_size(leaf, path.slots[0]);
 		di = btrfs_item_ptr(leaf, path.slots[0],
 				    struct btrfs_dir_item);
 
@@ -834,8 +834,7 @@ static int copy_symlink(struct btrfs_root *root, struct btrfs_key *key,
 	extent_item = btrfs_item_ptr(leaf, path.slots[0],
 			struct btrfs_file_extent_item);
 
-	len = btrfs_file_extent_inline_item_len(leaf,
-			btrfs_item_nr(path.slots[0]));
+	len = btrfs_file_extent_inline_item_len(leaf, path.slots[0]);
 	if (len >= PATH_MAX) {
 		error("symlink '%s' target length %d is longer than PATH_MAX",
 				fs_name, len);
