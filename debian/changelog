@@ -1,3 +1,10 @@
+btrfs-progs (5.18-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Drop an obsolete Breaks.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Thu, 26 May 2022 01:02:16 +0200
+
 btrfs-progs (5.17-1) unstable; urgency=medium
 
   * New upstream release.
