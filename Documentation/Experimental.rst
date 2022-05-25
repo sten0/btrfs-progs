@@ -11,14 +11,18 @@ filed as issues.
 
 In the code use it like:
 
+.. code-block::
+
     if (EXPERIMENTAL) {
         ...
     }
 
-in case it does not interfere with other code or does not depend on an `#ifdef`
+in case it does not interfere with other code or does not depend on an `#if`
 where it would break default build.
 
 Or:
+
+.. code-block::
 
     #if EXPERIMENTAL
     ...
@@ -26,7 +30,11 @@ Or:
 
 for larger code blocks.
 
-Each feature should be tracked in an issue with label
-[experimental](https://github.com/kdave/btrfs-progs/labels/experimental), with
-a description and a todo list items. Individual tasks can be tracked in other
+.. note::
+   Do not use `#ifdef` as the macro is always defined so this would not work as
+   expected.
+
+Each feature should be tracked in an issue with label **experimental** (list of
+active issues https://github.com/kdave/btrfs-progs/labels/experimental), with a
+description and a todo list items. Individual tasks can be tracked in other
 issues if needed.

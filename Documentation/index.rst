@@ -10,6 +10,10 @@ Welcome to BTRFS documentation!
    Introduction
    man-index
    Administration
+   Hardware
+   CHANGES
+   Glossary
+   INSTALL
 
 .. toctree::
    :maxdepth: 1
@@ -31,6 +35,7 @@ Welcome to BTRFS documentation!
    Scrub
    Seeding-device
    Send-receive
+   Subpage
    Subvolumes
    Swapfile
    Tree-checker
@@ -44,7 +49,7 @@ Welcome to BTRFS documentation!
 
    Quick-start
    Interoperability
-   Glossary
-   Flexibility
    project-index
    trouble-index
+   Experimental
+   btrfs-ioctl

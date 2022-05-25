@@ -1218,13 +1218,15 @@ static void print_header_info(struct extent_buffer *eb, unsigned int mode)
 {
 	struct btrfs_fs_info *fs_info = eb->fs_info;
 	char flags_str[128];
+#if EXPERIMENTAL
 	u8 csum[BTRFS_CSUM_SIZE];
+#endif
 	u64 flags;
 	u32 nr;
 	u8 backref_rev;
 	char csum_str[2 * BTRFS_CSUM_SIZE + strlen(" csum 0x") + 1];
 	int i;
-	int csum_size;
+	int csum_size = fs_info->csum_size;
 
 	flags = btrfs_header_flags(eb) & ~BTRFS_BACKREF_REV_MASK;
 	backref_rev = btrfs_header_flags(eb) >> BTRFS_BACKREF_REV_SHIFT;
@@ -1249,7 +1251,6 @@ static void print_header_info(struct extent_buffer *eb, unsigned int mode)
 		char *tmp = csum_str;
 		u8 *csum = (u8 *)(eb->data + offsetof(struct btrfs_header, csum));
 
-		csum_size = fs_info->csum_size;
 		strcpy(csum_str, " csum 0x");
 		tmp = csum_str + strlen(csum_str);
 		for (i = 0; i < csum_size; i++) {
@@ -1266,9 +1267,9 @@ static void print_header_info(struct extent_buffer *eb, unsigned int mode)
 	       btrfs_header_bytenr(eb), flags, flags_str, backref_rev,
 	       csum_str);
 
-#ifdef EXPERIMENTAL
+#if EXPERIMENTAL
 	printf("checksum stored ");
-	for (i = 0; i < BTRFS_CSUM_SIZE; i++)
+	for (i = 0; i < csum_size; i++)
 		printf("%02hhx", (int)(eb->data[i]));
 	printf("\n");
 	memset(csum, 0, sizeof(csum));
@@ -1276,7 +1277,7 @@ static void print_header_info(struct extent_buffer *eb, unsigned int mode)
 			(u8 *)eb->data + BTRFS_CSUM_SIZE,
 			csum, fs_info->nodesize - BTRFS_CSUM_SIZE);
 	printf("checksum calced ");
-	for (i = 0; i < BTRFS_CSUM_SIZE; i++)
+	for (i = 0; i < csum_size; i++)
 		printf("%02hhx", (int)(csum[i]));
 	printf("\n");
 #endif

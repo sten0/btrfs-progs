@@ -8,3 +8,18 @@ Mount options
 -------------
 
 .. include:: ch-mount-options.rst
+
+Bootloaders
+-----------
+
+.. include:: ch-bootloaders.rst
+
+Filesystem limits
+-----------------
+
+.. include:: ch-fs-limits.rst
+
+Flexibility
+-----------
+
+.. include:: ch-flexibility.rst
