@@ -22,7 +22,7 @@
 #include <limits.h>
 #include <errno.h>
 
-#include "kernel-shared/ctree.h"
+#include "libbtrfs/ctree.h"
 #include "libbtrfs/send-utils.h"
 #include "ioctl.h"
 
@@ -469,6 +469,10 @@ void subvol_uuid_search_add(struct subvol_uuid_search *s,
 }
 #endif
 
+static struct subvol_info *subvol_uuid_search2(struct subvol_uuid_search *s,
+				       u64 root_id, const u8 *uuid, u64 transid,
+				       const char *path,
+				       enum subvol_search_type type);
 struct subvol_info *subvol_uuid_search(struct subvol_uuid_search *s,
 				       u64 root_id, const u8 *uuid, u64 transid,
 				       const char *path,
@@ -553,7 +557,7 @@ out:
 	return ret;
 }
 
-struct subvol_info *subvol_uuid_search2(struct subvol_uuid_search *s,
+static struct subvol_info *subvol_uuid_search2(struct subvol_uuid_search *s,
 				       u64 root_id, const u8 *uuid, u64 transid,
 				       const char *path,
 				       enum subvol_search_type type)
