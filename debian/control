@@ -3,7 +3,7 @@ Section: admin
 Priority: optional
 Maintainer: Adam Borowski <kilobyte@angband.pl>
 Build-Depends: debhelper-compat (= 13),
-               e2fslibs-dev,
+               libext2fs-dev,
                pkg-config,
                libacl1-dev,
                libblkid-dev,
