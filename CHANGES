@@ -1,3 +1,23 @@
+btrfs-progs-5.19 (2022-08-16)
+-----------------------------
+   * send: support protocol version 2
+   * fi show: print all missing devices
+   * device stats: add tabular output
+   * replace: add alias to device group (device replace)
+   * check: validate free space tree items
+   * fixes:
+      * convert: support large filesystems (block count > 32bit)
+      * recognize filesystems with verity enabled
+      * mkfs and DUP could write out of order, fix it for zoned mode
+   * build:
+      * optional support for LZO and ZSTD in receive
+      * compatibility with glibc 2.36 (mount.h)
+      * add fallbacks for new GCC builtins
+   * other:
+      * corrupt-block: target specific items, offsets
+      * documentation updates, new pages from wiki
+      * new tests
+
 btrfs-progs-5.18 (2022-05-25)
 -----------------------------
    * fixes:
@@ -43,7 +63,7 @@ btrfs-progs-5.17 (2022-04-26)
 	 profiles
    * preparatory work for extent tree v2, global roots
    * experimental feature (unstable interface, not built by default,
-     do not use for production):
+       do not use for production)
        * btrfstune: option --csum to switch checksum algorithm
    * other:
        * cleanups, refactoring
@@ -1190,6 +1210,7 @@ btrfs-progs-4.4 (2016-01-18)
         * usage=min..max -- enhanced to take range
         * stripes=min..max -- new, filter by stripes for raid0/10/5/6
         * limit=min..max -- enhanced to take range
+
   Note: due to backward compatibility, the range maximum for 'usage' is not
   inclusive as for the others, to keep the same behaviour as usage=N .
 

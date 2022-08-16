@@ -27,6 +27,7 @@
 #include "kerncompat.h"
 #include "kernel-shared/ctree.h"
 #include "ioctl.h"
+#include "common/string-table.h"
 #include "common/utils.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/zoned.h"
@@ -74,7 +75,7 @@ static int cmd_device_add(const struct cmd_struct *cmd,
 	optind = 0;
 	while (1) {
 		int c;
-		enum { GETOPT_VAL_ENQUEUE = 256 };
+		enum { GETOPT_VAL_ENQUEUE = GETOPT_VAL_FIRST };
 		static const struct option long_options[] = {
 			{ "nodiscard", optional_argument, NULL, 'K'},
 			{ "force", no_argument, NULL, 'f'},
@@ -199,7 +200,7 @@ static int _cmd_device_remove(const struct cmd_struct *cmd,
 	optind = 0;
 	while (1) {
 		int c;
-		enum { GETOPT_VAL_ENQUEUE = 256 };
+		enum { GETOPT_VAL_ENQUEUE = GETOPT_VAL_FIRST };
 		static const struct option long_options[] = {
 			{ "enqueue", no_argument, NULL, GETOPT_VAL_ENQUEUE},
 			{ NULL, 0, NULL, 0}
@@ -572,21 +573,147 @@ static const char * const cmd_device_stats_usage[] = {
 	"",
 	"-c|--check             return non-zero if any stat counter is not zero",
 	"-z|--reset             show current stats and reset values to zero",
+	"-T                     show current stats in tabular format",
 	HELPINFO_INSERT_GLOBALS,
 	HELPINFO_INSERT_FORMAT,
 	NULL
 };
+
+static int print_device_stat_string(struct format_ctx *fctx,
+		struct btrfs_ioctl_get_dev_stats *args, char *path, bool check)
+{
+	char *canonical_path = path_canonicalize(path);
+	char devid_str[32];
+	int j;
+	int err = 0;
+	static const struct {
+		const char name[32];
+		enum btrfs_dev_stat_values stat_idx;
+	} dev_stats[] = {
+		{ "write_io_errs", BTRFS_DEV_STAT_WRITE_ERRS },
+		{ "read_io_errs", BTRFS_DEV_STAT_READ_ERRS },
+		{ "flush_io_errs", BTRFS_DEV_STAT_FLUSH_ERRS },
+		{ "corruption_errs", BTRFS_DEV_STAT_CORRUPTION_ERRS },
+		{ "generation_errs", BTRFS_DEV_STAT_GENERATION_ERRS },
+	};
+	/*
+	 * The plain text and json formats cannot be mapped directly in all
+	 * cases and we have to switch.
+	 */
+	const bool json = (bconf.output_format == CMD_FORMAT_JSON);
+
+	/* No path when device is missing. */
+	if (!canonical_path) {
+		canonical_path = malloc(32);
+
+		if (!canonical_path) {
+			error("not enough memory for path buffer");
+			return -ENOMEM;
+		}
+
+		snprintf(canonical_path, 32, "devid:%llu", args->devid);
+	}
+	snprintf(devid_str, 32, "%llu", args->devid);
+	fmt_print_start_group(fctx, NULL, JSON_TYPE_MAP);
+	/* Plain text does not print device info */
+	if (json) {
+		fmt_print(fctx, "device", canonical_path);
+		fmt_print(fctx, "devid", args->devid);
+	}
+
+	for (j = 0; j < ARRAY_SIZE(dev_stats); j++) {
+		enum btrfs_dev_stat_values stat_idx = dev_stats[j].stat_idx;
+
+		/* We got fewer items than we know */
+		if (args->nr_items < stat_idx + 1)
+			continue;
+
+		/* Own format due to [/dev/name].value */
+		if (json) {
+			fmt_print(fctx, dev_stats[j].name, args->values[stat_idx]);
+		} else {
+			printf("[%s].%-16s %llu\n", canonical_path, dev_stats[j].name,
+					(unsigned long long)args->values[stat_idx]);
+		}
+		if (check && (args->values[stat_idx] > 0))
+			err |= 64;
+	}
+
+	fmt_print_end_group(fctx, NULL);
+	free(canonical_path);
+
+	return err;
+}
+
+
+static int print_device_stat_tabular(struct string_table *table, int row,
+		struct btrfs_ioctl_get_dev_stats *args, char *path, bool check)
+{
+	char *canonical_path = path_canonicalize(path);
+	int j;
+	int err = 0;
+	static const struct {
+		const char name[32];
+		enum btrfs_dev_stat_values stat_idx;
+	} dev_stats[] = {
+		{ "write_io_errs", BTRFS_DEV_STAT_WRITE_ERRS },
+		{ "read_io_errs", BTRFS_DEV_STAT_READ_ERRS },
+		{ "flush_io_errs", BTRFS_DEV_STAT_FLUSH_ERRS },
+		{ "corruption_errs", BTRFS_DEV_STAT_CORRUPTION_ERRS },
+		{ "generation_errs", BTRFS_DEV_STAT_GENERATION_ERRS },
+	};
+
+	/* Skip header + --- line */
+	row += 2;
+
+	/* No path when device is missing. */
+	if (!canonical_path) {
+		canonical_path = malloc(32);
+
+		if (!canonical_path) {
+			error("not enough memory for path buffer");
+			return -ENOMEM;
+		}
+
+		snprintf(canonical_path, 32, "devid:%llu", args->devid);
+	}
+	table_printf(table, 0, row, ">%llu", args->devid);
+	table_printf(table, 1, row, ">%s", canonical_path);
+	free(canonical_path);
+
+	for (j = 0; j < ARRAY_SIZE(dev_stats); j++) {
+		enum btrfs_dev_stat_values stat_idx = dev_stats[j].stat_idx;
+
+		/* We got fewer items than we know */
+		if (args->nr_items < stat_idx + 1)
+			continue;
+
+		table_printf(table, 2, row, ">%llu", args->values[stat_idx]);
+		table_printf(table, 3, row, ">%llu", args->values[stat_idx]);
+		table_printf(table, 4, row, ">%llu", args->values[stat_idx]);
+		table_printf(table, 5, row, ">%llu", args->values[stat_idx]);
+		table_printf(table, 6, row, ">%llu", args->values[stat_idx]);
+
+		if (check && (args->values[stat_idx] > 0))
+			err |= 64;
+	}
+
+	return err;
+}
 
 static int cmd_device_stats(const struct cmd_struct *cmd, int argc, char **argv)
 {
 	char *dev_path;
 	struct btrfs_ioctl_fs_info_args fi_args;
 	struct btrfs_ioctl_dev_info_args *di_args = NULL;
+	struct string_table *table = NULL;
 	int ret;
 	int fdmnt;
 	int i;
 	int err = 0;
-	int check = 0;
+	bool check = false;
+	bool free_table = false;
+	bool tabular = false;
 	__u64 flags = 0;
 	DIR *dirstream = NULL;
 	struct format_ctx fctx;
@@ -600,16 +727,19 @@ static int cmd_device_stats(const struct cmd_struct *cmd, int argc, char **argv)
 			{NULL, 0, NULL, 0}
 		};
 
-		c = getopt_long(argc, argv, "cz", long_options, NULL);
+		c = getopt_long(argc, argv, "czT", long_options, NULL);
 		if (c < 0)
 			break;
 
 		switch (c) {
 		case 'c':
-			check = 1;
+			check = true;
 			break;
 		case 'z':
 			flags = BTRFS_DEV_STATS_RESET;
+			break;
+		case 'T':
+			tabular = true;
 			break;
 		default:
 			usage_unknown_option(cmd, argv);
@@ -638,11 +768,35 @@ static int cmd_device_stats(const struct cmd_struct *cmd, int argc, char **argv)
 		goto out;
 	}
 
-	fmt_start(&fctx, device_stats_rowspec, 24, 0);
-	fmt_print_start_group(&fctx, "device-stats", JSON_TYPE_ARRAY);
+	if (tabular) {
+		/*
+		 * cols = Id/Path/write/read/flush/corruption/generation
+		 * rows = num devices + 2 (header and ---- line)
+		 */
+		table = table_create(7, fi_args.num_devices + 2);
+		if (!table) {
+			error("not enough memory");
+			goto out;
+		}
+		free_table = true;
+		table_printf(table, 0,0, "<Id");
+		table_printf(table, 1,0, "<Path");
+		table_printf(table, 2,0, "<Write errors");
+		table_printf(table, 3,0, "<Read errors");
+		table_printf(table, 4,0, "<Flush errors");
+		table_printf(table, 5,0, "<Corruption errors");
+		table_printf(table, 6,0, "<Generation errors");
+		for (i = 0; i < 7; i++)
+			table_printf(table, i, 1, "*-");
+	} else {
+		fmt_start(&fctx, device_stats_rowspec, 24, 0);
+		fmt_print_start_group(&fctx, "device-stats", JSON_TYPE_ARRAY);
+	}
+
 	for (i = 0; i < fi_args.num_devices; i++) {
 		struct btrfs_ioctl_get_dev_stats args = {0};
 		char path[BTRFS_DEVICE_PATH_NAME_MAX + 1];
+		int err2;
 
 		strncpy(path, (char *)di_args[i].path,
 			BTRFS_DEVICE_PATH_NAME_MAX);
@@ -656,79 +810,36 @@ static int cmd_device_stats(const struct cmd_struct *cmd, int argc, char **argv)
 			error("device stats ioctl failed on %s: %m",
 			      path);
 			err |= 1;
-		} else {
-			char *canonical_path;
-			char devid_str[32];
-			int j;
-			static const struct {
-				const char name[32];
-				u64 num;
-			} dev_stats[] = {
-				{ "write_io_errs", BTRFS_DEV_STAT_WRITE_ERRS },
-				{ "read_io_errs", BTRFS_DEV_STAT_READ_ERRS },
-				{ "flush_io_errs", BTRFS_DEV_STAT_FLUSH_ERRS },
-				{ "corruption_errs",
-					BTRFS_DEV_STAT_CORRUPTION_ERRS },
-				{ "generation_errs",
-					BTRFS_DEV_STAT_GENERATION_ERRS },
-			};
-			/*
-			 * The plain text and json formats cannot be
-			 * mapped directly in all cases and we have to switch
-			 */
-			const bool json = (bconf.output_format == CMD_FORMAT_JSON);
+			goto out;
+		}
 
-			canonical_path = path_canonicalize(path);
+		if (tabular)
+			err2 = print_device_stat_tabular(table, i, &args, path, check);
+		else
+			err2 = print_device_stat_string(&fctx, &args, path, check);
 
-			/* No path when device is missing. */
-			if (!canonical_path) {
-				canonical_path = malloc(32);
-				if (!canonical_path) {
-					error("not enough memory for path buffer");
-					goto out;
-				}
-				snprintf(canonical_path, 32,
-					 "devid:%llu", args.devid);
+		if (err2) {
+			if (err2 < 0) {
+				err = err2;
+				goto out;
+			} else {
+				err |= err2;
 			}
-			snprintf(devid_str, 32, "%llu", args.devid);
-			fmt_print_start_group(&fctx, NULL, JSON_TYPE_MAP);
-			/* Plain text does not print device info */
-			if (json) {
-				fmt_print(&fctx, "device", canonical_path);
-				fmt_print(&fctx, "devid", di_args[i].devid);
-			}
-
-			for (j = 0; j < ARRAY_SIZE(dev_stats); j++) {
-				/* We got fewer items than we know */
-				if (args.nr_items < dev_stats[j].num + 1)
-					continue;
-
-				/* Own format due to [/dev/name].value */
-				if (json) {
-					fmt_print(&fctx, dev_stats[j].name,
-						args.values[dev_stats[j].num]);
-				} else {
-					printf("[%s].%-16s %llu\n",
-						canonical_path,
-						dev_stats[j].name,
-						(unsigned long long)
-						args.values[dev_stats[j].num]);
-				}
-				if ((check == 1)
-				    && (args.values[dev_stats[j].num] > 0))
-					err |= 64;
-			}
-			fmt_print_end_group(&fctx, NULL);
-			free(canonical_path);
 		}
 	}
 
-	fmt_print_end_group(&fctx, "device-stats");
-	fmt_end(&fctx);
+	if (tabular) {
+		table_dump(table);
+	} else {
+		fmt_print_end_group(&fctx, "device-stats");
+		fmt_end(&fctx);
+	}
 
 out:
 	free(di_args);
 	close_file_or_dir(fdmnt, dirstream);
+	if (free_table)
+		table_free(table);
 
 	return err;
 }
@@ -809,6 +920,23 @@ static int cmd_device_usage(const struct cmd_struct *cmd, int argc, char **argv)
 }
 static DEFINE_SIMPLE_COMMAND(device_usage, "usage");
 
+static const char * const cmd_device_replace_usage[] = {
+	"btrfs device replace <command> [...]\n"
+	"\tReplace a device (alias of \"btrfs replace\")",
+	"Please see \"btrfs replace --help\" for more information.",
+	NULL
+};
+
+static int cmd_device_replace(const struct cmd_struct *unused,
+			      int argc, char **argv)
+{
+	return cmd_execute(&cmd_struct_replace, argc, argv);
+}
+
+/* Alias of 1st level command 'replace' as a subcommand of 'device' */
+static DEFINE_COMMAND(device_replace, "replace", cmd_device_replace,
+		      cmd_device_replace_usage, NULL, CMD_ALIAS);
+
 static const char device_cmd_group_info[] =
 "manage and query devices in the filesystem";
 
@@ -817,6 +945,7 @@ static const struct cmd_group device_cmd_group = {
 		&cmd_struct_device_add,
 		&cmd_struct_device_delete,
 		&cmd_struct_device_remove,
+		&cmd_struct_device_replace,
 		&cmd_struct_device_scan,
 		&cmd_struct_device_ready,
 		&cmd_struct_device_stats,

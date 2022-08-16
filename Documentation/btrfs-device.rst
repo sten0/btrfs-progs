@@ -74,6 +74,9 @@ remove [options] <device>|<devid> [<device>|<devid>...] <path>
 delete <device>|<devid> [<device>|<devid>...] <path>
         Alias of remove kept for backward compatibility
 
+replace <command> [options] <path>
+        Alias of whole command group *btrfs replace* for convenience. See ``btrfs-replace(8)``.
+
 ready <device>
         Wait until all devices of a multiple-device filesystem are scanned and
         registered within the kernel module. This is to provide a way for automatic
@@ -121,6 +124,9 @@ stats [options] <path>|<device>
                 Check if the stats are all zeros and return 0 if it is so. Set bit 6 of the
                 return code if any of the statistics is no-zero. The error values is 65 if
                 reading stats from at least one device failed, otherwise it's 64.
+
+        -T
+                Print stats in a tabular form, devices as rows and stats as columns
 
 usage [options] <path> [<path>...]::
         Show detailed information about internal allocations on devices.

@@ -12,6 +12,7 @@ Welcome to BTRFS documentation!
    Administration
    Hardware
    CHANGES
+   Feature-by-version
    Glossary
    INSTALL
 
@@ -45,11 +46,19 @@ Welcome to BTRFS documentation!
 
 .. toctree::
    :maxdepth: 1
+   :caption: Project information
+
+   Source-repositories
+   Contributors
+
+.. toctree::
+   :maxdepth: 1
    :caption: TODO
 
    Quick-start
    Interoperability
-   project-index
    trouble-index
    Experimental
    btrfs-ioctl
+   DocConventions
+   dev-send-stream
