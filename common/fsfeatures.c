@@ -172,6 +172,14 @@ static const struct btrfs_feature runtime_features[] = {
 		VERSION_TO_STRING2(safe, 4,9),
 		VERSION_TO_STRING2(default, 5,15),
 		.desc		= "free space tree (space_cache=v2)"
+	}, {
+		.name		= "block-group-tree",
+		.flag		= BTRFS_RUNTIME_FEATURE_BLOCK_GROUP_TREE,
+		.sysfs_name = "block_group_tree",
+		VERSION_TO_STRING2(compat, 6,0),
+		VERSION_NULL(safe),
+		VERSION_NULL(default),
+		.desc		= "block group tree to reduce mount time"
 	},
 	/* Keep this one last */
 	{
@@ -295,17 +303,21 @@ static void list_all_features(u64 mask_disallowed, enum feature_source source)
 	fprintf(stderr, "%s features available:\n", prefix);
 	for (i = 0; i < array_size - 1; i++) {
 		const struct btrfs_feature *feat = get_feature(i, source);
+		const char *sep = "";
 
 		if (feat->flag & mask_disallowed)
 			continue;
-		fprintf(stderr, "%-20s- %s (0x%llx", feat->name, feat->desc,
-				feat->flag);
-		if (feat->compat_ver)
-			fprintf(stderr, ", compat=%s", feat->compat_str);
-		if (feat->safe_ver)
-			fprintf(stderr, ", safe=%s", feat->safe_str);
+		fprintf(stderr, "%-20s- %s (", feat->name, feat->desc);
+		if (feat->compat_ver) {
+			fprintf(stderr, "compat=%s", feat->compat_str);
+			sep = ", ";
+		}
+		if (feat->safe_ver) {
+			fprintf(stderr, "%ssafe=%s", sep, feat->safe_str);
+			sep = ", ";
+		}
 		if (feat->default_ver)
-			fprintf(stderr, ", default=%s", feat->default_str);
+			fprintf(stderr, "%sdefault=%s", sep, feat->default_str);
 		fprintf(stderr, ")\n");
 	}
 }

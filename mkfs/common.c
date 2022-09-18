@@ -75,6 +75,8 @@ static int btrfs_create_tree_root(int fd, struct btrfs_mkfs_config *cfg,
 	int blk;
 	int i;
 	u8 uuid[BTRFS_UUID_SIZE];
+	bool block_group_tree = !!(cfg->runtime_features &
+				   BTRFS_RUNTIME_FEATURE_BLOCK_GROUP_TREE);
 
 	memset(buf->data + sizeof(struct btrfs_header), 0,
 		cfg->nodesize - sizeof(struct btrfs_header));
@@ -98,8 +100,10 @@ static int btrfs_create_tree_root(int fd, struct btrfs_mkfs_config *cfg,
 
 	for (i = 0; i < blocks_nr; i++) {
 		blk = blocks[i];
-		if (blk == MKFS_ROOT_TREE || blk == MKFS_CHUNK_TREE ||
-		    blk == MKFS_BLOCK_GROUP_TREE)
+		if (blk == MKFS_ROOT_TREE || blk == MKFS_CHUNK_TREE)
+			continue;
+
+		if (!block_group_tree && blk == MKFS_BLOCK_GROUP_TREE)
 			continue;
 
 		btrfs_set_root_bytenr(&root_item, cfg->blocks[blk]);
@@ -217,7 +221,8 @@ static int create_block_group_tree(int fd, struct btrfs_mkfs_config *cfg,
 
 	memset(buf->data + sizeof(struct btrfs_header), 0,
 		cfg->nodesize - sizeof(struct btrfs_header));
-	write_block_group_item(buf, 0, bg_offset, bg_size, bg_used, 0,
+	write_block_group_item(buf, 0, bg_offset, bg_size, bg_used,
+			       BTRFS_FIRST_CHUNK_TREE_OBJECTID,
 			       cfg->leaf_data_size -
 			       sizeof(struct btrfs_block_group_item));
 	btrfs_set_header_bytenr(buf, cfg->blocks[MKFS_BLOCK_GROUP_TREE]);
@@ -261,6 +266,60 @@ next:
 }
 
 /*
+ * Add @block into the @blocks array.
+ *
+ * The @blocks should already be in ascending order and no duplicate.
+ */
+static void mkfs_blocks_add(enum btrfs_mkfs_block *blocks, int *blocks_nr,
+			    enum btrfs_mkfs_block to_add)
+{
+	int i;
+
+	for (i = 0; i < *blocks_nr; i++) {
+		/* The target is already in the array. */
+		if (blocks[i] == to_add)
+			return;
+
+		/*
+		 * We find the first one past @to_add, move the array one slot
+		 * right, insert a new one.
+		 */
+		if (blocks[i] > to_add) {
+			memmove(blocks + i + 1, blocks + i, *blocks_nr - i);
+			blocks[i] = to_add;
+			(*blocks_nr)++;
+			return;
+		}
+		/* Current one still smaller than @to_add, go to next slot. */
+	}
+	/* All slots iterated and not match, insert into the last slot. */
+	blocks[i] = to_add;
+	(*blocks_nr)++;
+	return;
+}
+
+/*
+ * Remove @block from the @blocks array.
+ *
+ * The @blocks should already be in ascending order and no duplicate.
+ */
+static void mkfs_blocks_remove(enum btrfs_mkfs_block *blocks, int *blocks_nr,
+			       enum btrfs_mkfs_block to_remove)
+{
+	int i;
+
+	for (i = 0; i < *blocks_nr; i++) {
+		/* Found the target, move the array one slot left. */
+		if (blocks[i] == to_remove) {
+			memmove(blocks + i, blocks + i + 1, *blocks_nr - i - 1);
+			(*blocks_nr)--;
+		}
+	}
+	/* Nothing found, exit directly. */
+	return;
+}
+
+/*
  * @fs_uuid - if NULL, generates a UUID, returns back the new filesystem UUID
  *
  * The superblock signature is not valid, denotes a partially created
@@ -290,12 +349,12 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	struct btrfs_chunk *chunk;
 	struct btrfs_dev_item *dev_item;
 	struct btrfs_dev_extent *dev_extent;
-	const enum btrfs_mkfs_block *blocks = extent_tree_v1_blocks;
+	enum btrfs_mkfs_block blocks[MKFS_BLOCK_COUNT];
 	u8 chunk_tree_uuid[BTRFS_UUID_SIZE];
 	u8 *ptr;
 	int i;
 	int ret;
-	int blocks_nr = ARRAY_SIZE(extent_tree_v1_blocks);
+	int blocks_nr;
 	int blk;
 	u32 itemoff;
 	u32 nritems = 0;
@@ -304,6 +363,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	u32 array_size;
 	u32 item_size;
 	u64 total_used = 0;
+	u64 ro_flags = 0;
 	int skinny_metadata = !!(cfg->features &
 				 BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA);
 	u64 num_bytes;
@@ -312,18 +372,29 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	bool add_block_group = true;
 	bool free_space_tree = !!(cfg->runtime_features &
 				  BTRFS_RUNTIME_FEATURE_FREE_SPACE_TREE);
+	bool block_group_tree = !!(cfg->runtime_features &
+				   BTRFS_RUNTIME_FEATURE_BLOCK_GROUP_TREE);
 	bool extent_tree_v2 = !!(cfg->features &
 				 BTRFS_FEATURE_INCOMPAT_EXTENT_TREE_V2);
 
-	/* Don't include the free space tree in the blocks to process. */
-	if (!free_space_tree)
-		blocks_nr--;
+	memcpy(blocks, default_blocks,
+	       sizeof(enum btrfs_mkfs_block) * ARRAY_SIZE(default_blocks));
+	blocks_nr = ARRAY_SIZE(default_blocks);
 
-	if (extent_tree_v2) {
-		blocks = extent_tree_v2_blocks;
-		blocks_nr = ARRAY_SIZE(extent_tree_v2_blocks);
+	/*
+	 * Add one new block for block group tree.
+	 * And for block group tree, we don't need to add block group item
+	 * into extent tree, the item will be handled in block group tree
+	 * initialization.
+	 */
+	if (block_group_tree) {
+		mkfs_blocks_add(blocks, &blocks_nr, MKFS_BLOCK_GROUP_TREE);
 		add_block_group = false;
 	}
+
+	/* Don't include the free space tree in the blocks to process. */
+	if (!free_space_tree)
+		mkfs_blocks_remove(blocks, &blocks_nr, MKFS_FREE_SPACE_TREE);
 
 	if ((cfg->features & BTRFS_FEATURE_INCOMPAT_ZONED)) {
 		system_group_offset = zoned_system_group_offset(cfg->zone_size);
@@ -375,19 +446,18 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 		btrfs_set_super_cache_generation(&super, -1);
 	btrfs_set_super_incompat_flags(&super, cfg->features);
 	if (free_space_tree) {
-		u64 ro_flags = BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE |
-			BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE_VALID;
+		ro_flags |= (BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE |
+			     BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE_VALID);
 
-		btrfs_set_super_compat_ro_flags(&super, ro_flags);
 		btrfs_set_super_cache_generation(&super, 0);
 	}
-	if (extent_tree_v2) {
+	if (block_group_tree)
+		ro_flags |= BTRFS_FEATURE_COMPAT_RO_BLOCK_GROUP_TREE;
+	btrfs_set_super_compat_ro_flags(&super, ro_flags);
+
+	if (extent_tree_v2)
 		btrfs_set_super_nr_global_roots(&super, 1);
-		btrfs_set_super_block_group_root(&super,
-						 cfg->blocks[MKFS_BLOCK_GROUP_TREE]);
-		btrfs_set_super_block_group_root_generation(&super, 1);
-		btrfs_set_super_block_group_root_level(&super, 0);
-	}
+
 	if (cfg->label)
 		__strncpy_null(super.label, cfg->label, BTRFS_LABEL_SIZE - 1);
 
@@ -641,7 +711,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 			goto out;
 	}
 
-	if (extent_tree_v2) {
+	if (block_group_tree) {
 		ret = create_block_group_tree(fd, cfg, buf,
 					      system_group_offset,
 					      system_group_size, total_used);
