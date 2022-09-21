@@ -1,3 +1,9 @@
+btrfs-progs (5.19.1-1) unstable; urgency=medium
+
+  * New upstream release (closes: #1020233).
+
+ -- Adam Borowski <kilobyte@angband.pl>  Tue, 13 Sep 2022 21:03:02 +0200
+
 btrfs-progs (5.19-1) unstable; urgency=medium
 
   * New upstream release.
