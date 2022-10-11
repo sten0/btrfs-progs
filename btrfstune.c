@@ -16,27 +16,32 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <dirent.h>
-#include <uuid/uuid.h>
 #include <getopt.h>
-
-#include "kerncompat.h"
+#include <errno.h>
+#include <stdbool.h>
+#include <string.h>
+#include <uuid/uuid.h>
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/transaction.h"
-#include "common/utils.h"
 #include "kernel-shared/volumes.h"
+#include "kernel-shared/extent_io.h"
+#include "common/defs.h"
+#include "common/utils.h"
+#include "common/extent-cache.h"
 #include "common/open-utils.h"
 #include "common/parse-utils.h"
 #include "common/device-scan.h"
+#include "common/messages.h"
+#include "common/string-utils.h"
 #include "common/help.h"
 #include "common/box.h"
+#include "ioctl.h"
 
 static char *device;
 static int force = 0;
@@ -120,13 +125,12 @@ static int set_metadata_uuid(struct btrfs_root *root, const char *uuid_string)
 	uuid_changed = incompat_flags & BTRFS_FEATURE_INCOMPAT_METADATA_UUID;
 
 	if (super_flags & BTRFS_SUPER_FLAG_SEEDING) {
-		fprintf(stderr, "cannot set metadata UUID on a seed device\n");
+		error("cannot set metadata UUID on a seed device");
 		return 1;
 	}
 
 	if (check_unfinished_fsid_change(root->fs_info, unused1, unused2)) {
-		fprintf(stderr,
-			"UUID rewrite in progress, cannot change fsid\n");
+		error("UUID rewrite in progress, cannot change fsid");
 		return 1;
 	}
 
@@ -442,8 +446,7 @@ static int rewrite_checksums(struct btrfs_root *root, int csum_type)
 
 	/* FIXME: Sanity checks */
 	if (0) {
-		fprintf(stderr,
-			"UUID rewrite in progress, cannot change fsid\n");
+		error("UUID rewrite in progress, cannot change fsid");
 		return 1;
 	}
 
@@ -789,7 +792,8 @@ static int convert_to_bg_tree(struct btrfs_fs_info *fs_info)
 	trans = btrfs_start_transaction(fs_info->tree_root, 2);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		error("failed to start transaction: %d", ret);
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		return ret;
 	}
 
@@ -815,14 +819,14 @@ static int convert_to_bg_tree(struct btrfs_fs_info *fs_info)
 	/* Now commit the transaction to make above changes to reach disks. */
 	ret = btrfs_commit_transaction(trans, fs_info->tree_root);
 	if (ret < 0) {
-		error("failed to commit transaction for the new bg root: %d",
-		      ret);
+		error_msg(ERROR_MSG_COMMIT_TRANS, "new bg root: %d", ret);
 		goto error;
 	}
 	trans = btrfs_start_transaction(fs_info->tree_root, 2);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		error("failed to start transaction: %d", ret);
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		return ret;
 	}
 
@@ -862,13 +866,15 @@ iterate_bgs:
 			ret = btrfs_commit_transaction(trans,
 							fs_info->tree_root);
 			if (ret < 0) {
-				error("failed to commit transaction: %d", ret);
+				errno = -ret;
+				error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
 				return ret;
 			}
 			trans = btrfs_start_transaction(fs_info->tree_root, 2);
 			if (IS_ERR(trans)) {
 				ret = PTR_ERR(trans);
-				error("failed to start transaction: %d", ret);
+				errno = -ret;
+				error_msg(ERROR_MSG_START_TRANS, "%m");
 				return ret;
 			}
 		}
@@ -886,7 +892,8 @@ iterate_bgs:
 			BTRFS_FEATURE_COMPAT_RO_BLOCK_GROUP_TREE);
 	ret = btrfs_commit_transaction(trans, fs_info->tree_root);
 	if (ret < 0) {
-		error("faield to commit the final transaction: %d", ret);
+		errno = -ret;
+		error_msg(ERROR_MSG_COMMIT_TRANS, "final transaction: %m");
 		return ret;
 	}
 	printf("Converted the filesystem to block group tree feature\n");
@@ -949,7 +956,11 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 #endif
 			{ NULL, 0, NULL, 0 }
 		};
+#if EXPERIMENTAL
 		int c = getopt_long(argc, argv, "S:rxfuU:nmM:b", long_options, NULL);
+#else
+		int c = getopt_long(argc, argv, "S:rxfuU:nmM:", long_options, NULL);
+#endif
 
 		if (c < 0)
 			break;
@@ -1082,7 +1093,7 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 	}
 	if (seeding_flag) {
 		if (btrfs_fs_incompat(root->fs_info, METADATA_UUID)) {
-			fprintf(stderr, "SEED flag cannot be changed on a metadata-uuid changed fs\n");
+			error("SEED flag cannot be changed on a metadata-uuid changed fs");
 			ret = 1;
 			goto out;
 		}
@@ -1092,7 +1103,7 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 "this is dangerous, clearing the seeding flag may cause the derived device not to be mountable!");
 			ret = ask_user("We are going to clear the seeding flag, are you sure?");
 			if (!ret) {
-				fprintf(stderr, "Clear seeding flag canceled\n");
+				error("clear seeding flag canceled");
 				ret = 1;
 				goto out;
 			}
@@ -1119,8 +1130,7 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 
 	if (change_metadata_uuid) {
 		if (seeding_flag) {
-			fprintf(stderr,
-		"Not allowed to set both seeding flag and uuid metadata\n");
+			error("not allowed to set both seeding flag and uuid metadata");
 			ret = 1;
 			goto out;
 		}
@@ -1137,9 +1147,9 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 
 	if (random_fsid || (new_fsid_str && !change_metadata_uuid)) {
 		if (btrfs_fs_incompat(root->fs_info, METADATA_UUID)) {
-			fprintf(stderr,
+			error(
 		"Cannot rewrite fsid while METADATA_UUID flag is active. \n"
-		"Ensure fsid and metadata_uuid match before retrying.\n");
+		"Ensure fsid and metadata_uuid match before retrying.");
 			ret = 1;
 			goto out;
 		}
@@ -1151,7 +1161,7 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 "\tIf cancelled or interrupted, run 'btrfstune -u' to restart.");
 			ret = ask_user("We are going to change UUID, are your sure?");
 			if (!ret) {
-				fprintf(stderr, "UUID change canceled\n");
+				error("UUID change canceled");
 				ret = 1;
 				goto out;
 			}

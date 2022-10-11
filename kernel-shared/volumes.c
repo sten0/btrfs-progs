@@ -2864,7 +2864,7 @@ static int reset_device_item_total_bytes(struct btrfs_fs_info *fs_info,
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
 		errno = -ret;
-		error("error starting transaction: %d (%m)", ret);
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		return ret;
 	}
 
@@ -2886,7 +2886,7 @@ static int reset_device_item_total_bytes(struct btrfs_fs_info *fs_info,
 	ret = btrfs_commit_transaction(trans, chunk_root);
 	if (ret < 0) {
 		errno = -ret;
-		error("failed to commit current transaction: %d (%m)", ret);
+		error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
 		btrfs_release_path(&path);
 		return ret;
 	}
@@ -2921,7 +2921,7 @@ static int btrfs_fix_block_device_size(struct btrfs_fs_info *fs_info,
 		return -errno;
 	}
 
-	block_dev_size = round_down(btrfs_device_size(device->fd, &st),
+	block_dev_size = round_down(device_get_partition_size_fd_stat(device->fd, &st),
 				    fs_info->sectorsize);
 
 	/*

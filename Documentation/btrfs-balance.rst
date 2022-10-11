@@ -127,7 +127,7 @@ EXAMPLES
 --------
 
 A more comprehensive example when going from one to multiple devices, and back,
-can be found in section *TYPICAL USECASES* of ``btrfs-device(8)``.
+can be found in section *TYPICAL USECASES* of :doc:`btrfs-device(8)<btrfs-device>`.
 
 MAKING BLOCK GROUP LAYOUT MORE COMPACT
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -262,12 +262,12 @@ or a balance operation is still running, and **2** on other errors.
 AVAILABILITY
 ------------
 
-**btrfs** is part of btrfs-progs.
-Please refer to the btrfs wiki http://btrfs.wiki.kernel.org for
-further details.
+**btrfs** is part of btrfs-progs.  Please refer to the documentation at
+https://btrfs.readthedocs.io or wiki http://btrfs.wiki.kernel.org for further
+information.
 
 SEE ALSO
 --------
 
-``mkfs.btrfs(8)``,
-``btrfs-device(8)``
+:doc:`mkfs.btrfs(8)<mkfs.btrfs>`,
+:doc:`btrfs-device(8)<btrfs-device>`

@@ -11,6 +11,11 @@ check_prereq btrfs
 setup_root_helper
 prepare_test_dev
 
+if grep -q '1$'  "/sys/fs/btrfs/features/send_stream_version"; then
+	_not_run "kernel does not support send stream >1"
+	exit
+fi
+
 here=`pwd`
 
 # assumes the filesystem exists, and does mount, write, snapshot, send, unmount
@@ -31,8 +36,7 @@ send_one() {
 	run_check_mount_test_dev "-o" "compress-force=$algorithm"
 	cd "$TEST_MNT" || _fail "cannot chdir to TEST_MNT"
 
-	trucate -s0 "$file"
-	chmod a+w "$file"
+	_mktemp_local "$file"
 
 	run_check $SUDO_HELPER "$TOP/btrfs" subvolume create "$subv"
 	run_check $SUDO_HELPER dd if=/dev/zero of="$subv/file1" bs=1M count=1

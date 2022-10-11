@@ -16,25 +16,20 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <zlib.h>
 #include <getopt.h>
-
-#include "kerncompat.h"
+#include <errno.h>
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
-#include "kernel-shared/print-tree.h"
-#include "kernel-shared/transaction.h"
-#include "kernel-lib/list.h"
 #include "kernel-shared/volumes.h"
+#include "kernel-shared/extent_io.h"
 #include "common/utils.h"
-#include "crypto/crc32c.h"
 #include "common/extent-cache.h"
 #include "common/help.h"
+#include "common/messages.h"
+#include "common/string-utils.h"
 #include "cmds/commands.h"
 
 /*
@@ -396,7 +391,7 @@ int main(int argc, char **argv)
 	ret = btrfs_find_root_search(fs_info, &filter, &result, &found);
 	if (ret < 0) {
 		errno = -ret;
-		fprintf(stderr, "Fail to search the tree root: %m\n");
+		error("fail to search the tree root: %m");
 		goto out;
 	}
 	if (ret > 0) {

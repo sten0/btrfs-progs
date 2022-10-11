@@ -17,36 +17,27 @@
  */
 
 #include "kerncompat.h"
-
+#include <sys/ioctl.h>
 #include <unistd.h>
-#include <stdint.h>
-#include <dirent.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <math.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/ioctl.h>
-#include <libgen.h>
-#include <mntent.h>
-#include <assert.h>
 #include <getopt.h>
-#include <uuid/uuid.h>
 #include <limits.h>
-
-#include "kernel-shared/ctree.h"
-#include "ioctl.h"
-#include "cmds/commands.h"
-#include "kernel-lib/list.h"
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "kernel-lib/sizes.h"
 #include "common/utils.h"
-
-#include "kernel-shared/send.h"
 #include "common/send-utils.h"
 #include "common/help.h"
 #include "common/path-utils.h"
+#include "common/string-utils.h"
+#include "common/messages.h"
+#include "cmds/commands.h"
+#include "ioctl.h"
 
 #define SEND_BUFFER_SIZE	SZ_64K
-
 
 struct btrfs_send {
 	int send_fd;
@@ -293,15 +284,12 @@ static int do_send(struct btrfs_send *send, u64 parent_root_id,
 		ret = -errno;
 		error("send ioctl failed with %d: %m", ret);
 		if (ret == -EINVAL && (!is_first_subvol || !is_last_subvol))
-			fprintf(stderr,
+			pr_stderr(LOG_DEFAULT,
 				"Try upgrading your kernel or don't use -e.\n");
 		goto out;
 	}
-	if (bconf.verbose > 1)
-		fprintf(stderr, "BTRFS_IOC_SEND returned %d\n", ret);
-
-	if (bconf.verbose > 1)
-		fprintf(stderr, "joining genl thread\n");
+	pr_stderr(LOG_INFO, "BTRFS_IOC_SEND returned %d\n", ret);
+	pr_stderr(LOG_DEBUG, "joining genl thread\n");
 
 	close(pipefd[1]);
 	pipefd[1] = -1;
@@ -514,8 +502,8 @@ static int cmd_send(const struct cmd_struct *cmd, int argc, char **argv)
 	char *snapshot_parent = NULL;
 	u64 root_id = 0;
 	u64 parent_root_id = 0;
-	int full_send = 1;
-	int new_end_cmd_semantic = 0;
+	bool full_send = true;
+	bool new_end_cmd_semantic = false;
 	u64 send_flags = 0;
 	u64 proto = 0;
 
@@ -563,7 +551,7 @@ static int cmd_send(const struct cmd_struct *cmd, int argc, char **argv)
 			bconf_be_quiet();
 			break;
 		case 'e':
-			new_end_cmd_semantic = 1;
+			new_end_cmd_semantic = true;
 			break;
 		case 'c':
 			subvol = realpath(optarg, NULL);
@@ -595,7 +583,7 @@ static int cmd_send(const struct cmd_struct *cmd, int argc, char **argv)
 			free(subvol);
 			subvol = NULL;
 			free_send_info(&send);
-			full_send = 0;
+			full_send = false;
 			break;
 		case 'f':
 			if (arg_copy_path(outname, optarg, sizeof(outname))) {
@@ -627,7 +615,7 @@ static int cmd_send(const struct cmd_struct *cmd, int argc, char **argv)
 				goto out;
 			}
 
-			full_send = 0;
+			full_send = false;
 			break;
 		case 'i':
 			error("option -i was removed, use -c instead");
@@ -754,7 +742,7 @@ static int cmd_send(const struct cmd_struct *cmd, int argc, char **argv)
 
 	if ((send_flags & BTRFS_SEND_FLAG_NO_FILE_DATA) && bconf.verbose > 1)
 		if (bconf.verbose > 1)
-			fprintf(stderr, "Mode NO_FILE_DATA enabled\n");
+			pr_stderr(LOG_DEFAULT, "Mode NO_FILE_DATA enabled\n");
 	send.proto_supported = get_sysfs_proto_supported();
 	if (send.proto_supported == 1) {
 		if (send.proto > send.proto_supported) {
@@ -782,9 +770,8 @@ static int cmd_send(const struct cmd_struct *cmd, int argc, char **argv)
 			goto out;
 		}
 	}
-	if (bconf.verbose > 1)
-		fprintf(stderr, "Protocol version requested: %u (supported %u)\n",
-			send.proto, send.proto_supported);
+	pr_stderr(LOG_INFO, "Protocol version requested: %u (supported %u)\n",
+		send.proto, send.proto_supported);
 
 	for (i = optind; i < argc; i++) {
 		int is_first_subvol;
@@ -793,8 +780,7 @@ static int cmd_send(const struct cmd_struct *cmd, int argc, char **argv)
 		free(subvol);
 		subvol = argv[i];
 
-		if (bconf.verbose > BTRFS_BCONF_QUIET)
-			fprintf(stderr, "At subvol %s\n", subvol);
+		pr_stderr(LOG_DEFAULT, "At subvol %s\n", subvol);
 
 		subvol = realpath(subvol, NULL);
 		if (!subvol) {

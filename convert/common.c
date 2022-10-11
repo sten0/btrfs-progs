@@ -14,14 +14,22 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 #include <uuid/uuid.h>
+#include "kernel-lib/sizes.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/extent_io.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/volumes.h"
-#include "common/utils.h"
 #include "common/path-utils.h"
+#include "common/messages.h"
 #include "mkfs/common.h"
 #include "convert/common.h"
+#include "ioctl.h"
 
 #define BTRFS_CONVERT_META_GROUP_SIZE SZ_32M
 
@@ -135,7 +143,7 @@ static int setup_temp_super(int fd, struct btrfs_mkfs_config *cfg,
 	btrfs_set_super_csum_type(&super, cfg->csum_type);
 	btrfs_set_super_chunk_root(&super, chunk_bytenr);
 	btrfs_set_super_cache_generation(&super, -1);
-	btrfs_set_super_incompat_flags(&super, cfg->features);
+	btrfs_set_super_incompat_flags(&super, cfg->features.incompat_flags);
 	if (cfg->label)
 		__strncpy_null(super.label, cfg->label, BTRFS_LABEL_SIZE - 1);
 
@@ -253,14 +261,10 @@ static int setup_temp_root_tree(int fd, struct btrfs_mkfs_config *cfg,
 				"extent < dev %llu < %llu, "
 				"dev < fs %llu < %llu, "
 				"fs < csum %llu < %llu",
-				(unsigned long long)root_bytenr,
-				(unsigned long long)extent_bytenr,
-				(unsigned long long)extent_bytenr,
-				(unsigned long long)dev_bytenr,
-				(unsigned long long)dev_bytenr,
-				(unsigned long long)fs_bytenr,
-				(unsigned long long)fs_bytenr,
-				(unsigned long long)csum_bytenr);
+				root_bytenr, extent_bytenr,
+				extent_bytenr, dev_bytenr,
+				dev_bytenr, fs_bytenr,
+				fs_bytenr, csum_bytenr);
 		return -EINVAL;
 	}
 	buf = malloc(sizeof(*buf) + cfg->nodesize);
@@ -425,8 +429,7 @@ static int setup_temp_chunk_tree(int fd, struct btrfs_mkfs_config *cfg,
 	/* Must ensure SYS chunk starts before META chunk */
 	if (meta_chunk_start < sys_chunk_start) {
 		error("wrong chunk order: meta < system %llu < %llu",
-				(unsigned long long)meta_chunk_start,
-				(unsigned long long)sys_chunk_start);
+				meta_chunk_start, sys_chunk_start);
 		return -EINVAL;
 	}
 	buf = malloc(sizeof(*buf) + cfg->nodesize);
@@ -496,8 +499,7 @@ static int setup_temp_dev_tree(int fd, struct btrfs_mkfs_config *cfg,
 	/* Must ensure SYS chunk starts before META chunk */
 	if (meta_chunk_start < sys_chunk_start) {
 		error("wrong chunk order: meta < system %llu < %llu",
-				(unsigned long long)meta_chunk_start,
-				(unsigned long long)sys_chunk_start);
+				meta_chunk_start, sys_chunk_start);
 		return -EINVAL;
 	}
 	buf = malloc(sizeof(*buf) + cfg->nodesize);
@@ -580,7 +582,7 @@ static int insert_temp_extent_item(int fd, struct extent_buffer *buf,
 	struct btrfs_disk_key tree_info_key;
 	struct btrfs_tree_block_info *info;
 	int itemsize;
-	int skinny_metadata = cfg->features &
+	int skinny_metadata = cfg->features.incompat_flags &
 			      BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA;
 	int ret;
 
@@ -704,16 +706,11 @@ static int setup_temp_extent_tree(int fd, struct btrfs_mkfs_config *cfg,
 				"extent < dev %llu < %llu, "
 				"dev < fs %llu < %llu, "
 				"fs < csum %llu < %llu",
-				(unsigned long long)chunk_bytenr,
-				(unsigned long long)root_bytenr,
-				(unsigned long long)root_bytenr,
-				(unsigned long long)extent_bytenr,
-				(unsigned long long)extent_bytenr,
-				(unsigned long long)dev_bytenr,
-				(unsigned long long)dev_bytenr,
-				(unsigned long long)fs_bytenr,
-				(unsigned long long)fs_bytenr,
-				(unsigned long long)csum_bytenr);
+				chunk_bytenr, root_bytenr,
+				root_bytenr, extent_bytenr,
+				extent_bytenr, dev_bytenr,
+				dev_bytenr, fs_bytenr,
+				fs_bytenr, csum_bytenr);
 		return -EINVAL;
 	}
 	buf = malloc(sizeof(*buf) + cfg->nodesize);

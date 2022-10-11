@@ -43,13 +43,6 @@ void extent_io_tree_init(struct extent_io_tree *tree)
 	tree->max_cache_size = (u64)total_memory() / 4;
 }
 
-void extent_io_tree_init_cache_max(struct extent_io_tree *tree,
-				   u64 max_cache_size)
-{
-	extent_io_tree_init(tree);
-	tree->max_cache_size = max_cache_size;
-}
-
 static struct extent_state *alloc_extent_state(void)
 {
 	struct extent_state *state;
@@ -88,6 +81,11 @@ void extent_io_tree_cleanup(struct extent_io_tree *tree)
 	while(!list_empty(&tree->lru)) {
 		eb = list_entry(tree->lru.next, struct extent_buffer, lru);
 		if (eb->refs) {
+			/*
+			 * Reset extent buffer refs to 1, so the
+			 * free_extent_buffer_nocache() can free it for sure.
+			 */
+			eb->refs = 1;
 			fprintf(stderr,
 				"extent buffer leak: start %llu len %u\n",
 				(unsigned long long)eb->start, eb->len);
@@ -978,7 +976,7 @@ int write_data_to_disk(struct btrfs_fs_info *info, void *buf, u64 offset,
 
 			eb = malloc(sizeof(struct extent_buffer) + this_len);
 			if (!eb) {
-				fprintf(stderr, "cannot allocate memory for eb\n");
+				error_msg(ERROR_MSG_MEMORY, "extent buffer");
 				ret = -ENOMEM;
 				goto out;
 			}
@@ -1013,7 +1011,7 @@ int write_data_to_disk(struct btrfs_fs_info *info, void *buf, u64 offset,
 				if (ret < 0) {
 					fprintf(stderr, "Error writing to "
 						"device %d\n", errno);
-					ret = errno;
+					ret = -errno;
 					kfree(multi);
 					return ret;
 				} else {

@@ -16,32 +16,42 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
+#include <sys/stat.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <dirent.h>
-#include <zlib.h>
 #include <getopt.h>
-
-#include "kerncompat.h"
-#include "crypto/crc32c.h"
+#include <errno.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <string.h>
+#include <time.h>
+#include <zlib.h>
+#include "kernel-lib/list.h"
+#include "kernel-lib/rbtree.h"
+#include "kernel-lib/rbtree_types.h"
+#include "kernel-lib/sizes.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/transaction.h"
-#include "common/utils.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/extent_io.h"
+#include "crypto/crc32c.h"
+#include "common/internal.h"
+#include "common/messages.h"
+#include "common/box.h"
+#include "common/utils.h"
 #include "common/extent-cache.h"
 #include "common/help.h"
 #include "common/device-utils.h"
 #include "common/open-utils.h"
+#include "common/string-utils.h"
 #include "image/metadump.h"
 #include "image/sanitize.h"
-#include "common/box.h"
+#include "ioctl.h"
 
 #define MAX_WORKER_THREADS	(32)
 
@@ -396,7 +406,7 @@ static void *dump_worker(void *data)
 			async->bufsize = compressBound(async->size);
 			async->buffer = malloc(async->bufsize);
 			if (!async->buffer) {
-				error("not enough memory for async buffer");
+				error_msg(ERROR_MSG_MEMORY, "async buffer");
 				pthread_mutex_lock(&md->mutex);
 				if (!md->error)
 					md->error = -ENOMEM;
@@ -685,8 +695,7 @@ static int flush_pending(struct metadump_struct *md, int done)
 			if (ret < size) {
 				free(async->buffer);
 				free(async);
-				error("unable to read superblock at %llu: %m",
-						(unsigned long long)start);
+				error("unable to read superblock at %llu: %m", start);
 				return -errno;
 			}
 			size = 0;
@@ -701,8 +710,7 @@ static int flush_pending(struct metadump_struct *md, int done)
 			if (!extent_buffer_uptodate(eb)) {
 				free(async->buffer);
 				free(async);
-				error("unable to read metadata block %llu",
-					(unsigned long long)start);
+				error("unable to read metadata block %llu", start);
 				return -EIO;
 			}
 			copy_buffer(md, async->buffer + offset, eb);
@@ -966,7 +974,7 @@ static int copy_from_extent_tree(struct metadump_struct *metadump,
 
 		if (num_bytes == 0) {
 			error("extent length 0 at bytenr %llu key type %d",
-					(unsigned long long)bytenr, key.type);
+					bytenr, key.type);
 			ret = -EIO;
 			break;
 		}
@@ -986,7 +994,7 @@ static int copy_from_extent_tree(struct metadump_struct *metadump,
 						 is_data);
 				if (ret) {
 					error("unable to add block %llu: %d",
-						(unsigned long long)bytenr, ret);
+						bytenr, ret);
 					break;
 				}
 			}
@@ -1350,7 +1358,7 @@ static void write_backup_supers(int fd, u8 *buf)
 		return;
 	}
 
-	size = btrfs_device_size(fd, &st);
+	size = device_get_partition_size_fd_stat(fd, &st);
 
 	for (i = 1; i < BTRFS_SUPER_MIRROR_MAX; i++) {
 		bytenr = btrfs_sb_offset(i);
@@ -1538,7 +1546,7 @@ static void *restore_worker(void *data)
 
 	buffer = malloc(buffer_size);
 	if (!buffer) {
-		error("not enough memory for restore worker buffer");
+		error_msg(ERROR_MSG_MEMORY, "restore worker buffer");
 		pthread_mutex_lock(&mdres->mutex);
 		if (!mdres->error)
 			mdres->error = -ENOMEM;
@@ -1755,14 +1763,14 @@ static int add_cluster(struct meta_cluster *cluster,
 		item = &cluster->items[i];
 		async = calloc(1, sizeof(*async));
 		if (!async) {
-			error("not enough memory for async data");
+			error_msg(ERROR_MSG_MEMORY, "async data");
 			return -ENOMEM;
 		}
 		async->start = le64_to_cpu(item->bytenr);
 		async->bufsize = le32_to_cpu(item->size);
 		async->buffer = malloc(async->bufsize);
 		if (!async->buffer) {
-			error("not enough memory for async buffer");
+			error_msg(ERROR_MSG_MEMORY, "async buffer");
 			free(async);
 			return -ENOMEM;
 		}
@@ -1890,7 +1898,7 @@ static int read_chunk_tree_block(struct mdrestore_struct *mdres,
 
 		fs_chunk = malloc(sizeof(struct fs_chunk));
 		if (!fs_chunk) {
-			error("not enough memory to allocate chunk");
+			error_msg(ERROR_MSG_MEMORY, "allocate chunk");
 			return -ENOMEM;
 		}
 		memset(fs_chunk, 0, sizeof(*fs_chunk));
@@ -1951,8 +1959,7 @@ static int read_chunk_block(struct mdrestore_struct *mdres, u8 *buffer,
 		if (btrfs_header_bytenr(eb) != bytenr) {
 			error(
 			"eb bytenr does not match found bytenr: %llu != %llu",
-				(unsigned long long)btrfs_header_bytenr(eb),
-				(unsigned long long)bytenr);
+				btrfs_header_bytenr(eb), bytenr);
 			ret = -EUCLEAN;
 			break;
 		}
@@ -1967,8 +1974,7 @@ static int read_chunk_block(struct mdrestore_struct *mdres, u8 *buffer,
 		}
 		if (btrfs_header_owner(eb) != BTRFS_CHUNK_TREE_OBJECTID) {
 			error("wrong eb %llu owner %llu",
-				(unsigned long long)bytenr,
-				(unsigned long long)btrfs_header_owner(eb));
+				bytenr, btrfs_header_owner(eb));
 			ret = -EUCLEAN;
 			break;
 		}
@@ -2007,13 +2013,13 @@ static int search_for_chunk_blocks(struct mdrestore_struct *mdres)
 
 	cluster = malloc(BLOCK_SIZE);
 	if (!cluster) {
-		error("not enough memory for cluster");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return -ENOMEM;
 	}
 
 	buffer = malloc(max_size);
 	if (!buffer) {
-		error("not enough memory for buffer");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		free(cluster);
 		return -ENOMEM;
 	}
@@ -2021,7 +2027,7 @@ static int search_for_chunk_blocks(struct mdrestore_struct *mdres)
 	if (mdres->compress_method == COMPRESS_ZLIB) {
 		tmp = malloc(max_size);
 		if (!tmp) {
-			error("not enough memory for buffer");
+			error_msg(ERROR_MSG_MEMORY, NULL);
 			free(cluster);
 			free(buffer);
 			return -ENOMEM;
@@ -2282,7 +2288,7 @@ static int build_chunk_tree(struct mdrestore_struct *mdres,
 
 	buffer = malloc(le32_to_cpu(item->size));
 	if (!buffer) {
-		error("not enough memory to allocate buffer");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return -ENOMEM;
 	}
 
@@ -2730,8 +2736,10 @@ static int fixup_chunks_and_devices(struct btrfs_fs_info *fs_info,
 	}
 	trans = btrfs_start_transaction(fs_info->tree_root, 1);
 	if (IS_ERR(trans)) {
-		error("cannot start transaction %ld", PTR_ERR(trans));
-		return PTR_ERR(trans);
+		ret = PTR_ERR(trans);
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
+		return ret;
 	}
 
 	if (btrfs_super_log_root(fs_info->super_copy) && fs_info->log_root_tree)
@@ -2747,7 +2755,8 @@ static int fixup_chunks_and_devices(struct btrfs_fs_info *fs_info,
 
 	ret = btrfs_commit_transaction(trans, fs_info->tree_root);
 	if (ret) {
-		error("unable to commit transaction: %d", ret);
+		errno = -ret;
+		error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
 		return ret;
 	}
 	if (btrfs_super_log_root(fs_info->super_copy) && fs_info->log_root_tree)
@@ -2800,7 +2809,7 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 
 	cluster = malloc(BLOCK_SIZE);
 	if (!cluster) {
-		error("not enough memory for cluster");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		ret = -ENOMEM;
 		goto failed_info;
 	}
@@ -2960,9 +2969,7 @@ static int update_disk_super_on_device(struct btrfs_fs_info *info,
 
 	devid = btrfs_device_id(leaf, dev_item);
 	if (devid != cur_devid) {
-		error("devid mismatch: %llu != %llu",
-				(unsigned long long)devid,
-				(unsigned long long)cur_devid);
+		error("devid mismatch: %llu != %llu", devid, cur_devid);
 		ret = -EIO;
 		goto out;
 	}
@@ -3073,8 +3080,7 @@ int BOX_MAIN(image)(int argc, char *argv[])
 			num_threads = arg_strtou64(optarg);
 			if (num_threads > MAX_WORKER_THREADS) {
 				error("number of threads out of range: %llu > %d",
-					(unsigned long long)num_threads,
-					MAX_WORKER_THREADS);
+					num_threads, MAX_WORKER_THREADS);
 				return 1;
 			}
 			break;
@@ -3082,7 +3088,7 @@ int BOX_MAIN(image)(int argc, char *argv[])
 			compress_level = arg_strtou64(optarg);
 			if (compress_level > 9) {
 				error("compression level out of range: %llu",
-					(unsigned long long)compress_level);
+					compress_level);
 				return 1;
 			}
 			break;

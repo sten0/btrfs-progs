@@ -14,31 +14,34 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <linux/version.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/ioctl.h>
 #include <errno.h>
-#include <uuid/uuid.h>
-#include <ctype.h>
 #include <fcntl.h>
 #include <ftw.h>
 #include <mntent.h>
-#include <linux/version.h>
 #include <getopt.h>
 #include <limits.h>
-
-#include <btrfsutil.h>
-
-#include "kerncompat.h"
+#include <dirent.h>
+#include <stdbool.h>
+#include <uuid/uuid.h>
+#include "libbtrfsutil/btrfsutil.h"
+#include "kernel-lib/list.h"
+#include "kernel-lib/sizes.h"
 #include "kernel-shared/ctree.h"
-#include "common/utils.h"
 #include "kernel-shared/volumes.h"
-#include "cmds/commands.h"
-#include "cmds/filesystem-usage.h"
 #include "kernel-lib/list_sort.h"
 #include "kernel-shared/disk-io.h"
+#include "common/defs.h"
+#include "common/internal.h"
+#include "common/messages.h"
+#include "common/utils.h"
 #include "common/help.h"
 #include "common/units.h"
 #include "common/fsfeatures.h"
@@ -47,6 +50,10 @@
 #include "common/device-utils.h"
 #include "common/open-utils.h"
 #include "common/parse-utils.h"
+#include "common/filesystem-utils.h"
+#include "cmds/commands.h"
+#include "cmds/filesystem-usage.h"
+#include "ioctl.h"
 
 /*
  * for btrfs fi show, we maintain a hash of fsids we've already printed.
@@ -79,7 +86,7 @@ static void print_df(int fd, struct btrfs_ioctl_space_args *sargs, unsigned unit
 		unusable = device_get_zone_unusable(fd, sp->flags);
 		ok = (unusable != DEVICE_ZONE_UNUSABLE_UNKNOWN);
 
-		printf("%s, %s: total=%s, used=%s%s%s\n",
+		pr_verbose(LOG_DEFAULT, "%s, %s: total=%s, used=%s%s%s\n",
 			btrfs_group_type_str(sp->flags),
 			btrfs_group_profile_str(sp->flags),
 			pretty_size_mode(sp->total_bytes, unit_mode),
@@ -236,8 +243,8 @@ static void print_devices(struct btrfs_fs_devices *fs_devices,
 
 	list_sort(NULL, all_devices, cmp_device_id);
 	list_for_each_entry(device, all_devices, dev_list) {
-		printf("\tdevid %4llu size %s used %s path %s\n",
-		       (unsigned long long)device->devid,
+		pr_verbose(LOG_DEFAULT, "\tdevid %4llu size %s used %s path %s\n",
+		       device->devid,
 		       pretty_size_mode(device->total_bytes, unit_mode),
 		       pretty_size_mode(device->bytes_used, unit_mode),
 		       device->name);
@@ -261,21 +268,20 @@ static void print_one_uuid(struct btrfs_fs_devices *fs_devices,
 	device = list_entry(fs_devices->devices.next, struct btrfs_device,
 			    dev_list);
 	if (device->label && device->label[0])
-		printf("Label: '%s' ", device->label);
+		pr_verbose(LOG_DEFAULT, "Label: '%s' ", device->label);
 	else
-		printf("Label: none ");
+		pr_verbose(LOG_DEFAULT, "Label: none ");
 
 	total = device->total_devs;
-	printf(" uuid: %s\n\tTotal devices %llu FS bytes used %s\n", uuidbuf,
-	       (unsigned long long)total,
-	       pretty_size_mode(device->super_bytes_used, unit_mode));
+	pr_verbose(LOG_DEFAULT, " uuid: %s\n\tTotal devices %llu FS bytes used %s\n", uuidbuf,
+	       total, pretty_size_mode(device->super_bytes_used, unit_mode));
 
 	print_devices(fs_devices, &devs_found, unit_mode);
 
 	if (devs_found < total) {
-		printf("\t*** Some devices missing\n");
+		pr_verbose(LOG_DEFAULT, "\t*** Some devices missing\n");
 	}
-	printf("\n");
+	pr_verbose(LOG_DEFAULT, "\n");
 }
 
 /* adds up all the used spaces as reported by the space info ioctl
@@ -308,11 +314,11 @@ static int print_one_fs(struct btrfs_ioctl_fs_info_args *fs_info,
 
 	uuid_unparse(fs_info->fsid, uuidbuf);
 	if (label && *label)
-		printf("Label: '%s' ", label);
+		pr_verbose(LOG_DEFAULT, "Label: '%s' ", label);
 	else
-		printf("Label: none ");
+		pr_verbose(LOG_DEFAULT, "Label: none ");
 
-	printf(" uuid: %s\n\tTotal devices %llu FS bytes used %s\n", uuidbuf,
+	pr_verbose(LOG_DEFAULT, " uuid: %s\n\tTotal devices %llu FS bytes used %s\n", uuidbuf,
 			fs_info->num_devices,
 			pretty_size_mode(calc_used_bytes(space_info),
 					 unit_mode));
@@ -325,14 +331,14 @@ static int print_one_fs(struct btrfs_ioctl_fs_info_args *fs_info,
 		/* Add check for missing devices even mounted */
 		fd = open((char *)tmp_dev_info->path, O_RDONLY);
 		if (fd < 0) {
-			printf("\tdevid %4llu size 0 used 0 path %s MISSING\n",
+			pr_verbose(LOG_DEFAULT, "\tdevid %4llu size 0 used 0 path %s MISSING\n",
 					tmp_dev_info->devid, tmp_dev_info->path);
 			continue;
 
 		}
 		close(fd);
 		canonical_path = path_canonicalize((char *)tmp_dev_info->path);
-		printf("\tdevid %4llu size %s used %s path %s\n",
+		pr_verbose(LOG_DEFAULT, "\tdevid %4llu size %s used %s path %s\n",
 			tmp_dev_info->devid,
 			pretty_size_mode(tmp_dev_info->total_bytes, unit_mode),
 			pretty_size_mode(tmp_dev_info->bytes_used, unit_mode),
@@ -341,7 +347,7 @@ static int print_one_fs(struct btrfs_ioctl_fs_info_args *fs_info,
 		free(canonical_path);
 	}
 
-	printf("\n");
+	pr_verbose(LOG_DEFAULT, "\n");
 	return 0;
 }
 
@@ -901,12 +907,12 @@ static int cmd_filesystem_defrag(const struct cmd_struct *cmd,
 				 int argc, char **argv)
 {
 	int fd;
-	int flush = 0;
+	bool flush = false;
 	u64 start = 0;
 	u64 len = (u64)-1;
 	u64 thresh;
 	int i;
-	int recursive = 0;
+	bool recursive = false;
 	int ret = 0;
 	int compress_type = BTRFS_COMPRESS_NONE;
 	DIR *dirstream;
@@ -941,7 +947,7 @@ static int cmd_filesystem_defrag(const struct cmd_struct *cmd,
 				compress_type = parse_compress_type_arg(optarg);
 			break;
 		case 'f':
-			flush = 1;
+			flush = true;
 			break;
 		case 'v':
 			bconf_be_verbose();
@@ -962,7 +968,7 @@ static int cmd_filesystem_defrag(const struct cmd_struct *cmd,
 			}
 			break;
 		case 'r':
-			recursive = 1;
+			recursive = true;
 			break;
 		default:
 			usage_unknown_option(cmd, argv);
@@ -1068,7 +1074,7 @@ next:
 	}
 
 	if (defrag_global_errors)
-		fprintf(stderr, "total %d failures\n", defrag_global_errors);
+		pr_stderr(LOG_DEFAULT, "total %d failures\n", defrag_global_errors);
 
 	return !!defrag_global_errors;
 }
@@ -1152,7 +1158,7 @@ static int check_resize_args(const char *amount, const char *path) {
 		res_str = "max";
 	} else if (strcmp(sizestr, "cancel") == 0) {
 		/* Different format, print and exit */
-		printf("Request to cancel resize\n");
+		pr_verbose(LOG_DEFAULT, "Request to cancel resize\n");
 		goto out;
 	} else {
 		if (sizestr[0] == '-') {
@@ -1195,7 +1201,7 @@ static int check_resize_args(const char *amount, const char *path) {
 		res_str = pretty_size_mode(new_size, UNITS_DEFAULT);
 	}
 
-	printf("Resize device id %lld (%s) from %s to %s\n", devid,
+	pr_verbose(LOG_DEFAULT, "Resize device id %lld (%s) from %s to %s\n", devid,
 		di_args[dev_idx].path,
 		pretty_size_mode(di_args[dev_idx].total_bytes, UNITS_DEFAULT),
 		res_str);
@@ -1338,7 +1344,7 @@ static int cmd_filesystem_label(const struct cmd_struct *cmd,
 
 		ret = get_label(argv[optind], label);
 		if (!ret)
-			fprintf(stdout, "%s\n", label);
+			pr_verbose(LOG_DEFAULT, "%s\n", label);
 
 		return ret;
 	}

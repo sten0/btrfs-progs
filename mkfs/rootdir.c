@@ -19,24 +19,26 @@
 #include "kerncompat.h"
 
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <sys/xattr.h>
-#include <linux/limits.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "kernel-lib/sizes.h"
+#include "kernel-shared/extent_io.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/volumes.h"
-#include "common/internal.h"
 #include "kernel-shared/disk-io.h"
-#include "common/messages.h"
 #include "kernel-shared/transaction.h"
-#include "common/utils.h"
-#include "mkfs/rootdir.h"
-#include "mkfs/common.h"
-#include "common/send-utils.h"
+#include "common/internal.h"
+#include "common/messages.h"
 #include "common/path-utils.h"
+#include "mkfs/rootdir.h"
 
 static u32 fs_block_size;
 
@@ -341,8 +343,7 @@ static int add_file_items(struct btrfs_trans_handle *trans,
 		ret_read = pread64(fd, buffer, st->st_size, bytes_read);
 		if (ret_read == -1) {
 			error("cannot read %s at offset %llu length %llu: %m",
-				path_name, (unsigned long long)bytes_read,
-				(unsigned long long)st->st_size);
+				path_name, bytes_read, (unsigned long long)st->st_size);
 			free(buffer);
 			goto end;
 		}
@@ -388,10 +389,8 @@ again:
 		ret_read = pread64(fd, eb->data, sectorsize, file_pos +
 				   bytes_read);
 		if (ret_read == -1) {
-			error("cannot read %s at offset %llu length %llu: %m",
-				path_name,
-				(unsigned long long)file_pos + bytes_read,
-				(unsigned long long)sectorsize);
+			error("cannot read %s at offset %llu length %u: %m",
+				path_name, file_pos + bytes_read, sectorsize);
 			goto end;
 		}
 
@@ -531,7 +530,13 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 				goto fail;
 			}
 
-			cur_inum = st.st_ino;
+			/*
+			 * We can not directly use the source ino number,
+			 * as there is a chance that the ino is smaller than
+			 * BTRFS_FIRST_FREE_OBJECTID, which will screw up
+			 * backref code.
+			 */
+			cur_inum = st.st_ino + BTRFS_FIRST_FREE_OBJECTID;
 			ret = add_directory_items(trans, root,
 						  cur_inum, parent_inum,
 						  cur_file->d_name,
@@ -590,7 +595,7 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 				}
 				dir_entry->path = strdup(tmp);
 				if (!dir_entry->path) {
-					error("not enough memory to store path");
+					error_msg(ERROR_MSG_MEMORY, NULL);
 					ret = -ENOMEM;
 					goto fail;
 				}
@@ -656,7 +661,13 @@ int btrfs_mkfs_fill_dir(const char *source_dir, struct btrfs_root *root,
 	INIT_LIST_HEAD(&dir_head.list);
 
 	trans = btrfs_start_transaction(root, 1);
-	BUG_ON(IS_ERR(trans));
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
+		goto fail;
+}
+
 	ret = traverse_directory(trans, root, source_dir, &dir_head);
 	if (ret) {
 		error("unable to traverse directory %s: %d", source_dir, ret);
@@ -664,7 +675,8 @@ int btrfs_mkfs_fill_dir(const char *source_dir, struct btrfs_root *root,
 	}
 	ret = btrfs_commit_transaction(trans, root);
 	if (ret) {
-		error("transaction commit failed: %d", ret);
+		errno = -ret;
+		error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
 		goto out;
 	}
 
@@ -807,8 +819,11 @@ static int get_device_extent_end(struct btrfs_fs_info *fs_info,
 
 	btrfs_init_path(&path);
 	ret = btrfs_search_slot(NULL, dev_root, &key, &path, 0, 0);
-	/* Not really possible */
-	BUG_ON(ret == 0);
+	if (ret == 0) {
+		error("DEV_EXTENT for devid %llu not found", devid);
+		ret = -EUCLEAN;
+		goto out;
+	}
 
 	ret = btrfs_previous_item(dev_root, &path, devid, BTRFS_DEV_EXTENT_KEY);
 	if (ret < 0)
@@ -862,7 +877,7 @@ static int set_device_size(struct btrfs_fs_info *fs_info,
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
 		errno = -ret;
-		error("failed to start transaction: %d (%m)", ret);
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		return ret;
 	}
 	key.objectid = BTRFS_DEV_ITEMS_OBJECTID;
@@ -892,7 +907,7 @@ static int set_device_size(struct btrfs_fs_info *fs_info,
 	ret = btrfs_commit_transaction(trans, chunk_root);
 	if (ret < 0) {
 		errno = -ret;
-		error("failed to commit current transaction: %d (%m)", ret);
+		error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
 	}
 	btrfs_release_path(&path);
 	return ret;
@@ -933,7 +948,11 @@ int btrfs_mkfs_shrink_fs(struct btrfs_fs_info *fs_info, u64 *new_size_ret,
 		return ret;
 	}
 
-	BUG_ON(!IS_ALIGNED(new_size, fs_info->sectorsize));
+	if (!IS_ALIGNED(new_size, fs_info->sectorsize)) {
+		error("shrunk filesystem size %llu not aligned to %u",
+				new_size, fs_info->sectorsize);
+		return -EUCLEAN;
+	}
 
 	device = list_entry(fs_info->fs_devices->devices.next,
 			   struct btrfs_device, dev_list);

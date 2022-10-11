@@ -14,22 +14,31 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include <sys/stat.h>
 #include <unistd.h>
-#include <uuid/uuid.h>
-#include <blkid/blkid.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <uuid/uuid.h>
+#include <blkid/blkid.h>
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
+#include "kernel-shared/extent_io.h"
 #include "kernel-shared/zoned.h"
-#include "common/utils.h"
+#include "common/fsfeatures.h"
+#include "common/internal.h"
+#include "common/messages.h"
 #include "common/path-utils.h"
 #include "common/device-utils.h"
-#include "common/device-scan.h"
 #include "common/open-utils.h"
 #include "mkfs/common.h"
+#include "ioctl.h"
 
 static u64 reference_root_table[] = {
 	[MKFS_ROOT_TREE]	=	BTRFS_ROOT_TREE_OBJECTID,
@@ -75,8 +84,8 @@ static int btrfs_create_tree_root(int fd, struct btrfs_mkfs_config *cfg,
 	int blk;
 	int i;
 	u8 uuid[BTRFS_UUID_SIZE];
-	bool block_group_tree = !!(cfg->runtime_features &
-				   BTRFS_RUNTIME_FEATURE_BLOCK_GROUP_TREE);
+	bool block_group_tree = !!(cfg->features.compat_ro_flags &
+				   BTRFS_FEATURE_COMPAT_RO_BLOCK_GROUP_TREE);
 
 	memset(buf->data + sizeof(struct btrfs_header), 0,
 		cfg->nodesize - sizeof(struct btrfs_header));
@@ -218,12 +227,22 @@ static int create_block_group_tree(int fd, struct btrfs_mkfs_config *cfg,
 				   u64 bg_offset, u64 bg_size, u64 bg_used)
 {
 	int ret;
+	u64 chunk_objectid = BTRFS_FIRST_CHUNK_TREE_OBJECTID;
+
+	/*
+	 * For extent-tree-v2, chunk_objectid of block group item is reused
+	 * to indicate which extent-tree the block group is in.
+	 *
+	 * Thus for the initial image, we should set the chunk_objectid to 0,
+	 * as all initial bgs are in the extent tree with global id 0.
+	 */
+	if (cfg->features.incompat_flags & BTRFS_FEATURE_INCOMPAT_EXTENT_TREE_V2)
+		chunk_objectid = 0;
 
 	memset(buf->data + sizeof(struct btrfs_header), 0,
 		cfg->nodesize - sizeof(struct btrfs_header));
 	write_block_group_item(buf, 0, bg_offset, bg_size, bg_used,
-			       BTRFS_FIRST_CHUNK_TREE_OBJECTID,
-			       cfg->leaf_data_size -
+			       chunk_objectid, cfg->leaf_data_size -
 			       sizeof(struct btrfs_block_group_item));
 	btrfs_set_header_bytenr(buf, cfg->blocks[MKFS_BLOCK_GROUP_TREE]);
 	btrfs_set_header_owner(buf, BTRFS_BLOCK_GROUP_TREE_OBJECTID);
@@ -363,18 +382,17 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	u32 array_size;
 	u32 item_size;
 	u64 total_used = 0;
-	u64 ro_flags = 0;
-	int skinny_metadata = !!(cfg->features &
+	int skinny_metadata = !!(cfg->features.incompat_flags &
 				 BTRFS_FEATURE_INCOMPAT_SKINNY_METADATA);
 	u64 num_bytes;
 	u64 system_group_offset = BTRFS_BLOCK_RESERVED_1M_FOR_SUPER;
 	u64 system_group_size = BTRFS_MKFS_SYSTEM_GROUP_SIZE;
 	bool add_block_group = true;
-	bool free_space_tree = !!(cfg->runtime_features &
-				  BTRFS_RUNTIME_FEATURE_FREE_SPACE_TREE);
-	bool block_group_tree = !!(cfg->runtime_features &
-				   BTRFS_RUNTIME_FEATURE_BLOCK_GROUP_TREE);
-	bool extent_tree_v2 = !!(cfg->features &
+	bool free_space_tree = !!(cfg->features.compat_ro_flags &
+				  BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE);
+	bool block_group_tree = !!(cfg->features.compat_ro_flags &
+				   BTRFS_FEATURE_COMPAT_RO_BLOCK_GROUP_TREE);
+	bool extent_tree_v2 = !!(cfg->features.incompat_flags &
 				 BTRFS_FEATURE_INCOMPAT_EXTENT_TREE_V2);
 
 	memcpy(blocks, default_blocks,
@@ -396,7 +414,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	if (!free_space_tree)
 		mkfs_blocks_remove(blocks, &blocks_nr, MKFS_FREE_SPACE_TREE);
 
-	if ((cfg->features & BTRFS_FEATURE_INCOMPAT_ZONED)) {
+	if ((cfg->features.incompat_flags & BTRFS_FEATURE_INCOMPAT_ZONED)) {
 		system_group_offset = zoned_system_group_offset(cfg->zone_size);
 		system_group_size = cfg->zone_size;
 	}
@@ -440,20 +458,14 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_super_stripesize(&super, cfg->stripesize);
 	btrfs_set_super_csum_type(&super, cfg->csum_type);
 	btrfs_set_super_chunk_root_generation(&super, 1);
-	if (cfg->features & BTRFS_FEATURE_INCOMPAT_ZONED)
+	if (cfg->features.incompat_flags & BTRFS_FEATURE_INCOMPAT_ZONED)
 		btrfs_set_super_cache_generation(&super, 0);
 	else
 		btrfs_set_super_cache_generation(&super, -1);
-	btrfs_set_super_incompat_flags(&super, cfg->features);
-	if (free_space_tree) {
-		ro_flags |= (BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE |
-			     BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE_VALID);
-
+	btrfs_set_super_incompat_flags(&super, cfg->features.incompat_flags);
+	if (free_space_tree)
 		btrfs_set_super_cache_generation(&super, 0);
-	}
-	if (block_group_tree)
-		ro_flags |= BTRFS_FEATURE_COMPAT_RO_BLOCK_GROUP_TREE;
-	btrfs_set_super_compat_ro_flags(&super, ro_flags);
+	btrfs_set_super_compat_ro_flags(&super, cfg->features.compat_ro_flags);
 
 	if (extent_tree_v2)
 		btrfs_set_super_nr_global_roots(&super, 1);
@@ -505,16 +517,14 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 
 		if (cfg->blocks[blk] < first_free) {
 			error("block[%d] below first free: %llu < %llu",
-					i, (unsigned long long)cfg->blocks[blk],
-					(unsigned long long)first_free);
+					i, cfg->blocks[blk], first_free);
 			ret = -EINVAL;
 			goto out;
 		}
 		if (i > 0 && cfg->blocks[blk] < cfg->blocks[blocks[i - 1]]) {
 			error("blocks %d and %d in reverse order: %llu < %llu",
 				blk, blocks[i - 1],
-				(unsigned long long)cfg->blocks[blk],
-				(unsigned long long)cfg->blocks[blocks[i - 1]]);
+				cfg->blocks[blk], cfg->blocks[blocks[i - 1]]);
 			ret = -EINVAL;
 			goto out;
 		}
@@ -1017,17 +1027,11 @@ static int check_overwrite(const char *device)
 	}
 
 	if (!blkid_probe_lookup_value(pr, "TYPE", &type, NULL)) {
-		fprintf(stderr,
-			"%s appears to contain an existing "
-			"filesystem (%s).\n", device, type);
+		error("%s appears to contain an existing filesystem (%s)", device, type);
 	} else if (!blkid_probe_lookup_value(pr, "PTTYPE", &type, NULL)) {
-		fprintf(stderr,
-			"%s appears to contain a partition "
-			"table (%s).\n", device, type);
+		error("%s appears to contain a partition table (%s)", device, type);
 	} else {
-		fprintf(stderr,
-			"%s appears to contain something weird "
-			"according to blkid\n", device);
+		error("%s appears to contain something weird according to blkid", device);
 	}
 	ret = 1;
 
@@ -1035,9 +1039,7 @@ out:
 	if (pr)
 		blkid_free_probe(pr);
 	if (ret == -1)
-		fprintf(stderr,
-			"probe of %s failed, cannot detect "
-			  "existing filesystem.\n", device);
+		error("probe of %s failed, cannot detect existing filesystem", device);
 
 	/* Either nothing found or there was an error is a reason to double check */
 	if (ret == 0 || ret == -1) {
@@ -1145,7 +1147,7 @@ int is_vol_small(const char *file)
 		close(fd);
 		return e;
 	}
-	size = btrfs_device_size(fd, &st);
+	size = device_get_partition_size_fd_stat(fd, &st);
 	if (size == 0) {
 		close(fd);
 		return -1;
@@ -1171,7 +1173,7 @@ int test_minimum_size(const char *file, u64 min_dev_size)
 		close(fd);
 		return -errno;
 	}
-	if (btrfs_device_size(fd, &statbuf) < min_dev_size) {
+	if (device_get_partition_size_fd_stat(fd, &statbuf) < min_dev_size) {
 		close(fd);
 		return 1;
 	}

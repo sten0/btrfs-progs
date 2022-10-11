@@ -17,21 +17,28 @@
  */
 
 #include <sys/ioctl.h>
-#include <unistd.h>
 #include <getopt.h>
 #include <errno.h>
-#include <btrfsutil.h>
-
+#include <dirent.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include "libbtrfsutil/btrfsutil.h"
+#include "kernel-lib/list.h"
+#include "kernel-lib/rbtree.h"
+#include "kernel-lib/rbtree_types.h"
 #include "kernel-shared/ctree.h"
-#include "ioctl.h"
 #include "common/open-utils.h"
-#include "cmds/commands.h"
-#include "qgroup.h"
 #include "common/utils.h"
 #include "common/help.h"
 #include "common/units.h"
 #include "common/parse-utils.h"
+#include "common/messages.h"
+#include "cmds/commands.h"
 #include "cmds/qgroup.h"
+#include "ioctl.h"
 
 #define BTRFS_QGROUP_NFILTERS_INCREASE (2 * BTRFS_QGROUP_FILTER_MAX)
 #define BTRFS_QGROUP_NCOMPS_INCREASE (2 * BTRFS_QGROUP_COMP_MAX)
@@ -500,7 +507,7 @@ static struct btrfs_qgroup_comparer_set *qgroup_alloc_comparer_set(void)
 	       sizeof(struct btrfs_qgroup_comparer);
 	set = calloc(1, size);
 	if (!set) {
-		error("memory allocation failed");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		exit(1);
 	}
 
@@ -551,7 +558,7 @@ static int qgroup_setup_comparer(struct btrfs_qgroup_comparer_set **comp_set,
 static int sort_comp(struct btrfs_qgroup *entry1, struct btrfs_qgroup *entry2,
 		     struct btrfs_qgroup_comparer_set *set)
 {
-	int qgroupid_compared = 0;
+	bool qgroupid_compared = false;
 	int i, ret = 0;
 
 	if (!set || !set->ncomps)
@@ -567,7 +574,7 @@ static int sort_comp(struct btrfs_qgroup *entry1, struct btrfs_qgroup *entry2,
 			return ret;
 
 		if (set->comps[i].comp_func == comp_entry_with_qgroupid)
-			qgroupid_compared = 1;
+			qgroupid_compared = true;
 	}
 
 	if (!qgroupid_compared) {
@@ -660,7 +667,7 @@ static struct btrfs_qgroup *get_or_add_qgroup(
 
 	bq = calloc(1, sizeof(*bq));
 	if (!bq) {
-		error("memory allocation failed");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -671,8 +678,7 @@ static struct btrfs_qgroup *get_or_add_qgroup(
 	ret = qgroup_tree_insert(qgroup_lookup, bq);
 	if (ret) {
 		errno = -ret;
-		error("failed to insert %llu into tree: %m",
-		       (unsigned long long)bq->qgroupid);
+		error("failed to insert %llu into tree: %m", bq->qgroupid);
 		free(bq);
 		return ERR_PTR(ret);
 	}
@@ -747,7 +753,7 @@ static int update_qgroup_relation(struct qgroup_lookup *qgroup_lookup,
 
 	list = malloc(sizeof(*list));
 	if (!list) {
-		error("memory allocation failed");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return -ENOMEM;
 	}
 
@@ -881,7 +887,7 @@ static struct btrfs_qgroup_filter_set *qgroup_alloc_filter_set(void)
 	       sizeof(struct btrfs_qgroup_filter);
 	set = calloc(1, size);
 	if (!set) {
-		error("memory allocation failed");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		exit(1);
 	}
 	set->total = BTRFS_QGROUP_NFILTERS_INCREASE;
@@ -908,7 +914,7 @@ static int qgroup_setup_filter(struct btrfs_qgroup_filter_set **filter_set,
 		tmp = set;
 		set = realloc(set, size);
 		if (!set) {
-			error("memory allocation failed");
+			error_msg(ERROR_MSG_MEMORY, NULL);
 			free(tmp);
 			exit(1);
 		}
@@ -1348,8 +1354,8 @@ static int show_qgroups(int fd,
 static int qgroup_parse_sort_string(const char *opt_arg,
 				   struct btrfs_qgroup_comparer_set **comps)
 {
-	int order;
-	int flag;
+	bool order;
+	bool flag;
 	char *p;
 	char **ptr_argv;
 	int what_to_sort;
@@ -1362,17 +1368,17 @@ static int qgroup_parse_sort_string(const char *opt_arg,
 
 	p = strtok(opt_tmp, ",");
 	while (p) {
-		flag = 0;
+		flag = false;
 		ptr_argv = all_sort_items;
 
 		while (*ptr_argv) {
 			if (strcmp(*ptr_argv, p) == 0) {
-				flag = 1;
+				flag = true;
 				break;
 			} else {
 				p++;
 				if (strcmp(*ptr_argv, p) == 0) {
-					flag = 1;
+					flag = true;
 					p--;
 					break;
 				}
@@ -1381,18 +1387,18 @@ static int qgroup_parse_sort_string(const char *opt_arg,
 			ptr_argv++;
 		}
 
-		if (flag == 0) {
+		if (!flag) {
 			ret = 1;
 			goto out;
 		} else {
 			if (*p == '+') {
-				order = 0;
+				order = false;
 				p++;
 			} else if (*p == '-') {
-				order = 1;
+				order = true;
 				p++;
 			} else
-				order = 0;
+				order = false;
 
 			what_to_sort = qgroup_get_sort_item(p);
 			if (what_to_sort < 0) {
@@ -1434,7 +1440,7 @@ static int qgroup_inherit_realloc(struct btrfs_qgroup_inherit **inherit, int n,
 
 	out = calloc(sizeof(*out) + sizeof(out->qgroups[0]) * (nitems + n), 1);
 	if (out == NULL) {
-		error("not enough memory");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return -ENOMEM;
 	}
 
@@ -1743,7 +1749,7 @@ static int cmd_qgroup_show(const struct cmd_struct *cmd, int argc, char **argv)
 	u64 qgroupid;
 	int filter_flag = 0;
 	unsigned unit_mode;
-	int sync = 0;
+	bool sync = false;
 	enum btrfs_util_error err;
 
 	struct btrfs_qgroup_comparer_set *comparer_set;
@@ -1801,7 +1807,7 @@ static int cmd_qgroup_show(const struct cmd_struct *cmd, int argc, char **argv)
 			}
 			break;
 		case GETOPT_VAL_SYNC:
-			sync = 1;
+			sync = true;
 			break;
 		default:
 			usage_unknown_option(cmd, argv);
@@ -1870,8 +1876,8 @@ static int cmd_qgroup_limit(const struct cmd_struct *cmd, int argc, char **argv)
 	char *path = NULL;
 	struct btrfs_ioctl_qgroup_limit_args args;
 	unsigned long long size;
-	int compressed = 0;
-	int exclusive = 0;
+	bool compressed = false;
+	bool exclusive = false;
 	DIR *dirstream = NULL;
 	enum btrfs_util_error err;
 
@@ -1882,10 +1888,10 @@ static int cmd_qgroup_limit(const struct cmd_struct *cmd, int argc, char **argv)
 			break;
 		switch (c) {
 		case 'c':
-			compressed = 1;
+			compressed = true;
 			break;
 		case 'e':
-			exclusive = 1;
+			exclusive = true;
 			break;
 		default:
 			usage_unknown_option(cmd, argv);

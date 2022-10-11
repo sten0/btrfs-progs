@@ -17,47 +17,62 @@
  */
 
 #include "kerncompat.h"
-
-#include <sys/ioctl.h>
-#include <sys/mount.h>
-#include "ioctl.h"
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <dirent.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <unistd.h>
 #include <getopt.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <string.h>
+#include <pthread.h>
 #include <uuid/uuid.h>
-#include <ctype.h>
-#include <blkid/blkid.h>
+#include "kernel-lib/list.h"
+#include "kernel-lib/list_sort.h"
+#include "kernel-lib/rbtree.h"
+#include "kernel-lib/sizes.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
-#include "kernel-shared/free-space-tree.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
 #include "kernel-shared/zoned.h"
 #include "crypto/crc32c.h"
+#include "common/defs.h"
+#include "common/internal.h"
+#include "common/messages.h"
 #include "common/utils.h"
 #include "common/path-utils.h"
 #include "common/device-utils.h"
 #include "common/device-scan.h"
-#include "kernel-lib/list_sort.h"
 #include "common/help.h"
 #include "common/rbtree-utils.h"
 #include "common/parse-utils.h"
-#include "mkfs/common.h"
-#include "mkfs/rootdir.h"
 #include "common/fsfeatures.h"
 #include "common/box.h"
 #include "common/units.h"
+#include "common/string-utils.h"
 #include "check/qgroup-verify.h"
+#include "mkfs/common.h"
+#include "mkfs/rootdir.h"
 
 struct mkfs_allocation {
 	u64 data;
 	u64 metadata;
 	u64 mixed;
 	u64 system;
+};
+
+static bool opt_zero_end = true;
+static bool opt_discard = true;
+static bool opt_zoned = true;
+static int opt_oflags = O_RDWR;
+
+struct prepare_device_progress {
+	char *file;
+	u64 dev_block_count;
+	u64 block_count;
+	int ret;
 };
 
 static int create_metadata_block_groups(struct btrfs_root *root, bool mixed,
@@ -86,7 +101,12 @@ static int create_metadata_block_groups(struct btrfs_root *root, bool mixed,
 		return ret;
 
 	trans = btrfs_start_transaction(root, 1);
-	BUG_ON(IS_ERR(trans));
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
+		return ret;
+	}
 
 	root->fs_info->system_allocs = 1;
 	/*
@@ -344,8 +364,7 @@ static int create_one_raid_group(struct btrfs_trans_handle *trans,
 			(BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_DATA)) {
 		allocation->mixed += chunk_size;
 	} else {
-		error("unrecognized profile type: 0x%llx",
-				(unsigned long long)type);
+		error("unrecognized profile type: 0x%llx", type);
 		ret = -EINVAL;
 	}
 
@@ -406,7 +425,7 @@ static void print_usage(int ret)
 	printf("\t-L|--label LABEL            set the filesystem label\n");
 	printf("\t-U|--uuid UUID              specify the filesystem UUID (must be unique)\n");
 	printf("  creation:\n");
-	printf("\t-b|--byte-count SIZE        set filesystem size to SIZE (on the first device)\n");
+	printf("\t-b|--byte-count SIZE        set size of each device to SIZE (filesystem size is sum of all device sizes)\n");
 	printf("\t-r|--rootdir DIR            copy files from DIR to the image root directory\n");
 	printf("\t--shrink                    (with --rootdir) shrink the filled filesystem to minimal size\n");
 	printf("\t-K|--nodiscard              do not perform whole device TRIM\n");
@@ -417,34 +436,8 @@ static void print_usage(int ret)
 	printf("\t-V|--version                print the mkfs.btrfs version and exit\n");
 	printf("\t--help                      print this help and exit\n");
 	printf("  deprecated:\n");
-	printf("\t-l|--leafsize SIZE          deprecated, alias for nodesize\n");
+	printf("\t-l|--leafsize SIZE          removed in 6.0, use --nodesize\n");
 	exit(ret);
-}
-
-static u64 parse_profile(const char *s)
-{
-	int ret;
-	u64 flags = 0;
-
-	ret = parse_bg_profile(s, &flags);
-	if (ret) {
-		error("unknown profile %s", s);
-		exit(1);
-	}
-
-	return flags;
-}
-
-static char *parse_label(const char *input)
-{
-	int len = strlen(input);
-
-	if (len >= BTRFS_LABEL_SIZE) {
-		error("label %s is too long (max %d)", input,
-			BTRFS_LABEL_SIZE - 1);
-		exit(1);
-	}
-	return strdup(input);
 }
 
 static int zero_output_file(int out_fd, u64 size)
@@ -471,18 +464,6 @@ static int zero_output_file(int out_fd, u64 size)
 	if (written < 1)
 		ret = -EIO;
 	return ret;
-}
-
-static bool is_ssd(const char *file)
-{
-	char rotational;
-	int ret;
-
-	ret = device_get_queue_param(file, "rotational", &rotational, 1);
-	if (ret < 1)
-		return false;
-
-	return rotational == '0';
 }
 
 static int _cmp_device_by_id(void *priv, struct list_head *a,
@@ -610,7 +591,12 @@ static int cleanup_temp_chunks(struct btrfs_fs_info *fs_info,
 
 	btrfs_init_path(&path);
 	trans = btrfs_start_transaction(root, 1);
-	BUG_ON(IS_ERR(trans));
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
+		return ret;
+	}
 
 	key.objectid = 0;
 	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
@@ -906,7 +892,8 @@ static int setup_quota_root(struct btrfs_fs_info *fs_info)
 	trans = btrfs_start_transaction(fs_info->tree_root, 2);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
-		error("failed to start transaction: %d (%m)", ret);
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		return ret;
 	}
 	ret = btrfs_create_root(trans, fs_info, BTRFS_QUOTA_TREE_OBJECTID);
@@ -948,7 +935,8 @@ static int setup_quota_root(struct btrfs_fs_info *fs_info)
 
 	ret = btrfs_commit_transaction(trans, fs_info->tree_root);
 	if (ret < 0) {
-		error("failed to commit current transaction: %d (%m)", ret);
+		errno = -ret;
+		error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
 		return ret;
 	}
 
@@ -970,6 +958,30 @@ fail:
 	return ret;
 }
 
+/* Thread callback for device preparation */
+static void *prepare_one_device(void *ctx)
+{
+	struct prepare_device_progress *prepare_ctx = ctx;
+	int fd;
+
+	fd = open(prepare_ctx->file, opt_oflags);
+	if (fd < 0) {
+		error("unable to open %s: %m", prepare_ctx->file);
+		prepare_ctx->ret = -errno;
+		return NULL;
+	}
+	prepare_ctx->ret = btrfs_prepare_device(fd, prepare_ctx->file,
+				&prepare_ctx->dev_block_count,
+				prepare_ctx->block_count,
+				(bconf.verbose ? PREP_DEVICE_VERBOSE : 0) |
+				(opt_zero_end ? PREP_DEVICE_ZERO_END : 0) |
+				(opt_discard ? PREP_DEVICE_DISCARD : 0) |
+				(opt_zoned ? PREP_DEVICE_ZONED : 0));
+	close(fd);
+
+	return NULL;
+}
+
 int BOX_MAIN(mkfs)(int argc, char **argv)
 {
 	char *file;
@@ -977,47 +989,46 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	struct btrfs_fs_info *fs_info;
 	struct btrfs_trans_handle *trans;
 	struct open_ctree_flags ocf = { 0 };
-	char *label = NULL;
-	u64 block_count = 0;
-	u64 dev_block_count = 0;
-	u64 metadata_profile = 0;
-	u64 data_profile = 0;
-	u32 nodesize = 0;
-	u32 sectorsize = 0;
-	u32 stripesize = 4096;
-	bool zero_end = true;
 	int fd = -1;
 	int ret = 0;
 	int close_ret;
 	int i;
-	bool mixed = false;
-	bool nodesize_forced = false;
-	bool data_profile_opt = false;
-	bool metadata_profile_opt = false;
-	bool discard = true;
 	bool ssd = false;
-	bool zoned = false;
-	bool force_overwrite = false;
-	int oflags;
-	char *source_dir = NULL;
-	bool source_dir_set = false;
 	bool shrink_rootdir = false;
 	u64 source_dir_size = 0;
 	u64 min_dev_size;
 	u64 shrink_size;
-	int dev_cnt = 0;
+	int device_count = 0;
 	int saved_optind;
-	char fs_uuid[BTRFS_UUID_UNPARSED_SIZE] = { 0 };
-	u64 features = BTRFS_MKFS_DEFAULT_FEATURES;
-	u64 runtime_features = BTRFS_MKFS_DEFAULT_RUNTIME_FEATURES;
+	pthread_t *t_prepare = NULL;
+	struct prepare_device_progress *prepare_ctx = NULL;
 	struct mkfs_allocation allocation = { 0 };
 	struct btrfs_mkfs_config mkfs_cfg;
-	enum btrfs_csum_type csum_type = BTRFS_CSUM_TYPE_CRC32;
 	u64 system_group_size;
+	/* Options */
+	bool force_overwrite = false;
+	struct btrfs_mkfs_features features = btrfs_mkfs_default_features;
+	enum btrfs_csum_type csum_type = BTRFS_CSUM_TYPE_CRC32;
+	char fs_uuid[BTRFS_UUID_UNPARSED_SIZE] = { 0 };
+	u32 nodesize = 0;
+	bool nodesize_forced = false;
+	u32 sectorsize = 0;
+	u32 stripesize = 4096;
+	u64 metadata_profile = 0;
+	bool metadata_profile_set = false;
+	u64 data_profile = 0;
+	bool data_profile_set = false;
+	u64 block_count = 0;
+	u64 dev_block_count = 0;
+	bool mixed = false;
+	char *label = NULL;
 	int nr_global_roots = sysconf(_SC_NPROCESSORS_ONLN);
+	char *source_dir = NULL;
+	bool source_dir_set = false;
 
 	crc32c_optimization_init();
 	btrfs_config_init();
+	btrfs_assert_feature_buf_size();
 
 	while(1) {
 		int c;
@@ -1065,22 +1076,39 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 				force_overwrite = true;
 				break;
 			case 'd':
-				data_profile = parse_profile(optarg);
-				data_profile_opt = true;
+				ret = parse_bg_profile(optarg, &data_profile);
+				if (ret) {
+					error("unknown data profile %s", optarg);
+					exit(1);
+				}
+				data_profile_set = true;
 				break;
 			case 'l':
-				warning("--leafsize is deprecated, use --nodesize");
-				/* fall through */
+				/* Deprecated in 4.0 */
+				error("--leafsize has been removed in 6.0, use --nodesize");
+				ret = 1;
+				goto error;
 			case 'n':
 				nodesize = parse_size_from_string(optarg);
 				nodesize_forced = true;
 				break;
 			case 'L':
-				label = parse_label(optarg);
+				free(label);
+				ret = strlen(optarg);
+				if (ret >= BTRFS_LABEL_SIZE) {
+					error("label %s is too long (max %d)",
+						optarg, BTRFS_LABEL_SIZE - 1);
+					exit(1);
+				}
+				label = strdup(optarg);
 				break;
 			case 'm':
-				metadata_profile = parse_profile(optarg);
-				metadata_profile_opt = true;
+				ret = parse_bg_profile(optarg, &metadata_profile);
+				if (ret) {
+					error("unknown metadata profile %s", optarg);
+					exit(1);
+				}
+				metadata_profile_set = true;
 				break;
 			case 'M':
 				mixed = true;
@@ -1097,8 +1125,9 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 					goto error;
 				}
 				free(orig);
-				if (features & BTRFS_FEATURE_LIST_ALL) {
-					btrfs_list_all_fs_features(0);
+				if (features.runtime_flags &
+				    BTRFS_FEATURE_RUNTIME_LIST_ALL) {
+					btrfs_list_all_fs_features(NULL);
 					goto success;
 				}
 				break;
@@ -1108,7 +1137,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 				char *tmp = orig;
 
 				tmp = btrfs_parse_runtime_features(tmp,
-						&runtime_features);
+						&features);
 				if (tmp) {
 					error("unrecognized runtime feature '%s'",
 					      tmp);
@@ -1116,8 +1145,9 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 					goto error;
 				}
 				free(orig);
-				if (runtime_features & BTRFS_FEATURE_LIST_ALL) {
-					btrfs_list_all_runtime_features(0);
+				if (features.runtime_flags &
+				    BTRFS_FEATURE_RUNTIME_LIST_ALL) {
+					btrfs_list_all_runtime_features(NULL);
 					goto success;
 				}
 				break;
@@ -1127,7 +1157,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 				break;
 			case 'b':
 				block_count = parse_size_from_string(optarg);
-				zero_end = false;
+				opt_zero_end = false;
 				break;
 			case 'v':
 				bconf_be_verbose();
@@ -1137,7 +1167,8 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 						PACKAGE_STRING);
 				goto success;
 			case 'r':
-				source_dir = optarg;
+				free(source_dir);
+				source_dir = strdup(optarg);
 				source_dir_set = true;
 				break;
 			case 'U':
@@ -1145,7 +1176,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 					BTRFS_UUID_UNPARSED_SIZE - 1);
 				break;
 			case 'K':
-				discard = false;
+				opt_discard = false;
 				break;
 			case 'q':
 				bconf_be_quiet();
@@ -1180,13 +1211,13 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 
 	stripesize = sectorsize;
 	saved_optind = optind;
-	dev_cnt = argc - optind;
-	if (dev_cnt == 0)
+	device_count = argc - optind;
+	if (device_count == 0)
 		print_usage(1);
 
-	zoned = !!(features & BTRFS_FEATURE_INCOMPAT_ZONED);
+	opt_zoned = !!(features.incompat_flags & BTRFS_FEATURE_INCOMPAT_ZONED);
 
-	if (source_dir_set && dev_cnt > 1) {
+	if (source_dir_set && device_count > 1) {
 		error("the option -r is limited to a single device");
 		goto error;
 	}
@@ -1208,7 +1239,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		}
 	}
 
-	while (dev_cnt-- > 0) {
+	while (device_count-- > 0) {
 		file = argv[optind++];
 		if (source_dir_set && path_exists(file) == 0)
 			ret = 0;
@@ -1222,11 +1253,11 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	}
 
 	optind = saved_optind;
-	dev_cnt = argc - optind;
+	device_count = argc - optind;
 
 	file = argv[optind++];
-	ssd = is_ssd(file);
-	if (zoned) {
+	ssd = device_get_rotational(file);
+	if (opt_zoned) {
 		if (!zone_size(file)) {
 			error("zoned: %s: zone size undefined", file);
 			exit(1);
@@ -1236,8 +1267,8 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 			printf(
 	"Zoned: %s: host-managed device detected, setting zoned feature\n",
 			       file);
-		zoned = true;
-		features |= BTRFS_FEATURE_INCOMPAT_ZONED;
+		opt_zoned = true;
+		features.incompat_flags |= BTRFS_FEATURE_INCOMPAT_ZONED;
 	}
 
 	/*
@@ -1247,22 +1278,22 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	if (!mixed) {
 		u64 tmp;
 
-		if (!metadata_profile_opt) {
-			if (dev_cnt > 1)
+		if (!metadata_profile_set) {
+			if (device_count > 1)
 				tmp = BTRFS_MKFS_DEFAULT_META_MULTI_DEVICE;
 			else
 				tmp = BTRFS_MKFS_DEFAULT_META_ONE_DEVICE;
 			metadata_profile = tmp;
 		}
-		if (!data_profile_opt) {
-			if (dev_cnt > 1)
+		if (!data_profile_set) {
+			if (device_count > 1)
 				tmp = BTRFS_MKFS_DEFAULT_DATA_MULTI_DEVICE;
 			else
 				tmp = BTRFS_MKFS_DEFAULT_DATA_ONE_DEVICE;
 			data_profile = tmp;
 		}
 	} else {
-		if (metadata_profile_opt || data_profile_opt) {
+		if (metadata_profile_set || data_profile_set) {
 			if (metadata_profile != data_profile) {
 				error(
 	"with mixed block groups data and metadata profiles must be the same");
@@ -1279,23 +1310,26 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	 * just set the bit here
 	 */
 	if (mixed)
-		features |= BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS;
+		features.incompat_flags |= BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS;
 
 	if ((data_profile | metadata_profile) & BTRFS_BLOCK_GROUP_RAID56_MASK) {
-		features |= BTRFS_FEATURE_INCOMPAT_RAID56;
+		features.incompat_flags |= BTRFS_FEATURE_INCOMPAT_RAID56;
 		warning("RAID5/6 support has known problems is strongly discouraged\n"
 			"\t to be used besides testing or evaluation.\n");
 	}
 
 	if ((data_profile | metadata_profile) &
 	    (BTRFS_BLOCK_GROUP_RAID1C3 | BTRFS_BLOCK_GROUP_RAID1C4)) {
-		features |= BTRFS_FEATURE_INCOMPAT_RAID1C34;
+		features.incompat_flags |= BTRFS_FEATURE_INCOMPAT_RAID1C34;
 	}
 
 	/* Extent tree v2 comes with a set of mandatory features. */
-	if (features & BTRFS_FEATURE_INCOMPAT_EXTENT_TREE_V2) {
-		features |= BTRFS_FEATURE_INCOMPAT_NO_HOLES;
-		runtime_features |= BTRFS_RUNTIME_FEATURE_FREE_SPACE_TREE;
+	if (features.incompat_flags & BTRFS_FEATURE_INCOMPAT_EXTENT_TREE_V2) {
+		features.incompat_flags |= BTRFS_FEATURE_INCOMPAT_NO_HOLES;
+		features.compat_ro_flags |=
+			BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE |
+			BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE_VALID |
+			BTRFS_FEATURE_COMPAT_RO_BLOCK_GROUP_TREE;
 
 		if (!nr_global_roots) {
 			error("you must set a non-zero num-global-roots value");
@@ -1304,31 +1338,30 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	}
 
 	/* Block group tree feature requires no-holes and free-space-tree. */
-	if (runtime_features & BTRFS_RUNTIME_FEATURE_BLOCK_GROUP_TREE &&
-	    (!(features & BTRFS_FEATURE_INCOMPAT_NO_HOLES) ||
-	     !(runtime_features & BTRFS_RUNTIME_FEATURE_FREE_SPACE_TREE))) {
+	if (features.compat_ro_flags & BTRFS_FEATURE_COMPAT_RO_BLOCK_GROUP_TREE &&
+	    (!(features.incompat_flags & BTRFS_FEATURE_INCOMPAT_NO_HOLES) ||
+	     !(features.compat_ro_flags & BTRFS_FEATURE_COMPAT_RO_FREE_SPACE_TREE))) {
 		error("block group tree requires no-holes and free-space-tree features");
 		exit(1);
 	}
-	if (zoned) {
+	if (opt_zoned) {
 		if (source_dir_set) {
 			error("the option -r and zoned mode are incompatible");
 			exit(1);
 		}
 
-		if (features & BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS) {
+		if (features.incompat_flags & BTRFS_FEATURE_INCOMPAT_MIXED_GROUPS) {
 			error("cannot enable mixed-bg in zoned mode");
 			exit(1);
 		}
 
-		if (features & BTRFS_FEATURE_INCOMPAT_RAID56) {
+		if (features.incompat_flags & BTRFS_FEATURE_INCOMPAT_RAID56) {
 			error("cannot enable RAID5/6 in zoned mode");
 			exit(1);
 		}
 	}
 
-	if (btrfs_check_nodesize(nodesize, sectorsize,
-				 features))
+	if (btrfs_check_nodesize(nodesize, sectorsize, &features))
 		goto error;
 
 	if (sectorsize < sizeof(struct btrfs_super_block)) {
@@ -1371,7 +1404,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		 * Or we will always use source_dir_size calculated for mkfs.
 		 */
 		if (!block_count)
-			block_count = btrfs_device_size(fd, &statbuf);
+			block_count = device_get_partition_size_fd_stat(fd, &statbuf);
 		source_dir_size = btrfs_mkfs_size_dir(source_dir, sectorsize,
 				min_dev_size, metadata_profile, data_profile);
 		if (block_count < source_dir_size)
@@ -1400,7 +1433,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	 * 1 zone for a metadata block group
 	 * 1 zone for a data block group
 	 */
-	if (zoned && block_count && block_count < 5 * zone_size(file)) {
+	if (opt_zoned && block_count && block_count < 5 * zone_size(file)) {
 		error("size %llu is too small to make a usable filesystem",
 			block_count);
 		error("minimum size for a zoned btrfs filesystem is %llu",
@@ -1408,7 +1441,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		goto error;
 	}
 
-	for (i = saved_optind; i < saved_optind + dev_cnt; i++) {
+	for (i = saved_optind; i < saved_optind + device_count; i++) {
 		char *path;
 
 		path = argv[i];
@@ -1426,51 +1459,76 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		}
 	}
 	ret = test_num_disk_vs_raid(metadata_profile, data_profile,
-			dev_cnt, mixed, ssd);
+			device_count, mixed, ssd);
 	if (ret)
 		goto error;
 
-	if (zoned && (!zoned_profile_supported(BTRFS_BLOCK_GROUP_METADATA | metadata_profile) ||
+	if (opt_zoned && (!zoned_profile_supported(BTRFS_BLOCK_GROUP_METADATA | metadata_profile) ||
 		      !zoned_profile_supported(BTRFS_BLOCK_GROUP_DATA | data_profile))) {
 		error("zoned mode does not yet support RAID/DUP profiles, please specify '-d single -m single' manually");
 		goto error;
 	}
 
-	dev_cnt--;
+	t_prepare = calloc(device_count, sizeof(*t_prepare));
+	prepare_ctx = calloc(device_count, sizeof(*prepare_ctx));
 
-	oflags = O_RDWR;
-	if (zoned && zoned_model(file) == ZONED_HOST_MANAGED)
-		oflags |= O_DIRECT;
+	if (!t_prepare || !prepare_ctx) {
+		error_msg(ERROR_MSG_MEMORY, "thread for preparing devices");
+		goto error;
+	}
 
-	/*
-	 * Open without O_EXCL so that the problem should not occur by the
-	 * following operation in kernel:
-	 * (btrfs_register_one_device() fails if O_EXCL is on)
-	 */
-	fd = open(file, oflags);
+	opt_oflags = O_RDWR;
+	for (i = 0; i < device_count; i++) {
+		if (opt_zoned &&
+		    zoned_model(argv[optind + i - 1]) == ZONED_HOST_MANAGED) {
+			opt_oflags |= O_DIRECT;
+			break;
+		}
+	}
+
+	/* Start threads */
+	for (i = 0; i < device_count; i++) {
+		prepare_ctx[i].file = argv[optind + i - 1];
+		prepare_ctx[i].block_count = block_count;
+		prepare_ctx[i].dev_block_count = block_count;
+		ret = pthread_create(&t_prepare[i], NULL, prepare_one_device,
+				     &prepare_ctx[i]);
+		if (ret) {
+			errno = -ret;
+			error("failed to create thread for prepare device %s: %m",
+					prepare_ctx[i].file);
+			goto error;
+		}
+	}
+
+	/* Wait for threads */
+	for (i = 0; i < device_count; i++)
+		pthread_join(t_prepare[i], NULL);
+	ret = prepare_ctx[0].ret;
+
+	if (ret) {
+		error("unable prepare device: %s", prepare_ctx[0].file);
+		goto error;
+	}
+
+	device_count--;
+	fd = open(file, opt_oflags);
 	if (fd < 0) {
 		error("unable to open %s: %m", file);
 		goto error;
 	}
-	ret = btrfs_prepare_device(fd, file, &dev_block_count, block_count,
-			(zero_end ? PREP_DEVICE_ZERO_END : 0) |
-			(discard ? PREP_DEVICE_DISCARD : 0) |
-			(bconf.verbose ? PREP_DEVICE_VERBOSE : 0) |
-			(zoned ? PREP_DEVICE_ZONED : 0));
-	if (ret)
-		goto error;
+	dev_block_count = prepare_ctx[0].dev_block_count;
 	if (block_count && block_count > dev_block_count) {
 		error("%s is smaller than requested size, expected %llu, found %llu",
-		      file, (unsigned long long)block_count,
-		      (unsigned long long)dev_block_count);
+		      file, block_count, dev_block_count);
 		goto error;
 	}
 
 	/* To create the first block group and chunk 0 in make_btrfs */
-	system_group_size = zoned ?  zone_size(file) : BTRFS_MKFS_SYSTEM_GROUP_SIZE;
+	system_group_size = (opt_zoned ? zone_size(file) : BTRFS_MKFS_SYSTEM_GROUP_SIZE);
 	if (dev_block_count < system_group_size) {
 		error("device is too small to make filesystem, must be at least %llu",
-				(unsigned long long)system_group_size);
+				system_group_size);
 		goto error;
 	}
 
@@ -1492,10 +1550,9 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	mkfs_cfg.sectorsize = sectorsize;
 	mkfs_cfg.stripesize = stripesize;
 	mkfs_cfg.features = features;
-	mkfs_cfg.runtime_features = runtime_features;
 	mkfs_cfg.csum_type = csum_type;
 	mkfs_cfg.leaf_data_size = __BTRFS_LEAF_DATA_SIZE(nodesize);
-	if (zoned)
+	if (opt_zoned)
 		mkfs_cfg.zone_size = zone_size(file);
 	else
 		mkfs_cfg.zone_size = 0;
@@ -1526,7 +1583,8 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 
 	trans = btrfs_start_transaction(root, 1);
 	if (IS_ERR(trans)) {
-		error("failed to start transaction");
+		errno = -PTR_ERR(trans);
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		goto error;
 	}
 
@@ -1536,7 +1594,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		goto error;
 	}
 
-	if (features & BTRFS_FEATURE_INCOMPAT_EXTENT_TREE_V2) {
+	if (features.incompat_flags & BTRFS_FEATURE_INCOMPAT_EXTENT_TREE_V2) {
 		ret = create_global_roots(trans, nr_global_roots);
 		if (ret) {
 			error("failed to create global roots: %d", ret);
@@ -1552,28 +1610,26 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 
 	ret = btrfs_commit_transaction(trans, root);
 	if (ret) {
-		error("unable to commit transaction: %d", ret);
+		errno = -ret;
+		error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
 		goto out;
 	}
 
 	trans = btrfs_start_transaction(root, 1);
 	if (IS_ERR(trans)) {
-		error("failed to start transaction");
+		errno = -PTR_ERR(trans);
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		goto error;
 	}
 
-	if (dev_cnt == 0)
+	if (device_count == 0)
 		goto raid_groups;
 
-	while (dev_cnt-- > 0) {
+	while (device_count-- > 0) {
+		int dev_index = argc - saved_optind - device_count - 1;
 		file = argv[optind++];
 
-		/*
-		 * open without O_EXCL so that the problem should not
-		 * occur by the following processing.
-		 * (btrfs_register_one_device() fails if O_EXCL is on)
-		 */
-		fd = open(file, O_RDWR);
+		fd = open(file, opt_oflags);
 		if (fd < 0) {
 			error("unable to open %s: %m", file);
 			goto error;
@@ -1586,13 +1642,12 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 			close(fd);
 			continue;
 		}
-		ret = btrfs_prepare_device(fd, file, &dev_block_count,
-				block_count,
-				(bconf.verbose ? PREP_DEVICE_VERBOSE : 0) |
-				(zero_end ? PREP_DEVICE_ZERO_END : 0) |
-				(discard ? PREP_DEVICE_DISCARD : 0) |
-				(zoned ? PREP_DEVICE_ZONED : 0));
-		if (ret) {
+		dev_block_count = prepare_ctx[dev_index].dev_block_count;
+
+		if (prepare_ctx[dev_index].ret) {
+			errno = -prepare_ctx[dev_index].ret;
+			error("unable to prepare device %s: %m",
+					prepare_ctx[dev_index].file);
 			goto error;
 		}
 
@@ -1607,8 +1662,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 
 			device = container_of(fs_info->fs_devices->devices.next,
 					struct btrfs_device, dev_list);
-			printf("adding device %s id %llu\n", file,
-				(unsigned long long)device->devid);
+			printf("adding device %s id %llu\n", file, device->devid);
 		}
 	}
 
@@ -1630,13 +1684,13 @@ raid_groups:
 	ret = btrfs_commit_transaction(trans, root);
 	if (ret) {
 		errno = -ret;
-		error("unable to commit transaction before recowing trees: %m");
+		error_msg(ERROR_MSG_COMMIT_TRANS, "before recowing trees: %m");
 		goto out;
 	}
 	trans = btrfs_start_transaction(root, 1);
 	if (IS_ERR(trans)) {
 		errno = -PTR_ERR(trans);
-		error("failed to start transaction: %m");
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		goto error;
 	}
 	/* COW all tree blocks to newly created chunks */
@@ -1660,7 +1714,8 @@ raid_groups:
 
 	ret = btrfs_commit_transaction(trans, root);
 	if (ret) {
-		error("unable to commit transaction: %d", ret);
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		goto out;
 	}
 
@@ -1688,7 +1743,7 @@ raid_groups:
 		}
 	}
 
-	if (runtime_features & BTRFS_RUNTIME_FEATURE_QUOTA) {
+	if (features.runtime_flags & BTRFS_FEATURE_RUNTIME_QUOTA) {
 		ret = setup_quota_root(fs_info);
 		if (ret < 0) {
 			error("failed to initialize quota: %d (%m)", ret);
@@ -1696,7 +1751,7 @@ raid_groups:
 		}
 	}
 	if (bconf.verbose) {
-		char features_buf[64];
+		char features_buf[BTRFS_FEATURE_STRING_BUF_SIZE];
 
 		update_chunk_allocation(fs_info, &allocation);
 		printf("Label:              %s\n", label);
@@ -1722,15 +1777,18 @@ raid_groups:
 			btrfs_group_profile_str(metadata_profile),
 			pretty_size(allocation.system));
 		printf("SSD detected:       %s\n", ssd ? "yes" : "no");
-		printf("Zoned device:       %s\n", zoned ? "yes" : "no");
-		if (zoned)
+		printf("Zoned device:       %s\n", opt_zoned ? "yes" : "no");
+		if (opt_zoned)
 			printf("  Zone size:        %s\n",
 			       pretty_size(fs_info->zone_size));
-		btrfs_parse_fs_features_to_string(features_buf, features);
+		btrfs_parse_fs_features_to_string(features_buf, &features);
+#if EXPERIMENTAL
+		printf("Features:           %s\n", features_buf);
+#else
 		printf("Incompat features:  %s\n", features_buf);
-		btrfs_parse_runtime_features_to_string(features_buf,
-				runtime_features);
+		btrfs_parse_runtime_features_to_string(features_buf, &features);
 		printf("Runtime features:   %s\n", features_buf);
+#endif
 		printf("Checksum:           %s",
 		       btrfs_super_csum_name(mkfs_cfg.csum_type));
 		printf("\n");
@@ -1755,8 +1813,8 @@ out:
 
 	if (!close_ret) {
 		optind = saved_optind;
-		dev_cnt = argc - optind;
-		while (dev_cnt-- > 0) {
+		device_count = argc - optind;
+		while (device_count-- > 0) {
 			file = argv[optind++];
 			if (path_is_block_device(file) == 1)
 				btrfs_register_one_device(file);
@@ -1770,14 +1828,21 @@ out:
 	}
 
 	btrfs_close_all_devices();
+	free(t_prepare);
+	free(prepare_ctx);
 	free(label);
+	free(source_dir);
 
 	return !!ret;
+
 error:
 	if (fd > 0)
 		close(fd);
 
+	free(t_prepare);
+	free(prepare_ctx);
 	free(label);
+	free(source_dir);
 	exit(1);
 success:
 	exit(0);

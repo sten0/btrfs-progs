@@ -18,21 +18,22 @@
  * Authors: Mark Fasheh <mfasheh@suse.de>
  */
 
+#include "kerncompat.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <uuid/uuid.h>
-#include "kerncompat.h"
-#include "kernel-lib/radix-tree.h"
+#include <errno.h>
+#include "kernel-lib/list.h"
+#include "kernel-lib/rbtree.h"
+#include "kernel-lib/rbtree_types.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
-#include "kernel-shared/print-tree.h"
-#include "common/utils.h"
 #include "kernel-shared/ulist.h"
-#include "common/rbtree-utils.h"
+#include "kernel-shared/extent_io.h"
 #include "kernel-shared/transaction.h"
-#include "common/repair.h"
-
-#include "qgroup-verify.h"
+#include "common/messages.h"
+#include "common/rbtree-utils.h"
+#include "check/repair.h"
+#include "check/qgroup-verify.h"
 
 static u64 *qgroup_item_count;
 
@@ -579,7 +580,7 @@ static int account_all_refs(int do_qgroups, u64 search_subvol)
 	ulist_free(roots);
 	return 0;
 enomem:
-	error("Out of memory while accounting refs for qgroups");
+	error_msg(ERROR_MSG_MEMORY, "accounting for refs for qgroups");
 	return -ENOMEM;
 }
 
@@ -960,7 +961,7 @@ loop:
 
 	ret = btrfs_search_slot(NULL, root, &key, &path, 0, 0);
 	if (ret < 0) {
-		fprintf(stderr, "ERROR: Couldn't search slot: %d\n", ret);
+		error("couldn't search slot: %d", ret);
 		goto out;
 	}
 
@@ -1005,7 +1006,7 @@ loop:
 			count = alloc_count(&disk_key, leaf, item);
 			if (!count) {
 				ret = ENOMEM;
-				fprintf(stderr, "ERROR: out of memory\n");
+				error_msg(ERROR_MSG_MEMORY, NULL);
 				goto out;
 			}
 
@@ -1175,7 +1176,7 @@ static int scan_extents(struct btrfs_fs_info *info,
 
 	ret = btrfs_search_slot(NULL, root, &key, &path, 0, 0);
 	if (ret < 0) {
-		fprintf(stderr, "ERROR: Couldn't search slot: %d\n", ret);
+		error("couldn't search slot: %d", ret);
 		goto out;
 	}
 	path.reada = READA_BACK;
@@ -1245,8 +1246,7 @@ static int scan_extents(struct btrfs_fs_info *info,
 		ret = btrfs_next_leaf(root, &path);
 		if (ret != 0) {
 			if (ret < 0) {
-				fprintf(stderr,
-					"ERROR: Next leaf failed: %d\n", ret);
+				error("next leaf failed: %d", ret);
 				goto out;
 			}
 			break;
@@ -1326,7 +1326,7 @@ void report_qgroups(int all)
 	struct rb_node *node;
 	struct qgroup_count *c;
 
-	if (!repair && counts.rescan_running) {
+	if (!opt_check_repair && counts.rescan_running) {
 		if (all) {
 			printf(
 	"Qgroup rescan is running, a difference in qgroup counts is expected\n");
@@ -1414,14 +1414,13 @@ int qgroup_verify_all(struct btrfs_fs_info *info)
 
 	tree_blocks = ulist_alloc(0);
 	if (!tree_blocks) {
-		fprintf(stderr,
-			"ERROR: Out of memory while allocating ulist.\n");
+		error_msg(ERROR_MSG_MEMORY, "allocate ulist");
 		return ENOMEM;
 	}
 
 	ret = load_quota_info(info);
 	if (ret) {
-		fprintf(stderr, "ERROR: Loading qgroups from disk: %d\n", ret);
+		error("loading qgroups from disk: %d", ret);
 		goto out;
 	}
 
@@ -1441,15 +1440,14 @@ int qgroup_verify_all(struct btrfs_fs_info *info)
 		ret = scan_extents(info, bg->start,
 				   bg->start + bg->length - 1);
 		if (ret) {
-			fprintf(stderr, "ERROR: while scanning extent tree: %d\n",
-				ret);
+			error("while scanning extent tree: %d", ret);
 			goto out;
 		}
 	}
 
 	ret = map_implied_refs(info);
 	if (ret) {
-		fprintf(stderr, "ERROR: while mapping refs: %d\n", ret);
+		error("while mapping refs: %d", ret);
 		goto out;
 	}
 
@@ -1523,8 +1521,7 @@ int print_extent_state(struct btrfs_fs_info *info, u64 subvol)
 
 	tree_blocks = ulist_alloc(0);
 	if (!tree_blocks) {
-		fprintf(stderr,
-			"ERROR: Out of memory while allocating ulist.\n");
+		error_msg(ERROR_MSG_MEMORY, "allocate ulist");
 		return ENOMEM;
 	}
 
@@ -1538,15 +1535,14 @@ int print_extent_state(struct btrfs_fs_info *info, u64 subvol)
 		ret = scan_extents(info, bg->start,
 				   bg->start + bg->length - 1);
 		if (ret) {
-			fprintf(stderr, "ERROR: while scanning extent tree: %d\n",
-				ret);
+			error("while scanning extent tree: %d", ret);
 			goto out;
 		}
 	}
 
 	ret = map_implied_refs(info);
 	if (ret) {
-		fprintf(stderr, "ERROR: while mapping refs: %d\n", ret);
+		error("while mapping refs: %d", ret);
 		goto out;
 	}
 

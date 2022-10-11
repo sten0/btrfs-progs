@@ -17,14 +17,19 @@
  */
 
 #include "kerncompat.h"
-
-#include <ctype.h>
+#include <sys/types.h>
+#include <sys/xattr.h>
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <regex.h>
+#include <getopt.h>
+#include <errno.h>
+#include <limits.h>
+#include <stddef.h>
+#include <string.h>
 #if COMPRESSION_LZO
 #include <lzo/lzoconf.h>
 #include <lzo/lzo1x.h>
@@ -33,21 +38,17 @@
 #if COMPRESSION_ZSTD
 #include <zstd.h>
 #endif
-#include <regex.h>
-#include <getopt.h>
-#include <sys/types.h>
-#include <sys/xattr.h>
-
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/print-tree.h"
-#include "kernel-shared/transaction.h"
-#include "kernel-lib/list.h"
 #include "kernel-shared/volumes.h"
+#include "kernel-shared/extent_io.h"
 #include "common/utils.h"
-#include "cmds/commands.h"
 #include "common/help.h"
 #include "common/open-utils.h"
+#include "common/string-utils.h"
+#include "common/messages.h"
+#include "cmds/commands.h"
 
 static char fs_name[PATH_MAX];
 static char path_name[PATH_MAX];
@@ -326,7 +327,7 @@ static int copy_one_inline(struct btrfs_root *root, int fd,
 	ram_size = btrfs_file_extent_ram_bytes(leaf, fi);
 	outbuf = calloc(1, ram_size);
 	if (!outbuf) {
-		error("not enough memory");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return -ENOMEM;
 	}
 
@@ -396,14 +397,14 @@ static int copy_one_extent(struct btrfs_root *root, int fd,
 
 	inbuf = malloc(size_left);
 	if (!inbuf) {
-		error("not enough memory");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return -ENOMEM;
 	}
 
 	if (compress != BTRFS_COMPRESS_NONE) {
 		outbuf = calloc(1, ram_size);
 		if (!outbuf) {
-			error("not enough memory");
+			error_msg(ERROR_MSG_MEMORY, NULL);
 			free(inbuf);
 			return -ENOMEM;
 		}
@@ -424,7 +425,7 @@ again:
 					mirror_num, num_copies);
 				goto out;
 			}
-			fprintf(stderr, "trying another mirror\n");
+			pr_stderr(LOG_DEFAULT, "trying another mirror\n");
 			continue;
 		}
 		cur += length;
@@ -452,7 +453,7 @@ again:
 			ret = -1;
 			goto out;
 		}
-		fprintf(stderr,
+		pr_stderr(LOG_DEFAULT,
 			"trying another mirror due to decompression error\n");
 		goto again;
 	}
@@ -633,7 +634,7 @@ static int copy_file(struct btrfs_root *root, int fd, struct btrfs_key *key,
 	int compression;
 	u64 found_size = 0;
 	struct timespec times[2];
-	int times_ok = 0;
+	bool times_ok = false;
 
 	btrfs_init_path(&path);
 	ret = btrfs_lookup_inode(NULL, root, &path, key, 0);
@@ -664,7 +665,7 @@ static int copy_file(struct btrfs_root *root, int fd, struct btrfs_key *key,
 			bts = btrfs_inode_mtime(inode_item);
 			times[1].tv_sec = btrfs_timespec_sec(path.nodes[0], bts);
 			times[1].tv_nsec = btrfs_timespec_nsec(path.nodes[0], bts);
-			times_ok = 1;
+			times_ok = true;
 		}
 	}
 	btrfs_release_path(&path);
@@ -786,10 +787,10 @@ static int overwrite_ok(const char * path)
 			return 2;
 
 		if (!warn) {
-			pr_verbose(-1, "Skipping existing file %s\n", path);
-			pr_verbose(-1, "If you wish to overwrite use -o\n");
+			pr_verbose(LOG_DEFAULT, "Skipping existing file %s\n", path);
+			pr_verbose(LOG_DEFAULT, "If you wish to overwrite use -o\n");
 		} else {
-			pr_verbose(1, "Skipping existing file %s\n", path);
+			pr_verbose(LOG_INFO, "Skipping existing file %s\n", path);
 		}
 
 		warn = 1;
@@ -940,7 +941,7 @@ static int search_dir(struct btrfs_root *root, struct btrfs_key *key,
 
 	leaf = path.nodes[0];
 	while (!leaf) {
-		pr_verbose(2,
+		pr_verbose(LOG_INFO,
 			   "No leaf after search, looking for the next leaf\n");
 		ret = next_leaf(root, &path);
 		if (ret < 0) {
@@ -948,7 +949,7 @@ static int search_dir(struct btrfs_root *root, struct btrfs_key *key,
 			goto out;
 		} else if (ret > 0) {
 			/* No more leaves to search */
-			pr_verbose(1,
+			pr_verbose(LOG_INFO,
 		   "Reached the end of the tree looking for the directory\n");
 			ret = 0;
 			goto out;
@@ -965,7 +966,7 @@ static int search_dir(struct btrfs_root *root, struct btrfs_key *key,
 					goto out;
 				} else if (ret > 0) {
 					/* No more leaves to search */
-					pr_verbose(1,
+					pr_verbose(LOG_INFO,
 		"Reached the end of the tree searching the directory\n");
 					ret = 0;
 					goto out;
@@ -976,12 +977,12 @@ static int search_dir(struct btrfs_root *root, struct btrfs_key *key,
 		}
 		btrfs_item_key_to_cpu(leaf, &found_key, path.slots[0]);
 		if (found_key.objectid != key->objectid) {
-			pr_verbose(2, "Found objectid=%llu, key=%llu\n",
+			pr_verbose(LOG_VERBOSE, "Found objectid=%llu, key=%llu\n",
 				   found_key.objectid, key->objectid);
 			break;
 		}
 		if (found_key.type != key->type) {
-			pr_verbose(2, "Found type=%u, want=%u\n",
+			pr_verbose(LOG_VERBOSE, "Found type=%u, want=%u\n",
 				       found_key.type, key->type);
 			break;
 		}
@@ -1010,7 +1011,7 @@ static int search_dir(struct btrfs_root *root, struct btrfs_key *key,
 			if (!overwrite_ok(path_name))
 				goto next;
 
-			pr_verbose(1, "Restoring %s\n", path_name);
+			pr_verbose(LOG_INFO, "Restoring %s\n", path_name);
 			if (dry_run)
 				goto next;
 			fd = open(path_name, O_CREAT|O_WRONLY, 0644);
@@ -1034,7 +1035,7 @@ static int search_dir(struct btrfs_root *root, struct btrfs_key *key,
 			char *dir = strdup(fs_name);
 
 			if (!dir) {
-				error("ran out of memory");
+				error_msg(ERROR_MSG_MEMORY, NULL);
 				ret = -ENOMEM;
 				goto out;
 			}
@@ -1076,7 +1077,7 @@ static int search_dir(struct btrfs_root *root, struct btrfs_key *key,
 				location.objectid = BTRFS_FIRST_FREE_OBJECTID;
 			}
 
-			pr_verbose(1, "Restoring %s\n", path_name);
+			pr_verbose(LOG_INFO, "Restoring %s\n", path_name);
 
 			errno = 0;
 			if (dry_run)
@@ -1137,7 +1138,7 @@ next:
 		}
 	}
 
-	pr_verbose(1, "Done searching %s\n", in_dir);
+	pr_verbose(LOG_INFO, "Done searching %s\n", in_dir);
 out:
 	btrfs_release_path(&path);
 	return ret;
@@ -1224,7 +1225,7 @@ static struct btrfs_root *open_fs(const char *dev, u64 root_location,
 		fs_info = open_ctree_fs_info(&ocf);
 		if (fs_info)
 			break;
-		fprintf(stderr, "Could not open root, trying backup super\n");
+		pr_stderr(LOG_DEFAULT, "Could not open root, trying backup super\n");
 	}
 
 	if (!fs_info)

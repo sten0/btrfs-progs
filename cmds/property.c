@@ -14,22 +14,31 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/xattr.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/ioctl.h>
-#include <sys/stat.h>
-#include <sys/xattr.h>
+#include <dirent.h>
+#include <errno.h>
+#include <getopt.h>
+#include <stdbool.h>
 #include <uuid/uuid.h>
-#include <btrfsutil.h>
-#include "cmds/commands.h"
-#include "cmds/props.h"
+#include "libbtrfsutil/btrfsutil.h"
 #include "kernel-shared/ctree.h"
+#include "common/defs.h"
+#include "common/messages.h"
 #include "common/open-utils.h"
 #include "common/utils.h"
 #include "common/help.h"
+#include "common/filesystem-utils.h"
+#include "cmds/commands.h"
+#include "cmds/props.h"
+#include "ioctl.h"
 
 #define XATTR_BTRFS_PREFIX     "btrfs."
 #define XATTR_BTRFS_PREFIX_LEN (sizeof(XATTR_BTRFS_PREFIX) - 1)
@@ -96,7 +105,7 @@ static int prop_read_only(enum prop_object_type type,
 		if (err)
 			warning("cannot read subvolume info");
 		if (is_ro && !uuid_is_null(info.received_uuid)) {
-			pr_verbose(2, "ro->rw switch but has set receive_uuid");
+			pr_verbose(LOG_INFO, "ro->rw switch but has set receive_uuid");
 
 			if (force) {
 				do_clear_received_uuid = true;
@@ -119,7 +128,7 @@ static int prop_read_only(enum prop_object_type type,
 			char uuid_str[BTRFS_UUID_UNPARSED_SIZE];
 
 			uuid_unparse(info.received_uuid, uuid_str);
-			pr_verbose(2, "force used, clearing received_uuid, previously %s",
+			pr_verbose(LOG_INFO, "force used, clearing received_uuid, previously %s",
 					uuid_str);
 			ret = subvolume_clear_received_uuid(object);
 			if (ret < 0)
@@ -132,7 +141,7 @@ static int prop_read_only(enum prop_object_type type,
 			return -errno;
 		}
 
-		printf("ro=%s\n", read_only ? "true" : "false");
+		pr_verbose(LOG_DEFAULT, "ro=%s\n", read_only ? "true" : "false");
 	}
 
 	return 0;
@@ -153,7 +162,7 @@ static int prop_label(enum prop_object_type type,
 
 		ret = get_label((char *) object, label);
 		if (!ret)
-			fprintf(stdout, "label=%s\n", label);
+			pr_verbose(LOG_DEFAULT, "label=%s\n", label);
 	}
 
 	return ret;
@@ -217,7 +226,7 @@ static int prop_compression(enum prop_object_type type,
 			error("failed to get compression for %s: %m", object);
 			goto out;
 		}
-		fprintf(stdout, "compression=%.*s\n", (int)len, buf);
+		pr_verbose(LOG_DEFAULT, "compression=%.*s\n", (int)len, buf);
 	}
 
 	ret = 0;
@@ -411,7 +420,7 @@ static int dump_prop(const struct prop_handler *prop,
 		if (!name_and_help)
 			ret = prop->handler(type, object, prop->name, NULL, false);
 		else
-			printf("%-20s%s\n", prop->name, prop->desc);
+			pr_verbose(LOG_DEFAULT, "%-20s%s\n", prop->name, prop->desc);
 	}
 	return ret;
 }

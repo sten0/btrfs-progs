@@ -14,15 +14,14 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h>
 #include <getopt.h>
-
-#include "cmds/commands.h"
-#include "common/utils.h"
 #include "common/help.h"
+#include "common/string-utils.h"
+#include "cmds/commands.h"
 
 #define USAGE_SHORT		1U
 #define USAGE_LONG		2U

@@ -14,17 +14,21 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
-
+#include <stdbool.h>
+#include <strings.h>
 #include "kernel-shared/volumes.h"
 #include "crypto/crc32c.h"
-#include "cmds/commands.h"
 #include "common/utils.h"
+#include "common/string-utils.h"
 #include "common/help.h"
 #include "common/box.h"
+#include "common/messages.h"
+#include "cmds/commands.h"
 
 static const char * const btrfs_cmd_group_usage[] = {
 	"btrfs [--help] [--version] [--format <format>] [-v|--verbose] [-q|--quiet] <group> [<group>...] <command> [<args>]",
@@ -105,8 +109,7 @@ static void check_output_format(const struct cmd_struct *cmd)
 		return;
 
 	if (!(cmd->flags & bconf.output_format & CMD_FORMAT_MASK)) {
-		fprintf(stderr,
-			"ERROR: output format %s is unsupported for this command\n",
+		error("output format %s is unsupported for this command",
 			output_format_name(bconf.output_format));
 		exit(1);
 	}

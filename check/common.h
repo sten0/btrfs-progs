@@ -21,9 +21,11 @@
 #define __BTRFS_CHECK_COMMON_H__
 
 #include "kerncompat.h"
+#include "kernel-lib/list.h"
 #include "kernel-shared/ctree.h"
 #include "common/extent-cache.h"
-#include "kernel-lib/list.h"
+
+extern struct btrfs_fs_info *gfs_info;
 
 struct block_group_record {
 	struct cache_extent cache;

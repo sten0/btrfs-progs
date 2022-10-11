@@ -17,14 +17,23 @@
 #if BTRFSCONVERT_REISERFS
 
 #include "kerncompat.h"
-#include <linux/fs.h>
-#include <limits.h>
 #include <sys/stat.h>
+#include <linux/fs.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <reiserfs/reiserfs_lib.h>
+#include "kernel-lib/bitops.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/transaction.h"
-#include "common/utils.h"
-#include "kernel-lib/bitops.h"
+#include "kernel-shared/extent_io.h"
+#include "common/extent-cache.h"
+#include "common/internal.h"
+#include "common/messages.h"
 #include "convert/common.h"
 #include "convert/source-reiserfs.h"
 
@@ -679,7 +688,7 @@ static int reiserfs_xattr_indirect_fn(reiserfs_filsys_t fs, u64 position,
 
 	if (size > BTRFS_LEAF_DATA_SIZE(xa_data->root->fs_info) -
 	    sizeof(struct btrfs_item) - sizeof(struct btrfs_dir_item)) {
-		fprintf(stderr, "skip large xattr on objectid %llu name %.*s\n",
+		error("skip large xattr on objectid %llu name %.*s",
 			xa_data->target_oid, (int)xa_data->namelen,
 			xa_data->name);
 		return -E2BIG;
@@ -717,7 +726,7 @@ static int reiserfs_xattr_direct_fn(reiserfs_filsys_t fs, __u64 position,
 
 	if (size > BTRFS_LEAF_DATA_SIZE(xa_data->root->fs_info) -
 	    sizeof(struct btrfs_item) - sizeof(struct btrfs_dir_item)) {
-		fprintf(stderr, "skip large xattr on objectid %llu name %.*s\n",
+		error("skip large xattr on objectid %llu name %.*s",
 			xa_data->target_oid, (int)xa_data->namelen,
 			xa_data->name);
 		return -E2BIG;
@@ -751,7 +760,10 @@ static int reiserfs_acl_to_xattr(void *dst, const void *src,
 	if (count <= 0)
 		goto fail;
 
-	BUG_ON(dst_size < acl_ea_size(count));
+	if (dst_size < acl_ea_size(count)) {
+		error("not enough space to store ACLs");
+		goto fail;
+	}
 	ext_acl->a_version = cpu_to_le32(ACL_EA_VERSION);
 	for (i = 0; i < count; i++, dst_entry++) {
 		src_entry = (struct reiserfs_acl_entry *)src;
@@ -810,8 +822,7 @@ static int reiserfs_copy_one_xattr(reiserfs_filsys_t fs,
 		goto out;
 
 	if (!reiserfs_check_xattr(xa_data->body, xa_data->len)) {
-		fprintf(stderr,
-			"skip corrupted xattr on objectid %u name %.*s\n",
+		error("skip corrupted xattr on objectid %u name %.*s",
 			deh_objectid, (int)xa_data->namelen,
 			xa_data->name);
 		goto out;

@@ -16,7 +16,9 @@ The command operates in two modes: full and incremental.
 
 All snapshots involved in one send command must be read-only, and this status
 cannot be changed as long as there's a running send operation that uses the
-snapshot.
+snapshot. Read-only mount of the subvolume is not sufficient, there's no way to
+guarantee that there won't be any other writable mount of the same subvolume
+that would potentially write while send would be running.
 
 In the full mode, the entire snapshot data and metadata will end up in the
 stream.
@@ -33,7 +35,7 @@ the clone sources.
 You must not specify clone sources unless you guarantee that these snapshots
 are exactly in the same state on both sides--both for the sender and the
 receiver. For implications of changed read-write status of a received snapshot
-please see section *SUBVOLUME FLAGS* in ``btrfs-subvolume(8)``.
+please see section *SUBVOLUME FLAGS* in :doc:`btrfs-subvolume(8)<btrfs-subvolume>`.
 
 ``Options``
 
@@ -53,7 +55,7 @@ please see section *SUBVOLUME FLAGS* in ``btrfs-subvolume(8)``.
         example, piped to btrfs receive. Use this option to write it to a file
         instead.
 
---no-data::
+--no-data
         send in *NO_FILE_DATA* mode
 
         The output stream does not contain any file data and thus cannot be
@@ -105,13 +107,13 @@ returned in case of failure.
 AVAILABILITY
 ------------
 
-**btrfs** is part of btrfs-progs.
-Please refer to the btrfs wiki http://btrfs.wiki.kernel.org for
-further details.
+**btrfs** is part of btrfs-progs.  Please refer to the documentation at
+https://btrfs.readthedocs.io or wiki http://btrfs.wiki.kernel.org for further
+information.
 
 SEE ALSO
 --------
 
-``mkfs.btrfs(8)``,
-``btrfs-receive(8)``,
-``btrfs-subvolume(8)``
+:doc:`btrfs-receive(8)<btrfs-receive>`,
+:doc:`btrfs-subvolume(8)<btrfs-subvolume>`,
+:doc:`mkfs.btrfs(8)<mkfs.btrfs>`

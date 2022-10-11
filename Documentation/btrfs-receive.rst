@@ -59,7 +59,7 @@ A subvolume is made read-only after the receiving process finishes successfully 
 
 --force-decompress
         if the stream contains compressed data (see *--compressed-data* in
-        ``btrfs-send(8)``), always decompress it instead of writing it with
+        :doc:`btrfs-send(8)<btrfs-send>`), always decompress it instead of writing it with
         encoded I/O
 
 --dump
@@ -111,12 +111,12 @@ returned in case of failure.
 AVAILABILITY
 ------------
 
-**btrfs** is part of btrfs-progs.
-Please refer to the btrfs wiki http://btrfs.wiki.kernel.org for
-further details.
+**btrfs** is part of btrfs-progs.  Please refer to the documentation at
+https://btrfs.readthedocs.io or wiki http://btrfs.wiki.kernel.org for further
+information.
 
 SEE ALSO
 --------
 
-``mkfs.btrfs(8)``,
-``btrfs-send(8)``
+:doc:`btrfs-send(8)<btrfs-send>`,
+:doc:`mkfs.btrfs(8)<mkfs.btrfs>`

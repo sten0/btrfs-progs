@@ -223,13 +223,13 @@ returned in case of failure.
 AVAILABILITY
 ------------
 
-**btrfs** is part of btrfs-progs.
-Please refer to the btrfs wiki http://btrfs.wiki.kernel.org for
-further details.
+**btrfs** is part of btrfs-progs.  Please refer to the documentation at
+https://btrfs.readthedocs.io or wiki http://btrfs.wiki.kernel.org for further
+information.
 
 SEE ALSO
 --------
 
-``mkfs.btrfs(8)``,
-``btrfs-subvolume(8)``,
-``btrfs-quota(8)``,
+:doc:`btrfs-quota(8)<btrfs-quota>`,
+:doc:`btrfs-subvolume(8)<btrfs-subvolume>`,
+:doc:`mkfs.btrfs(8)<mkfs.btrfs>`,

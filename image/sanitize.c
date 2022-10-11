@@ -15,12 +15,16 @@
  */
 
 #include "kerncompat.h"
+#include <stdlib.h>
+#include <string.h>
+#include "kernel-lib/rbtree.h"
+#include "kernel-shared/ctree.h"
+#include "kernel-shared/extent_io.h"
 #include "common/internal.h"
 #include "common/messages.h"
 #include "common/utils.h"
 #include "crypto/crc32c.h"
 #include "image/sanitize.h"
-#include "kernel-shared/extent_io.h"
 
 /*
  * Reverse CRC-32C table
@@ -256,7 +260,7 @@ static char *find_collision(struct rb_root *name_tree, char *name,
 
 	val = malloc(sizeof(struct name));
 	if (!val) {
-		error("cannot sanitize name, not enough memory");
+		error_msg(ERROR_MSG_MEMORY, "sanitize name");
 		free(name);
 		return NULL;
 	}
@@ -267,7 +271,7 @@ static char *find_collision(struct rb_root *name_tree, char *name,
 	val->len = name_len;
 	val->sub = malloc(name_len);
 	if (!val->sub) {
-		error("cannot sanitize name, not enough memory");
+		error_msg(ERROR_MSG_MEMORY, "sanitize name");
 		free(val);
 		free(name);
 		return NULL;
@@ -336,7 +340,7 @@ static void sanitize_dir_item(enum sanitize_mode sanitize,
 		if (sanitize == SANITIZE_COLLISIONS) {
 			buf = malloc(name_len);
 			if (!buf) {
-				error("cannot sanitize name, not enough memory");
+				error_msg(ERROR_MSG_MEMORY, "sanitize name");
 				return;
 			}
 			read_extent_buffer(eb, buf, name_ptr, name_len);
@@ -345,7 +349,7 @@ static void sanitize_dir_item(enum sanitize_mode sanitize,
 			garbage = generate_garbage(name_len);
 		}
 		if (!garbage) {
-			error("cannot sanitize name, not enough memory");
+			error_msg(ERROR_MSG_MEMORY, "sanitize name");
 			return;
 		}
 		write_extent_buffer(eb, garbage, name_ptr, name_len);
@@ -391,7 +395,7 @@ static void sanitize_inode_ref(enum sanitize_mode sanitize,
 		if (sanitize == SANITIZE_COLLISIONS) {
 			buf = malloc(len);
 			if (!buf) {
-				error("cannot sanitize name, not enough memory");
+				error_msg(ERROR_MSG_MEMORY, "sanitize name");
 				return;
 			}
 			read_extent_buffer(eb, buf, name_ptr, len);
@@ -401,7 +405,7 @@ static void sanitize_inode_ref(enum sanitize_mode sanitize,
 		}
 
 		if (!garbage) {
-			error("cannot sanitize name, not enough memory");
+			error_msg(ERROR_MSG_MEMORY, "sanitize name");
 			return;
 		}
 		write_extent_buffer(eb, garbage, name_ptr, len);
@@ -445,7 +449,7 @@ void sanitize_name(enum sanitize_mode sanitize, struct rb_root *name_tree,
 
 	eb = alloc_dummy_eb(src->start, src->len);
 	if (!eb) {
-		error("cannot sanitize name, not enough memory");
+		error_msg(ERROR_MSG_MEMORY, "sanitize name");
 		return;
 	}
 

@@ -11,8 +11,8 @@ administration.
 
 This repository hosts following utilities and also documentation:
 
-* **btrfs** &mdash; the main administration tool ([manual page](https://btrfs.wiki.kernel.org/index.php/Manpage/btrfs))
-* **mkfs.btrfs** &mdash; utility to create the filesystem ([manual page](https://btrfs.wiki.kernel.org/index.php/Manpage/mkfs.btrfs))
+* **btrfs** &mdash; the main administration tool ([manual page](https://btrfs.readthedocs.io/en/latest/btrfs.html))
+* **mkfs.btrfs** &mdash; utility to create the filesystem ([manual page](https://btrfs.readthedocs.io/en/latest/mkfs.btrfs.html))
 * all-in-one binary in the busybox style with mkfs.btrfs, btrfs-image and other tools built-in ([standalone tools](https://github.com/kdave/btrfs-progs/blob/master/Documentation/btrfs.rst#standalone-tools))
 * **libbtrfsutil** (LGPL v2.1) &mdash; C and python 3 bindings, see [libbtrfsutil/README.md](libbtrfsutil/README.md) for more
 * manual pages and documentation source published at [btrfs.readthedocs.io](https://btrfs.rtfd.io)
@@ -126,9 +126,11 @@ implementation.
 References
 ----------
 
+* [Documentation](https://btrfs.readthedocs.io)
 * [wiki/Developer's FAQ](https://btrfs.wiki.kernel.org/index.php/Developer's_FAQ)
 * [wiki/Getting started](https://btrfs.wiki.kernel.org/index.php/Getting_started)
 * [wiki/TODO](https://btrfs.wiki.kernel.org/index.php/Project_ideas#Userspace_tools_projects)
 * [Btrfs-progs changelogs](https://btrfs.wiki.kernel.org/index.php/Changelog#By_version_.28btrfs-progs.29)
 * [wiki/FAQ](https://btrfs.wiki.kernel.org/index.php/FAQ)
 * [Wiki with more information](https://btrfs.wiki.kernel.org)
+

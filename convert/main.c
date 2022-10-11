@@ -81,35 +81,41 @@
  */
 
 #include "kerncompat.h"
-
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <getopt.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <limits.h>
+#include <string.h>
 #include <uuid/uuid.h>
-
+#include "kernel-lib/sizes.h"
+#include "kernel-shared/extent_io.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
-#include "common/utils.h"
+#include "crypto/crc32c.h"
+#include "common/defs.h"
+#include "common/extent-cache.h"
+#include "common/internal.h"
+#include "common/messages.h"
 #include "common/task-utils.h"
 #include "common/path-utils.h"
 #include "common/help.h"
 #include "common/parse-utils.h"
-#include "mkfs/common.h"
-#include "convert/common.h"
-#include "convert/source-fs.h"
-#include "crypto/crc32c.h"
 #include "common/fsfeatures.h"
 #include "common/device-scan.h"
 #include "common/box.h"
 #include "common/open-utils.h"
-#include "common/repair.h"
+#include "check/repair.h"
+#include "mkfs/common.h"
+#include "convert/common.h"
+#include "convert/source-fs.h"
 
 extern const struct btrfs_convert_operations ext2_convert_ops;
 extern const struct btrfs_convert_operations reiserfs_convert_ops;
@@ -135,8 +141,7 @@ static void *print_copied_inodes(void *p)
 		pthread_mutex_lock(&priv->mutex);
 		printf("Copy inodes [%c] [%10llu/%10llu]\r",
 		       work_indicator[count % 4],
-		       (unsigned long long)priv->cur_copy_inodes,
-		       (unsigned long long)priv->max_copy_inodes);
+		       priv->cur_copy_inodes, priv->max_copy_inodes);
 		pthread_mutex_unlock(&priv->mutex);
 		fflush(stdout);
 		task_period_wait(priv->info);
@@ -207,20 +212,18 @@ static int create_image_file_range(struct btrfs_trans_handle *trans,
 {
 	struct cache_extent *cache;
 	struct btrfs_block_group *bg_cache;
+	const struct simple_range *reserved;
 	u64 len = *ret_len;
 	u64 disk_bytenr;
-	int i;
 	int ret;
 	u32 datacsum = convert_flags & CONVERT_FLAG_DATACSUM;
 
 	if (bytenr != round_down(bytenr, root->fs_info->sectorsize)) {
-		error("bytenr not sectorsize aligned: %llu",
-				(unsigned long long)bytenr);
+		error("bytenr not sectorsize aligned: %llu", bytenr);
 		return -EINVAL;
 	}
 	if (len != round_down(len, root->fs_info->sectorsize)) {
-		error("length not sectorsize aligned: %llu",
-				(unsigned long long)len);
+		error("length not sectorsize aligned: %llu", len);
 		return -EINVAL;
 	}
 	len = min_t(u64, len, BTRFS_MAX_EXTENT_SIZE);
@@ -231,32 +234,30 @@ static int create_image_file_range(struct btrfs_trans_handle *trans,
 	 * Or we will insert a hole into current image file, and later
 	 * migrate block will fail as there is already a file extent.
 	 */
-	for (i = 0; i < ARRAY_SIZE(btrfs_reserved_ranges); i++) {
-		const struct simple_range *reserved = &btrfs_reserved_ranges[i];
-
+	reserved = intersect_with_reserved(bytenr, len);
+	if (reserved) {
 		/*
 		 * |-- reserved --|
-		 *         |--range---|
+		 *         |-- range --|
 		 * or
 		 * |---- reserved ----|
 		 *    |-- range --|
 		 * Skip to reserved range end
 		 */
-		if (bytenr >= reserved->start && bytenr < range_end(reserved)) {
+		if (bytenr >= reserved->start) {
 			*ret_len = range_end(reserved) - bytenr;
 			return 0;
 		}
 
 		/*
-		 *      |---reserved---|
-		 * |----range-------|
+		 *      |-- reserved --|
+		 * |-- range --|
+		 * or
+		 *      |-- reserved --|
+		 * |------- range -------|
 		 * Leading part may still create a file extent
 		 */
-		if (bytenr < reserved->start &&
-		    bytenr + len >= range_end(reserved)) {
-			len = min_t(u64, len, reserved->start - bytenr);
-			break;
-		}
+		len = min_t(u64, len, reserved->start - bytenr);
 	}
 
 	/* Check if we are going to insert regular file extent, or hole */
@@ -314,8 +315,7 @@ static int create_image_file_range(struct btrfs_trans_handle *trans,
 	}
 
 	if (len != round_down(len, root->fs_info->sectorsize)) {
-		error("remaining length not sectorsize aligned: %llu",
-				(unsigned long long)len);
+		error("remaining length not sectorsize aligned: %llu", len);
 		return -EINVAL;
 	}
 	ret = btrfs_record_file_extent(trans, root, ino, inode, bytenr,
@@ -375,7 +375,12 @@ static int migrate_one_reserved_range(struct btrfs_trans_handle *trans,
 			break;
 		cur_len = min(cache->start + cache->size, range_end(range)) -
 			  cur_off;
-		BUG_ON(cur_len < root->fs_info->sectorsize);
+		if (cur_len < root->fs_info->sectorsize) {
+			error("reserved range cannot be migrated: length %llu < sectorsize %u",
+				cur_len, root->fs_info->sectorsize);
+			ret = -EUCLEAN;
+			break;
+		}
 
 		/* reserve extent for the data */
 		ret = btrfs_reserve_extent(trans, root, cur_len, 0, 0, (u64)-1,
@@ -1009,8 +1014,9 @@ static int init_btrfs(struct btrfs_mkfs_config *cfg, struct btrfs_root *root,
 	fs_info->avoid_meta_chunk_alloc = 1;
 	trans = btrfs_start_transaction(root, 1);
 	if (IS_ERR(trans)) {
-		error("unable to start transaction");
 		ret = PTR_ERR(trans);
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		goto err;
 	}
 	ret = btrfs_fix_block_accounting(trans);
@@ -1096,7 +1102,7 @@ static int migrate_super_block(int fd, u64 old_bytenr)
 			len = BTRFS_SUPER_INFO_SIZE;
 		ret = pwrite(fd, &super, len, bytenr);
 		if (ret != len) {
-			fprintf(stderr, "unable to zero fill device\n");
+			error("unable to zero fill device");
 			break;
 		}
 		bytenr += len;
@@ -1128,7 +1134,8 @@ static int convert_open_fs(const char *devname,
 }
 
 static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
-		const char *fslabel, int progress, u64 features, u16 csum_type,
+		const char *fslabel, int progress,
+		struct btrfs_mkfs_features *features, u16 csum_type,
 		char fsid[BTRFS_UUID_UNPARSED_SIZE])
 {
 	int ret;
@@ -1140,7 +1147,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	struct btrfs_key key;
 	char subvol_name[SOURCE_FS_NAME_LEN + 8];
 	struct task_ctx ctx;
-	char features_buf[64];
+	char features_buf[BTRFS_FEATURE_STRING_BUF_SIZE];
 	char fsid_str[BTRFS_UUID_UNPARSED_SIZE];
 	struct btrfs_mkfs_config mkfs_cfg;
 	bool btrfs_sb_committed = false;
@@ -1177,7 +1184,8 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 		goto fail;
 	}
 	btrfs_parse_fs_features_to_string(features_buf, features);
-	if (features == BTRFS_MKFS_DEFAULT_FEATURES)
+	if (!memcmp(features, &btrfs_mkfs_default_features,
+		   sizeof(struct btrfs_mkfs_features)))
 		strcat(features_buf, " (default)");
 
 	if (convert_flags & CONVERT_FLAG_COPY_FSID) {
@@ -1225,7 +1233,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	mkfs_cfg.nodesize = nodesize;
 	mkfs_cfg.sectorsize = blocksize;
 	mkfs_cfg.stripesize = blocksize;
-	mkfs_cfg.features = features;
+	memcpy(&mkfs_cfg.features, features, sizeof(struct btrfs_mkfs_features));
 	mkfs_cfg.leaf_data_size = __BTRFS_LEAF_DATA_SIZE(nodesize);
 
 	printf("Create initial btrfs filesystem\n");
@@ -1821,12 +1829,13 @@ int BOX_MAIN(convert)(int argc, char *argv[])
 	int progress = 1;
 	char *file;
 	char fslabel[BTRFS_LABEL_SIZE] = { 0 };
-	u64 features = BTRFS_MKFS_DEFAULT_FEATURES;
+	struct btrfs_mkfs_features features = btrfs_mkfs_default_features;
 	u16 csum_type = BTRFS_CSUM_TYPE_CRC32;
 	u32 copy_fsid = 0;
 	char fsid[BTRFS_UUID_UNPARSED_SIZE] = {0};
 
 	crc32c_optimization_init();
+	btrfs_assert_feature_buf_size();
 	printf("btrfs-convert from %s\n\n", PACKAGE_STRING);
 
 	while(1) {
@@ -1899,16 +1908,18 @@ int BOX_MAIN(convert)(int argc, char *argv[])
 					exit(1);
 				}
 				free(orig);
-				if (features & BTRFS_FEATURE_LIST_ALL) {
+				if (features.runtime_flags &
+				    BTRFS_FEATURE_RUNTIME_LIST_ALL) {
 					btrfs_list_all_fs_features(
-						~BTRFS_CONVERT_ALLOWED_FEATURES);
+						&btrfs_convert_allowed_features);
 					exit(0);
 				}
-				if (features & ~BTRFS_CONVERT_ALLOWED_FEATURES) {
+				if (btrfs_check_features(&features,
+						&btrfs_convert_allowed_features)) {
 					char buf[64];
 
 					btrfs_parse_fs_features_to_string(buf,
-						features & ~BTRFS_CONVERT_ALLOWED_FEATURES);
+						&btrfs_convert_allowed_features);
 					error("features not allowed for convert: %s",
 						buf);
 					exit(1);
@@ -1983,7 +1994,7 @@ int BOX_MAIN(convert)(int argc, char *argv[])
 		cf |= noxattr ? 0 : CONVERT_FLAG_XATTR;
 		cf |= copy_fsid;
 		cf |= copylabel;
-		ret = do_convert(file, cf, nodesize, fslabel, progress, features,
+		ret = do_convert(file, cf, nodesize, fslabel, progress, &features,
 				 csum_type, fsid);
 	}
 	if (ret)

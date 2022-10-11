@@ -54,7 +54,7 @@ In addition to that, a plain snapshot will also have last change generation and
 creation generation equal.
 
 Read-only snapshots are building blocks of incremental send (see
-``btrfs-send(8)``) and the whole use case relies on unmodified snapshots where
+:doc:`btrfs-send(8)<btrfs-send>`) and the whole use case relies on unmodified snapshots where
 the relative changes are generated from. Thus, changing the subvolume flags
 from read-only to read-write will break the assumptions and may lead to
 unexpected changes in the resulting incremental stream.
@@ -131,7 +131,7 @@ Subvolumes belong to a single filesystem and as implemented now all share the
 same specific mount options, changes done by remount have immediate effect. This
 may change in the future.
 
-Mounting a read-write snapshot as read-only is possible and will not chnange the
+Mounting a read-write snapshot as read-only is possible and will not change the
 *ro* property and flag of the subvolume.
 
 The name of the mounted subvolume is stored in file ``/proc/self/mounts`` in the

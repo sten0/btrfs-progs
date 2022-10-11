@@ -17,18 +17,23 @@
  */
 
 #include "kerncompat.h"
-
+#include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <getopt.h>
+#include <errno.h>
+#include <stdio.h>
+#include "kernel-lib/list.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
 #include "kernel-shared/disk-io.h"
-#include "cmds/commands.h"
+#include "kernel-shared/extent_io.h"
+#include "common/messages.h"
 #include "common/utils.h"
 #include "common/help.h"
-#include "cmds/rescue.h"
 #include "common/open-utils.h"
+#include "cmds/commands.h"
+#include "cmds/rescue.h"
 
 static const char * const rescue_cmd_group_usage[] = {
 	"btrfs rescue <command> [options] <path>",
@@ -52,7 +57,7 @@ static int cmd_rescue_chunk_recover(const struct cmd_struct *cmd,
 {
 	int ret = 0;
 	char *file;
-	int yes = 0;
+	bool yes = false;
 
 	/* If verbose is unset, set it to 0 */
 	if (bconf.verbose == BTRFS_BCONF_UNSET)
@@ -65,7 +70,7 @@ static int cmd_rescue_chunk_recover(const struct cmd_struct *cmd,
 			break;
 		switch (c) {
 		case 'y':
-			yes = 1;
+			yes = true;
 			break;
 		case 'v':
 			bconf.verbose++;
@@ -92,12 +97,12 @@ static int cmd_rescue_chunk_recover(const struct cmd_struct *cmd,
 
 	ret = btrfs_recover_chunk_tree(file, yes);
 	if (!ret) {
-		fprintf(stdout, "Chunk tree recovered successfully\n");
+		pr_verbose(LOG_DEFAULT, "Chunk tree recovered successfully\n");
 	} else if (ret > 0) {
 		ret = 0;
-		fprintf(stdout, "Chunk tree recovery aborted\n");
+		pr_verbose(LOG_DEFAULT, "Chunk tree recovery aborted\n");
 	} else {
-		fprintf(stdout, "Chunk tree recovery failed\n");
+		pr_verbose(LOG_DEFAULT, "Chunk tree recovery failed\n");
 	}
 	return ret;
 }
@@ -126,7 +131,7 @@ static int cmd_rescue_super_recover(const struct cmd_struct *cmd,
 				    int argc, char **argv)
 {
 	int ret;
-	int yes = 0;
+	bool yes = false;
 	char *dname;
 
 	optind = 0;
@@ -139,7 +144,7 @@ static int cmd_rescue_super_recover(const struct cmd_struct *cmd,
 			bconf_be_verbose();
 			break;
 		case 'y':
-			yes = 1;
+			yes = true;
 			break;
 		default:
 			usage_unknown_option(cmd, argv);
@@ -202,9 +207,8 @@ static int cmd_rescue_zero_log(const struct cmd_struct *cmd,
 	}
 
 	sb = root->fs_info->super_copy;
-	printf("Clearing log on %s, previous log_root %llu, level %u\n",
-			devname,
-			(unsigned long long)btrfs_super_log_root(sb),
+	pr_verbose(LOG_DEFAULT, "Clearing log on %s, previous log_root %llu, level %u\n",
+			devname, btrfs_super_log_root(sb),
 			(unsigned)btrfs_super_log_root_level(sb));
 	btrfs_set_super_log_root(sb, 0);
 	btrfs_set_super_log_root_level(sb, 0);

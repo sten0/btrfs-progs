@@ -14,26 +14,21 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
+#include <sys/ioctl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/ioctl.h>
 #include <errno.h>
-#include <sys/stat.h>
 #include <getopt.h>
-
-#include "kerncompat.h"
+#include <dirent.h>
+#include <stdbool.h>
 #include "kernel-shared/ctree.h"
-#include "ioctl.h"
+#include "kernel-shared/zoned.h"
 #include "common/string-table.h"
 #include "common/utils.h"
-#include "kernel-shared/volumes.h"
-#include "kernel-shared/zoned.h"
-#include "cmds/filesystem-usage.h"
-
-#include "cmds/commands.h"
 #include "common/help.h"
 #include "common/path-utils.h"
 #include "common/device-utils.h"
@@ -41,7 +36,12 @@
 #include "common/format-output.h"
 #include "common/open-utils.h"
 #include "common/units.h"
+#include "common/string-utils.h"
+#include "common/messages.h"
+#include "cmds/commands.h"
+#include "cmds/filesystem-usage.h"
 #include "mkfs/common.h"
+#include "ioctl.h"
 
 static const char * const device_cmd_group_usage[] = {
 	"btrfs device <command> [<args>]",
@@ -65,8 +65,8 @@ static int cmd_device_add(const struct cmd_struct *cmd,
 	char	*mntpnt;
 	int i, fdmnt, ret = 0;
 	DIR	*dirstream = NULL;
-	int discard = 1;
-	int force = 0;
+	bool discard = true;
+	bool force = false;
 	int last_dev;
 	bool enqueue = false;
 	int zoned;
@@ -88,10 +88,10 @@ static int cmd_device_add(const struct cmd_struct *cmd,
 			break;
 		switch (c) {
 		case 'K':
-			discard = 0;
+			discard = false;
 			break;
 		case 'f':
-			force = 1;
+			force = true;
 			break;
 		case GETOPT_VAL_ENQUEUE:
 			enqueue = true;
@@ -237,7 +237,7 @@ static int _cmd_device_remove(const struct cmd_struct *cmd,
 		}
 		if (strcmp("cancel", argv[i]) == 0) {
 			cancel = true;
-			printf("Request to cancel running device deletion\n");
+			pr_verbose(LOG_DEFAULT, "Request to cancel running device deletion\n");
 		}
 	}
 
@@ -256,13 +256,13 @@ static int _cmd_device_remove(const struct cmd_struct *cmd,
 	for(i = optind; i < argc - 1; i++) {
 		struct	btrfs_ioctl_vol_args arg;
 		struct btrfs_ioctl_vol_args_v2 argv2 = {0};
-		int is_devid = 0;
+		bool is_devid = false;
 		int	res;
 
 		if (string_is_numerical(argv[i])) {
 			argv2.devid = arg_strtou64(argv[i]);
 			argv2.flags = BTRFS_DEVICE_SPEC_BY_ID;
-			is_devid = 1;
+			is_devid = true;
 		} else if (strcmp(argv[i], "missing") == 0 ||
 			   cancel ||
 			   path_is_block_device(argv[i]) == 1) {
@@ -304,7 +304,7 @@ static int _cmd_device_remove(const struct cmd_struct *cmd,
 				msg = strerror(errno);
 			if (is_devid) {
 				error("error removing devid %llu: %s",
-					(unsigned long long)argv2.devid, msg);
+					argv2.devid, msg);
 			} else {
 				error("error removing device '%s': %s",
 					argv[i], msg);
@@ -410,9 +410,9 @@ static int cmd_device_scan(const struct cmd_struct *cmd, int argc, char **argv)
 {
 	int i;
 	int devstart;
-	int all = 0;
+	bool all = false;
+	bool forget = 0;
 	int ret = 0;
-	int forget = 0;
 
 	optind = 0;
 	while (1) {
@@ -428,10 +428,10 @@ static int cmd_device_scan(const struct cmd_struct *cmd, int argc, char **argv)
 			break;
 		switch (c) {
 		case 'd':
-			all = 1;
+			all = true;
 			break;
 		case 'u':
-			forget = 1;
+			forget = true;
 			break;
 		default:
 			usage_unknown_option(cmd, argv);
@@ -453,7 +453,7 @@ static int cmd_device_scan(const struct cmd_struct *cmd, int argc, char **argv)
 				error("cannot unregister devices: %m");
 			}
 		} else {
-			pr_verbose(-1, "Scanning for Btrfs filesystems\n");
+			pr_verbose(LOG_DEFAULT, "Scanning for Btrfs filesystems\n");
 			ret = btrfs_scan_devices(1);
 			error_on(ret, "error %d while scanning", ret);
 			ret = btrfs_register_all_devices();
@@ -485,7 +485,7 @@ static int cmd_device_scan(const struct cmd_struct *cmd, int argc, char **argv)
 				error("cannot unregister device '%s': %m", path);
 			}
 		} else {
-			printf("Scanning for btrfs filesystems on '%s'\n", path);
+			pr_verbose(LOG_DEFAULT, "Scanning for btrfs filesystems on '%s'\n", path);
 			if (btrfs_register_one_device(path) != 0) {
 				ret = 1;
 				free(path);
@@ -607,7 +607,7 @@ static int print_device_stat_string(struct format_ctx *fctx,
 		canonical_path = malloc(32);
 
 		if (!canonical_path) {
-			error("not enough memory for path buffer");
+			error_msg(ERROR_MSG_MEMORY, "device path buffer");
 			return -ENOMEM;
 		}
 
@@ -632,8 +632,8 @@ static int print_device_stat_string(struct format_ctx *fctx,
 		if (json) {
 			fmt_print(fctx, dev_stats[j].name, args->values[stat_idx]);
 		} else {
-			printf("[%s].%-16s %llu\n", canonical_path, dev_stats[j].name,
-					(unsigned long long)args->values[stat_idx]);
+			pr_verbose(LOG_DEFAULT, "[%s].%-16s %llu\n", canonical_path, dev_stats[j].name,
+					args->values[stat_idx]);
 		}
 		if (check && (args->values[stat_idx] > 0))
 			err |= 64;
@@ -671,7 +671,7 @@ static int print_device_stat_tabular(struct string_table *table, int row,
 		canonical_path = malloc(32);
 
 		if (!canonical_path) {
-			error("not enough memory for path buffer");
+			error_msg(ERROR_MSG_MEMORY, "device path buffer");
 			return -ENOMEM;
 		}
 
@@ -775,7 +775,7 @@ static int cmd_device_stats(const struct cmd_struct *cmd, int argc, char **argv)
 		 */
 		table = table_create(7, fi_args.num_devices + 2);
 		if (!table) {
-			error("not enough memory");
+			error_msg(ERROR_MSG_MEMORY, NULL);
 			goto out;
 		}
 		free_table = true;
@@ -868,11 +868,11 @@ static int _cmd_device_usage(int fd, const char *path, unsigned unit_mode)
 		goto out;
 
 	for (i = 0; i < devcount; i++) {
-		printf("%s, ID: %llu\n", devinfo[i].path, devinfo[i].devid);
+		pr_verbose(LOG_DEFAULT, "%s, ID: %llu\n", devinfo[i].path, devinfo[i].devid);
 		print_device_sizes(&devinfo[i], unit_mode);
 		print_device_chunks(&devinfo[i], chunkinfo, chunkcount,
 				unit_mode);
-		printf("\n");
+		pr_verbose(LOG_DEFAULT, "\n");
 	}
 
 out:
@@ -900,7 +900,7 @@ static int cmd_device_usage(const struct cmd_struct *cmd, int argc, char **argv)
 		DIR *dirstream = NULL;
 
 		if (i > 1)
-			printf("\n");
+			pr_verbose(LOG_DEFAULT, "\n");
 
 		fd = btrfs_open_dir(argv[i], &dirstream, 1);
 		if (fd < 0) {

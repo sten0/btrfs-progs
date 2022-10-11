@@ -16,15 +16,23 @@
 
 #include "kerncompat.h"
 #include <sys/ioctl.h>
-#include <unistd.h>
 #include <getopt.h>
 #include <time.h>
+#include <dirent.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <uuid/uuid.h>
+#include "kernel-lib/rbtree.h"
+#include "kernel-lib/rbtree_types.h"
 #include "kernel-shared/ctree.h"
+#include "common/defs.h"
 #include "common/rbtree-utils.h"
 #include "common/help.h"
 #include "common/messages.h"
 #include "common/open-utils.h"
+#include "common/string-utils.h"
 #include "common/utils.h"
 #include "cmds/commands.h"
 #include "ioctl.h"
@@ -375,7 +383,7 @@ static int btrfs_list_setup_comparer(struct btrfs_list_comparer_set **comp_set,
 		tmp = set;
 		set = realloc(set, size);
 		if (!set) {
-			fprintf(stderr, "memory allocation failed\n");
+			error_msg(ERROR_MSG_MEMORY, NULL);
 			free(tmp);
 			exit(1);
 		}
@@ -398,7 +406,7 @@ static int btrfs_list_setup_comparer(struct btrfs_list_comparer_set **comp_set,
 static int sort_comp(const struct root_info *entry1, const struct root_info *entry2,
 		     struct btrfs_list_comparer_set *set)
 {
-	int rootid_compared = 0;
+	bool rootid_compared = false;
 	int i, ret = 0;
 
 	if (!set || !set->ncomps)
@@ -415,7 +423,7 @@ static int sort_comp(const struct root_info *entry1, const struct root_info *ent
 			return ret;
 
 		if (set->comps[i].comp_func == comp_entry_with_rootid)
-			rootid_compared = 1;
+			rootid_compared = true;
 	}
 
 	if (!rootid_compared)
@@ -525,7 +533,7 @@ static int update_root(struct rb_root *root_lookup,
 
 		ri->name = malloc(name_len + 1);
 		if (!ri->name) {
-			fprintf(stderr, "memory allocation failed\n");
+			error_msg(ERROR_MSG_MEMORY, NULL);
 			exit(1);
 		}
 		strncpy(ri->name, name, name_len);
@@ -589,7 +597,7 @@ static int add_root(struct rb_root *root_lookup,
 
 	ri = calloc(1, sizeof(*ri));
 	if (!ri) {
-		printf("memory allocation failed\n");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		exit(1);
 	}
 	ri->root_id = root_id;
@@ -597,7 +605,7 @@ static int add_root(struct rb_root *root_lookup,
 	if (name && name_len > 0) {
 		ri->name = malloc(name_len + 1);
 		if (!ri->name) {
-			fprintf(stderr, "memory allocation failed\n");
+			error_msg(ERROR_MSG_MEMORY, NULL);
 			exit(1);
 		}
 		strncpy(ri->name, name, name_len);
@@ -632,8 +640,7 @@ static int add_root(struct rb_root *root_lookup,
 	ret = root_tree_insert(root_lookup, ri);
 	if (ret < 0) {
 		errno = -ret;
-		error("failed to insert subvolume %llu to tree: %m",
-				(unsigned long long)root_id);
+		error("failed to insert subvolume %llu to tree: %m", root_id);
 		exit(1);
 	}
 	return 0;
@@ -700,7 +707,7 @@ static int resolve_root(struct rb_root *rl, struct root_info *ri,
 			/* room for / and for null */
 			tmp = malloc(add_len + 2 + len);
 			if (!tmp) {
-				perror("malloc failed");
+				error_msg(ERROR_MSG_MEMORY, NULL);
 				exit(1);
 			}
 			memcpy(tmp + add_len + 1, full_path, len);
@@ -770,8 +777,7 @@ static int lookup_ino_path(int fd, struct root_info *ri)
 			ri->ref_tree = 0;
 			return -ENOENT;
 		}
-		error("failed to lookup path for root %llu: %m",
-			(unsigned long long)ri->ref_tree);
+		error("failed to lookup path for root %llu: %m", ri->ref_tree);
 		return ret;
 	}
 
@@ -782,7 +788,7 @@ static int lookup_ino_path(int fd, struct root_info *ri)
 		 */
 		ri->path = malloc(strlen(ri->name) + strlen(args.name) + 1);
 		if (!ri->path) {
-			perror("malloc failed");
+			error_msg(ERROR_MSG_MEMORY, NULL);
 			exit(1);
 		}
 		strcpy(ri->path, args.name);
@@ -969,7 +975,7 @@ static int filter_full_path(struct root_info *ri, u64 data)
 
 		tmp = malloc(len + add_len + 2);
 		if (!tmp) {
-			fprintf(stderr, "memory allocation failed\n");
+			error_msg(ERROR_MSG_MEMORY, NULL);
 			exit(1);
 		}
 		memcpy(tmp + add_len + 1, ri->full_path, len);
@@ -1030,7 +1036,7 @@ static void btrfs_list_setup_filter(struct btrfs_list_filter_set **filter_set,
 		tmp = set;
 		set = realloc(set, size);
 		if (!set) {
-			fprintf(stderr, "memory allocation failed\n");
+			error_msg(ERROR_MSG_MEMORY, NULL);
 			free(tmp);
 			exit(1);
 		}
@@ -1124,19 +1130,19 @@ static void print_subvolume_column(struct root_info *subv,
 
 	switch (column) {
 	case BTRFS_LIST_OBJECTID:
-		printf("%llu", subv->root_id);
+		pr_verbose(LOG_DEFAULT, "%llu", subv->root_id);
 		break;
 	case BTRFS_LIST_GENERATION:
-		printf("%llu", subv->gen);
+		pr_verbose(LOG_DEFAULT, "%llu", subv->gen);
 		break;
 	case BTRFS_LIST_OGENERATION:
-		printf("%llu", subv->ogen);
+		pr_verbose(LOG_DEFAULT, "%llu", subv->ogen);
 		break;
 	case BTRFS_LIST_PARENT:
-		printf("%llu", subv->ref_tree);
+		pr_verbose(LOG_DEFAULT, "%llu", subv->ref_tree);
 		break;
 	case BTRFS_LIST_TOP_LEVEL:
-		printf("%llu", subv->top_id);
+		pr_verbose(LOG_DEFAULT, "%llu", subv->top_id);
 		break;
 	case BTRFS_LIST_OTIME:
 		if (subv->otime) {
@@ -1146,32 +1152,32 @@ static void print_subvolume_column(struct root_info *subv,
 			strftime(tstr, 256, "%Y-%m-%d %X", &tm);
 		} else
 			strcpy(tstr, "-");
-		printf("%s", tstr);
+		pr_verbose(LOG_DEFAULT, "%s", tstr);
 		break;
 	case BTRFS_LIST_UUID:
 		if (uuid_is_null(subv->uuid))
 			strcpy(uuidparse, "-");
 		else
 			uuid_unparse(subv->uuid, uuidparse);
-		printf("%-36s", uuidparse);
+		pr_verbose(LOG_DEFAULT, "%-36s", uuidparse);
 		break;
 	case BTRFS_LIST_PUUID:
 		if (uuid_is_null(subv->puuid))
 			strcpy(uuidparse, "-");
 		else
 			uuid_unparse(subv->puuid, uuidparse);
-		printf("%-36s", uuidparse);
+		pr_verbose(LOG_DEFAULT, "%-36s", uuidparse);
 		break;
 	case BTRFS_LIST_RUUID:
 		if (uuid_is_null(subv->ruuid))
 			strcpy(uuidparse, "-");
 		else
 			uuid_unparse(subv->ruuid, uuidparse);
-		printf("%-36s", uuidparse);
+		pr_verbose(LOG_DEFAULT, "%-36s", uuidparse);
 		break;
 	case BTRFS_LIST_PATH:
 		BUG_ON(!subv->full_path);
-		printf("%s", subv->full_path);
+		pr_verbose(LOG_DEFAULT, "%s", subv->full_path);
 		break;
 	default:
 		break;
@@ -1188,11 +1194,11 @@ static void print_one_subvol_info_raw(struct root_info *subv,
 			continue;
 
 		if (raw_prefix)
-			printf("%s",raw_prefix);
+			pr_verbose(LOG_DEFAULT, "%s",raw_prefix);
 
 		print_subvolume_column(subv, i);
 	}
-	printf("\n");
+	pr_verbose(LOG_DEFAULT, "\n");
 }
 
 static void print_one_subvol_info_table(struct root_info *subv)
@@ -1206,12 +1212,12 @@ static void print_one_subvol_info_table(struct root_info *subv)
 		print_subvolume_column(subv, i);
 
 		if (i != BTRFS_LIST_PATH)
-			printf("\t");
+			pr_verbose(LOG_DEFAULT, "\t");
 
 		if (i == BTRFS_LIST_TOP_LEVEL)
-			printf("\t");
+			pr_verbose(LOG_DEFAULT, "\t");
 	}
-	printf("\n");
+	pr_verbose(LOG_DEFAULT, "\n");
 }
 
 static void print_one_subvol_info_default(struct root_info *subv)
@@ -1222,13 +1228,13 @@ static void print_one_subvol_info_default(struct root_info *subv)
 		if (!btrfs_list_columns[i].need_print)
 			continue;
 
-		printf("%s ", btrfs_list_columns[i].name);
+		pr_verbose(LOG_DEFAULT, "%s ", btrfs_list_columns[i].name);
 		print_subvolume_column(subv, i);
 
 		if (i != BTRFS_LIST_PATH)
-			printf(" ");
+			pr_verbose(LOG_DEFAULT, " ");
 	}
-	printf("\n");
+	pr_verbose(LOG_DEFAULT, "\n");
 }
 
 static void print_all_subvol_info_tab_head(void)
@@ -1239,10 +1245,10 @@ static void print_all_subvol_info_tab_head(void)
 
 	for (i = 0; i < BTRFS_LIST_ALL; i++) {
 		if (btrfs_list_columns[i].need_print)
-			printf("%s\t", btrfs_list_columns[i].name);
+			pr_verbose(LOG_DEFAULT, "%s\t", btrfs_list_columns[i].name);
 
 		if (i == BTRFS_LIST_ALL-1)
-			printf("\n");
+			pr_verbose(LOG_DEFAULT, "\n");
 	}
 
 	for (i = 0; i < BTRFS_LIST_ALL; i++) {
@@ -1253,10 +1259,10 @@ static void print_all_subvol_info_tab_head(void)
 			while (len--)
 				strcat(barrier, "-");
 
-			printf("%s\t", barrier);
+			pr_verbose(LOG_DEFAULT, "%s\t", barrier);
 		}
 		if (i == BTRFS_LIST_ALL-1)
-			printf("\n");
+			pr_verbose(LOG_DEFAULT, "\n");
 	}
 }
 
@@ -1356,24 +1362,24 @@ static int btrfs_list_subvols_print(int fd, struct btrfs_list_filter_set *filter
 static int btrfs_list_parse_sort_string(char *opt_arg,
 				 struct btrfs_list_comparer_set **comps)
 {
-	int order;
-	int flag;
+	bool order;
+	bool flag;
 	char *p;
 	char **ptr_argv;
 	int what_to_sort;
 
 	while ((p = strtok(opt_arg, ",")) != NULL) {
-		flag = 0;
+		flag = false;
 		ptr_argv = all_sort_items;
 
 		while (*ptr_argv) {
 			if (strcmp(*ptr_argv, p) == 0) {
-				flag = 1;
+				flag = true;
 				break;
 			} else {
 				p++;
 				if (strcmp(*ptr_argv, p) == 0) {
-					flag = 1;
+					flag = true;
 					p--;
 					break;
 				}
@@ -1382,18 +1388,18 @@ static int btrfs_list_parse_sort_string(char *opt_arg,
 			ptr_argv++;
 		}
 
-		if (flag == 0)
+		if (flag == false)
 			return -1;
 
 		else {
 			if (*p == '+') {
-				order = 0;
+				order = false;
 				p++;
 			} else if (*p == '-') {
-				order = 1;
+				order = true;
 				p++;
 			} else
-				order = 0;
+				order = false;
 
 			what_to_sort = btrfs_list_get_sort_item(p);
 			btrfs_list_setup_comparer(comps, what_to_sort, order);
@@ -1449,7 +1455,7 @@ static struct btrfs_list_filter_set *btrfs_list_alloc_filter_set(void)
 	       BTRFS_LIST_NFILTERS_INCREASE * sizeof(struct btrfs_list_filter);
 	set = calloc(1, size);
 	if (!set) {
-		fprintf(stderr, "memory allocation failed\n");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		exit(1);
 	}
 
@@ -1467,7 +1473,7 @@ static struct btrfs_list_comparer_set *btrfs_list_alloc_comparer_set(void)
 	       BTRFS_LIST_NCOMPS_INCREASE * sizeof(struct btrfs_list_comparer);
 	set = calloc(1, size);
 	if (!set) {
-		fprintf(stderr, "memory allocation failed\n");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		exit(1);
 	}
 
@@ -1485,8 +1491,8 @@ static int cmd_subvol_list(const struct cmd_struct *cmd, int argc, char **argv)
 	u64 top_id;
 	int ret = -1, uerr = 0;
 	char *subvol;
-	int is_list_all = 0;
-	int is_only_in_path = 0;
+	bool is_list_all = false;
+	bool is_only_in_path = false;
 	DIR *dirstream = NULL;
 	enum btrfs_list_layout layout = BTRFS_LIST_LAYOUT_DEFAULT;
 
@@ -1511,7 +1517,7 @@ static int cmd_subvol_list(const struct cmd_struct *cmd, int argc, char **argv)
 			btrfs_list_setup_print_column(BTRFS_LIST_PARENT);
 			break;
 		case 'a':
-			is_list_all = 1;
+			is_list_all = true;
 			break;
 		case 'c':
 			btrfs_list_setup_print_column(BTRFS_LIST_OGENERATION);
@@ -1525,7 +1531,7 @@ static int cmd_subvol_list(const struct cmd_struct *cmd, int argc, char **argv)
 			btrfs_list_setup_print_column(BTRFS_LIST_GENERATION);
 			break;
 		case 'o':
-			is_only_in_path = 1;
+			is_only_in_path = true;
 			break;
 		case 't':
 			layout = BTRFS_LIST_LAYOUT_TABLE;

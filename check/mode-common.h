@@ -21,8 +21,17 @@
 #ifndef __BTRFS_CHECK_MODE_COMMON_H__
 #define __BTRFS_CHECK_MODE_COMMON_H__
 
+#include "kerncompat.h"
 #include <sys/stat.h>
+#include <stdbool.h>
+#include "kernel-lib/list.h"
 #include "kernel-shared/ctree.h"
+#include "common/messages.h"
+
+struct btrfs_trans_handle;
+struct extent_buffer;
+
+extern struct task_ctx g_task_ctx;
 
 #define FREE_SPACE_CACHE_INODE_MODE	(0100600)
 /*
@@ -73,7 +82,6 @@ extern int no_holes;
 extern int init_extent_tree;
 extern int check_data_csum;
 extern struct btrfs_fs_info *gfs_info;
-extern struct task_ctx ctx;
 extern struct cache_tree *roots_info_cache;
 
 static inline u8 imode_to_type(u32 imode)

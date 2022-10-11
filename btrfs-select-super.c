@@ -16,22 +16,19 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include "kerncompat.h"
+#include <errno.h>
+#include <getopt.h>
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/disk-io.h"
-#include "kernel-shared/print-tree.h"
-#include "kernel-shared/transaction.h"
-#include "kernel-lib/list.h"
-#include "kernel-lib/radix-tree.h"
 #include "common/utils.h"
 #include "common/help.h"
 #include "common/open-utils.h"
+#include "common/messages.h"
+#include "common/string-utils.h"
 
 static void print_usage(void)
 {
@@ -56,8 +53,7 @@ int main(int argc, char **argv)
 			case 's':
 				num = arg_strtou64(optarg);
 				if (num >= BTRFS_SUPER_MIRROR_MAX) {
-					fprintf(stderr,
-						"ERROR: super mirror should be less than: %d\n",
+					error("super mirror should be less than: %d",
 						BTRFS_SUPER_MIRROR_MAX);
 					exit(1);
 				}
@@ -72,11 +68,9 @@ int main(int argc, char **argv)
 		return 1;
 
 	if (bytenr == 0) {
-		fprintf(stderr, "Please select the super copy with -s\n");
+		error("please select the super copy with -s");
 		print_usage();
 	}
-
-	radix_tree_init();
 
 	if((ret = check_mounted(argv[optind])) < 0) {
 		errno = -ret;
@@ -90,7 +84,7 @@ int main(int argc, char **argv)
 	root = open_ctree(argv[optind], bytenr, 1);
 
 	if (!root) {
-		fprintf(stderr, "Open ctree failed\n");
+		error("open ctree failed");
 		return 1;
 	}
 
@@ -102,8 +96,7 @@ int main(int argc, char **argv)
 	 * transaction commit.  We just want the super copy we pulled off the
 	 * disk to overwrite all the other copies
 	 */
-	printf("using SB copy %llu, bytenr %llu\n", (unsigned long long)num,
-	       (unsigned long long)bytenr);
+	printf("using SB copy %llu, bytenr %llu\n", num, bytenr);
 	close_ctree(root);
 	btrfs_close_all_devices();
 	return ret;

@@ -16,13 +16,17 @@
  * Boston, MA 021110-1307, USA.
  */
 
-#include <uuid/uuid.h>
 #include <unistd.h>
-
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include "kernel-shared/ctree.h"
 #include "kernel-shared/send.h"
-#include "common/send-stream.h"
 #include "crypto/crc32c.h"
-#include "common/utils.h"
+#include "common/send-stream.h"
+#include "common/messages.h"
+#include "ioctl.h"
 
 struct btrfs_send_attribute {
 	u16 tlv_type;
@@ -136,7 +140,7 @@ static int read_cmd(struct btrfs_send_stream *sctx)
 		if (!new_read_buf) {
 			ret = -ENOMEM;
 			errno = -ret;
-			error("failed to reallocate read buffer for cmd: %m");
+			error_msg(ERROR_MSG_MEMORY, "read buffer for command");
 			goto out;
 		}
 		sctx->read_buf = new_read_buf;
@@ -353,6 +357,12 @@ static int read_and_process_cmd(struct btrfs_send_stream *sctx)
 	char *xattr_name = NULL;
 	void *xattr_data = NULL;
 	void *data = NULL;
+	u8 verity_algorithm;
+	u32 verity_block_size;
+	int verity_salt_len;
+	void *verity_salt = NULL;
+	int verity_sig_len;
+	void *verity_sig = NULL;
 	struct timespec at;
 	struct timespec ct;
 	struct timespec mt;
@@ -537,6 +547,16 @@ static int read_and_process_cmd(struct btrfs_send_stream *sctx)
 		TLV_GET_U64(sctx, BTRFS_SEND_A_SIZE, &tmp);
 		ret = sctx->ops->update_extent(path, offset, tmp, sctx->user);
 		break;
+	case BTRFS_SEND_C_ENABLE_VERITY:
+		TLV_GET_STRING(sctx, BTRFS_SEND_A_PATH, &path);
+		TLV_GET_U8(sctx, BTRFS_SEND_A_VERITY_ALGORITHM, &verity_algorithm);
+		TLV_GET_U32(sctx, BTRFS_SEND_A_VERITY_BLOCK_SIZE, &verity_block_size);
+		TLV_GET(sctx, BTRFS_SEND_A_VERITY_SALT_DATA, &verity_salt, &verity_salt_len);
+		TLV_GET(sctx, BTRFS_SEND_A_VERITY_SIG_DATA, &verity_sig, &verity_sig_len);
+		ret = sctx->ops->enable_verity(path, verity_algorithm, verity_block_size,
+					       verity_salt_len, verity_salt,
+					       verity_sig_len, verity_sig, sctx->user);
+		break;
 	case BTRFS_SEND_C_END:
 		ret = 1;
 		break;
@@ -611,8 +631,7 @@ int btrfs_read_and_process_send_stream(int fd,
 	sctx.read_buf = malloc(BTRFS_SEND_BUF_SIZE_V1);
 	if (!sctx.read_buf) {
 		ret = -ENOMEM;
-		errno = -ret;
-		error("unable to allocate send stream read buffer: %m");
+		error_msg(ERROR_MSG_MEMORY, "send stream read buffer");
 		goto out;
 	}
 	sctx.read_buf_size = BTRFS_SEND_BUF_SIZE_V1;

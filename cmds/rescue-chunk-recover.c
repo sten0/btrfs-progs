@@ -17,29 +17,27 @@
  */
 
 #include "kerncompat.h"
-
 #include <stdio.h>
-#include <stdio_ext.h>
 #include <stdlib.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <uuid/uuid.h>
 #include <pthread.h>
-
+#include <errno.h>
+#include <stddef.h>
+#include <string.h>
 #include "kernel-lib/list.h"
-#include "kernel-lib/radix-tree.h"
 #include "kernel-shared/ctree.h"
-#include "common/extent-cache.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
-#include "crypto/crc32c.h"
+#include "kernel-shared/extent_io.h"
+#include "common/internal.h"
+#include "common/messages.h"
+#include "common/extent-cache.h"
 #include "common/utils.h"
-#include "check/common.h"
-#include "cmds/commands.h"
 #include "cmds/rescue.h"
+#include "check/common.h"
+#include "ioctl.h"
 
 struct recover_control {
 	int verbose;
@@ -88,7 +86,7 @@ static struct extent_record *btrfs_new_extent_record(struct extent_buffer *eb)
 
 	rec = calloc(1, sizeof(*rec));
 	if (!rec) {
-		fprintf(stderr, "Fail to allocate memory for extent record.\n");
+		error_msg(ERROR_MSG_MEMORY, "extent record");
 		exit(1);
 	}
 
@@ -822,7 +820,7 @@ static int scan_devices(struct recover_control *rc)
 	int devnr = 0;
 	int devidx = 0;
 	int i;
-	int all_done;
+	bool all_done;
 
 	list_for_each_entry(dev, &rc->fs_devices->devices, dev_list)
 		devnr++;
@@ -868,14 +866,14 @@ static int scan_devices(struct recover_control *rc)
 	}
 
 	while (1) {
-		all_done = 1;
+		all_done = true;
 		for (i = 0; i < devidx; i++) {
 			if (dev_scans[i].bytenr == -1)
 				continue;
 			ret = pthread_tryjoin_np(t_scans[i],
 						 (void **)&t_rets[i]);
 			if (ret == EBUSY) {
-				all_done = 0;
+				all_done = false;
 				continue;
 			}
 			if (ret || t_rets[i]) {
@@ -1439,7 +1437,7 @@ open_ctree_with_broken_chunk(struct recover_control *rc)
 
 	fs_info = btrfs_new_fs_info(1, BTRFS_SUPER_INFO_OFFSET);
 	if (!fs_info) {
-		fprintf(stderr, "Failed to allocate memory for fs_info\n");
+		error_msg(ERROR_MSG_MEMORY, "fs_info");
 		return ERR_PTR(-ENOMEM);
 	}
 	fs_info->is_chunk_recover = 1;
@@ -1920,7 +1918,7 @@ static int insert_stripe(struct list_head *devexts,
 		return -ENOENT;
 	if (btrfs_find_device_by_devid(rc->fs_devices, devext->objectid, 1)) {
 		error("unexpected: found another device with id %llu",
-				(unsigned long long)devext->objectid);
+				devext->objectid);
 		return -EINVAL;
 	}
 
@@ -2223,8 +2221,7 @@ static int btrfs_recover_chunks(struct recover_control *rc)
 		ret = insert_cache_extent(&rc->chunk, &chunk->cache);
 		if (ret == -EEXIST) {
 			error("duplicate entry in cache start %llu size %llu",
-					(unsigned long long)chunk->cache.start,
-					(unsigned long long)chunk->cache.size);
+					chunk->cache.start, chunk->cache.size);
 			free(chunk);
 			return ret;
 		}

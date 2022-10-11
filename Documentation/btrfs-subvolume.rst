@@ -265,15 +265,15 @@ returned in case of failure.
 AVAILABILITY
 ------------
 
-**btrfs** is part of btrfs-progs.
-Please refer to the btrfs wiki http://btrfs.wiki.kernel.org for
-further details.
+**btrfs** is part of btrfs-progs.  Please refer to the documentation at
+https://btrfs.readthedocs.io or wiki http://btrfs.wiki.kernel.org for further
+information.
 
 SEE ALSO
 --------
 
-``mkfs.btrfs(8)``,
-``mount(8)``,
-``btrfs-quota(8)``,
-``btrfs-qgroup(8)``,
-``btrfs-send(8)``
+:doc:`btrfs-qgroup(8)<btrfs-qgroup>`,
+:doc:`btrfs-quota(8)<btrfs-quota>`,
+:doc:`btrfs-send(8)<btrfs-send>`,
+:doc:`mkfs.btrfs(8)<mkfs.btrfs>`,
+``mount(8)``

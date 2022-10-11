@@ -17,12 +17,20 @@
 #if BTRFSCONVERT_EXT2
 
 #include "kerncompat.h"
+#include <sys/stat.h>
 #include <linux/limits.h>
+#include <errno.h>
 #include <pthread.h>
-#include "kernel-shared/disk-io.h"
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "kernel-lib/sizes.h"
 #include "kernel-shared/transaction.h"
-#include "common/utils.h"
+#include "common/extent-cache.h"
+#include "common/messages.h"
 #include "convert/common.h"
+#include "convert/source-fs.h"
 #include "convert/source-ext2.h"
 
 /*
@@ -40,7 +48,7 @@ static int ext2_open_fs(struct btrfs_convert_context *cctx, const char *name)
 	ret = ext2fs_open(name, open_flag, 0, 0, unix_io_manager, &ext2_fs);
 	if (ret) {
 		if (ret != EXT2_ET_BAD_MAGIC)
-			fprintf(stderr, "ext2fs_open: %s\n", error_message(ret));
+			error("ext2fs_open: %s", error_message(ret));
 		return -1;
 	}
 
@@ -63,14 +71,12 @@ static int ext2_open_fs(struct btrfs_convert_context *cctx, const char *name)
 	}
 	ret = ext2fs_read_inode_bitmap(ext2_fs);
 	if (ret) {
-		fprintf(stderr, "ext2fs_read_inode_bitmap: %s\n",
-			error_message(ret));
+		error("ext2fs_read_inode_bitmap: %s", error_message(ret));
 		goto fail;
 	}
 	ret = ext2fs_read_block_bitmap(ext2_fs);
 	if (ret) {
-		fprintf(stderr, "ext2fs_read_block_bitmap: %s\n",
-			error_message(ret));
+		error("ext2fs_read_block_bitmap: %s", error_message(ret));
 		goto fail;
 	}
 	/*
@@ -218,7 +224,11 @@ static int ext2_dir_iterate_proc(ext2_ino_t dir, int entry,
 	objectid = dirent->inode + INO_OFFSET;
 	if (!strncmp(dirent->name, dotdot, name_len)) {
 		if (name_len == 2) {
-			BUG_ON(idata->parent != 0);
+			if (idata->parent != 0) {
+				error("dotdot entry parent not zero: %llu",
+						idata->parent);
+				return BLOCK_ABORT;
+			}
 			idata->parent = objectid;
 		}
 		return 0;
@@ -227,7 +237,10 @@ static int ext2_dir_iterate_proc(ext2_ino_t dir, int entry,
 		return 0;
 
 	file_type = dirent->name_len >> 8;
-	BUG_ON(file_type > EXT2_FT_SYMLINK);
+	if (file_type >= EXT2_FT_MAX) {
+		error("invalid file type %d for %*s", file_type, name_len, dirent->name);
+		return BLOCK_ABORT;
+	}
 
 	ret = convert_insert_dirent(idata->trans, idata->root, dirent->name,
 				    name_len, idata->objectid, objectid,
@@ -270,7 +283,7 @@ static int ext2_create_dir_entries(struct btrfs_trans_handle *trans,
 	}
 	return ret;
 error:
-	fprintf(stderr, "ext2fs_dir_iterate2: %s\n", error_message(err));
+	error("ext2fs_dir_iterate2: %s", error_message(err));
 	return -1;
 }
 
@@ -353,7 +366,7 @@ fail:
 	free(buffer);
 	return ret;
 error:
-	fprintf(stderr, "ext2fs_block_iterate2: %s\n", error_message(err));
+	error("ext2fs_block_iterate2: %s", error_message(err));
 	return -1;
 }
 
@@ -453,7 +466,10 @@ static int ext2_acl_to_xattr(void *dst, const void *src,
 	if (count <= 0)
 		goto fail;
 
-	BUG_ON(dst_size < acl_ea_size(count));
+	if (dst_size < acl_ea_size(count)) {
+		error("not enough space to store ACLs");
+		goto fail;
+	}
 	ext_acl->a_version = cpu_to_le32(ACL_EA_VERSION);
 	for (i = 0; i < count; i++, dst_entry++) {
 		src_entry = (ext2_acl_entry *)src;
@@ -530,7 +546,7 @@ static int ext2_copy_single_xattr(struct btrfs_trans_handle *trans,
 	strncat(namebuf, EXT2_EXT_ATTR_NAME(entry), entry->e_name_len);
 	if (name_len + datalen > BTRFS_LEAF_DATA_SIZE(root->fs_info) -
 	    sizeof(struct btrfs_item) - sizeof(struct btrfs_dir_item)) {
-		fprintf(stderr, "skip large xattr on inode %llu name %.*s\n",
+		error("skip large xattr on inode %llu name %.*s",
 			objectid - INO_OFFSET, name_len, namebuf);
 		goto out;
 	}
@@ -568,8 +584,7 @@ static int ext2_copy_extended_attrs(struct btrfs_trans_handle *trans,
 	err = ext2fs_read_inode_full(ext2_fs, ext2_ino, (void *)ext2_inode,
 				     inode_size);
 	if (err) {
-		fprintf(stderr, "ext2fs_read_inode_full: %s\n",
-			error_message(err));
+		error("ext2fs_read_inode_full: %s", error_message(err));
 		ret = -1;
 		goto out;
 	}
@@ -620,8 +635,7 @@ static int ext2_copy_extended_attrs(struct btrfs_trans_handle *trans,
 	}
 	err = ext2fs_read_ext_attr2(ext2_fs, ext2_inode->i_file_acl, buffer);
 	if (err) {
-		fprintf(stderr, "ext2fs_read_ext_attr2: %s\n",
-			error_message(err));
+		error("ext2fs_read_ext_attr2: %s", error_message(err));
 		ret = -1;
 		goto out;
 	}
@@ -744,7 +758,7 @@ static int ext4_copy_inode_timespec_extra(struct btrfs_inode_item *dst,
 	err = ext2fs_read_inode_full(ext2_fs, ext2_ino, (void *)src,
 				     s_inode_size);
 	if (err) {
-		fprintf(stderr, "ext2fs_read_inode_full: %s\n", error_message(err));
+		error("ext2fs_read_inode_full: %s", error_message(err));
 		ret = -1;
 		goto out;
 	}
@@ -954,13 +968,15 @@ static int ext2_copy_inodes(struct btrfs_convert_context *cctx,
 		if (trans->blocks_used >= SZ_2M / root->fs_info->nodesize) {
 			ret = btrfs_commit_transaction(trans, root);
 			if (ret < 0) {
-				error("failed to commit transaction: %d", ret);
+				errno = -ret;
+				error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
 				goto out;
 			}
 			trans = btrfs_start_transaction(root, 1);
 			if (IS_ERR(trans)) {
 				ret = PTR_ERR(trans);
-				error("failed to start transaction: %d", ret);
+				errno = -ret;
+				error_msg(ERROR_MSG_START_TRANS, "%m");
 				trans = NULL;
 				goto out;
 			}
@@ -977,8 +993,10 @@ out:
 			btrfs_abort_transaction(trans, ret);
 	} else {
 		ret = btrfs_commit_transaction(trans, root);
-		if (ret < 0)
-			error("failed to commit transaction: %d", ret);
+		if (ret < 0) {
+			errno = -ret;
+			error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
+		}
 	}
 	ext2fs_close_inode_scan(ext2_scan);
 

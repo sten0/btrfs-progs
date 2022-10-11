@@ -14,17 +14,26 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#include "kernel-lib/rbtree.h"
+#include "kernel-shared/extent_io.h"
 #include "kernel-shared/ctree.h"
-#include "common/internal.h"
-#include "common/messages.h"
 #include "kernel-shared/transaction.h"
-#include "common/utils.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/backref.h"
-#include "common/repair.h"
+#include "common/internal.h"
+#include "common/messages.h"
+#include "common/utils.h"
 #include "check/mode-common.h"
+#include "check/repair.h"
+
+struct task_ctx g_task_ctx = { 0 };
 
 /*
  * Check if the inode referenced by the given data reference uses the extent
@@ -992,7 +1001,7 @@ int repair_imode_common(struct btrfs_root *root, struct btrfs_path *path)
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
 		errno = -ret;
-		error("failed to start transaction: %m");
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		return ret;
 	}
 	btrfs_release_path(path);
@@ -1032,7 +1041,7 @@ int check_repair_free_space_inode(struct btrfs_path *path)
 	"free space cache inode %llu has invalid mode: has 0%o expect 0%o",
 			key.objectid, mode, FREE_SPACE_CACHE_INODE_MODE);
 		ret = -EUCLEAN;
-		if (repair) {
+		if (opt_check_repair) {
 			ret = repair_imode_common(gfs_info->tree_root, path);
 			if (ret < 0)
 				return ret;
@@ -1163,7 +1172,7 @@ int repair_dev_item_bytes_used(struct btrfs_fs_info *fs_info,
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
 		errno = -ret;
-		error("failed to start transaction: %m");
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		return ret;
 	}
 
@@ -1182,7 +1191,7 @@ int repair_dev_item_bytes_used(struct btrfs_fs_info *fs_info,
 	ret = btrfs_commit_transaction(trans, fs_info->chunk_root);
 	if (ret < 0) {
 		errno = -ret;
-		error("failed to commit transaction: %m");
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 	} else {
 		printf("reset devid %llu bytes_used to %llu\n", devid,
 		       device->bytes_used);
@@ -1645,7 +1654,7 @@ int check_and_repair_super_num_devs(struct btrfs_fs_info *fs_info)
 	      btrfs_super_num_devices(fs_info->super_copy),
 	      found_devs);
 
-	if (!repair)
+	if (!opt_check_repair)
 		return -EUCLEAN;
 
 	/*

@@ -622,7 +622,9 @@ struct btrfs_root *btrfs_mksubvol(struct btrfs_root *root,
 
 	trans = btrfs_start_transaction(root, 1);
 	if (IS_ERR(trans)) {
-		error("unable to start transaction");
+		ret = PTR_ERR(trans);
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
 		goto fail;
 	}
 
@@ -692,7 +694,8 @@ struct btrfs_root *btrfs_mksubvol(struct btrfs_root *root,
 
 	ret = btrfs_commit_transaction(trans, root);
 	if (ret) {
-		error("transaction commit failed: %d", ret);
+		errno = -ret;
+		error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
 		goto fail;
 	}
 

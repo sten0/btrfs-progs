@@ -22,7 +22,6 @@
 #include <math.h>
 #include "kerncompat.h"
 #include "kernel-lib/list.h"
-#include "kernel-lib/radix-tree.h"
 #include "kernel-lib/rbtree.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
@@ -3531,6 +3530,12 @@ static int __btrfs_record_file_extent(struct btrfs_trans_handle *trans,
 	u64 num_bytes = *ret_num_bytes;
 
 	/*
+	 * @objectid should be an inode number, thus it must not be smaller
+	 * than BTRFS_FIRST_FREE_OBJECTID.
+	 */
+	ASSERT(objectid >= BTRFS_FIRST_FREE_OBJECTID);
+
+	/*
 	 * All supported file system should not use its 0 extent.
 	 * As it's for hole
 	 *
@@ -3583,7 +3588,7 @@ static int __btrfs_record_file_extent(struct btrfs_trans_handle *trans,
 					    struct btrfs_extent_item);
 
 			btrfs_set_extent_refs(leaf, ei, 0);
-			btrfs_set_extent_generation(leaf, ei, 0);
+			btrfs_set_extent_generation(leaf, ei, trans->transid);
 			btrfs_set_extent_flags(leaf, ei,
 					       BTRFS_EXTENT_FLAG_DATA);
 			btrfs_mark_buffer_dirty(leaf);

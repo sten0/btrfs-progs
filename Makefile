@@ -10,6 +10,7 @@
 #               to default locationh (/usr/local)
 #   clean       clean built binaries (not the documentation)
 #   clean-all   clean as above, clean docs and generated files
+#   clean-dep   clean header dependency files (*.o.d)
 #
 # All-in-one binary (busybox style):
 #   btrfs.box         single binary with functionality of mkfs.btrfs, btrfs-image,
@@ -94,7 +95,6 @@ CFLAGS = $(SUBST_CFLAGS) \
 	 -fno-strict-aliasing \
 	 -fPIC \
 	 -I$(TOPDIR) \
-	 -I$(TOPDIR)/libbtrfsutil \
 	 $(CRYPTO_CFLAGS) \
 	 -DCOMPRESSION_LZO=$(COMPRESSION_LZO) \
 	 -DCOMPRESSION_ZSTD=$(COMPRESSION_ZSTD) \
@@ -147,7 +147,6 @@ CHECKER_FLAGS := -include $(check_defs) -D__CHECKER__ \
 
 objects = \
 	kernel-lib/list_sort.o	\
-	kernel-lib/radix-tree.o	\
 	kernel-lib/raid56.o	\
 	kernel-lib/rbtree.o	\
 	kernel-lib/tables.o	\
@@ -174,6 +173,7 @@ objects = \
 	common/device-scan.o	\
 	common/device-utils.o	\
 	common/extent-cache.o	\
+	common/filesystem-utils.o	\
 	common/format-output.o	\
 	common/fsfeatures.o	\
 	common/help.o	\
@@ -182,14 +182,15 @@ objects = \
 	common/parse-utils.o	\
 	common/path-utils.o	\
 	common/rbtree-utils.o	\
-	common/repair.o	\
 	common/send-stream.o	\
 	common/send-utils.o	\
 	common/string-table.o	\
+	common/string-utils.o	\
 	common/task-utils.o \
 	common/units.o	\
 	common/utils.o	\
 	check/qgroup-verify.o	\
+	check/repair.o	\
 	cmds/receive-dump.o	\
 	crypto/crc32c.o	\
 	crypto/hash.o	\
@@ -206,7 +207,8 @@ cmds_objects = cmds/subvolume.o cmds/subvolume-list.o \
 	       cmds/rescue-super-recover.o \
 	       cmds/property.o cmds/filesystem-usage.o cmds/inspect-dump-tree.o \
 	       cmds/inspect-dump-super.o cmds/inspect-tree-stats.o cmds/filesystem-du.o \
-	       mkfs/common.o check/mode-common.o check/mode-lowmem.o
+	       mkfs/common.o check/mode-common.o check/mode-lowmem.o \
+	       check/clear-cache.o
 
 libbtrfs_objects = \
 		kernel-lib/rbtree.o	\
@@ -402,8 +404,13 @@ else
 	check_echo = true
 endif
 
+# Insert .deps/ to the output path
 %.o.d: %.c
-	$(Q)$(CC) -MM -MG -MF $@ -MT $(@:.o.d=.o) -MT $(@:.o.d=.static.o) -MT $@ $(CFLAGS) $<
+	$(Q)mkdir -p $(dir $@).deps/
+	$(Q)$(CC) -MM -MG -MF $(dir $@).deps/$(notdir $@) \
+		-MT $($(dir $@).deps/$(notdir $@):.o.d=.o) \
+		-MT $($(dir $@).deps/$(notdir $@):.o.d=.static.o) \
+		-MT $(dir $@).deps/$(notdir $@) $(CFLAGS) $<
 
 #
 # Pick from per-file variables, btrfs_*_cflags
@@ -781,15 +788,15 @@ clean-all: clean clean-doc clean-gen
 
 clean: $(CLEANDIRS)
 	@echo "Cleaning"
-	$(Q)$(RM) -f -- $(progs) *.o *.o.d \
-		kernel-lib/*.o kernel-lib/*.o.d \
-		kernel-shared/*.o kernel-shared/*.o.d \
-		image/*.o image/*.o.d \
-		convert/*.o convert/*.o.d \
-		mkfs/*.o mkfs/*.o.d check/*.o check/*.o.d \
-		cmds/*.o cmds/*.o.d common/*.o common/*.o.d \
-		crypto/*.o crypto/*.o.d \
-		libbtrfs/*.o libbtrfs/*.o.d \
+	$(Q)$(RM) -f -- $(progs) *.o .deps/*.o.d \
+		kernel-lib/*.o kernel-lib/.deps/*.o.d \
+		kernel-shared/*.o kernel-shared/.deps/*.o.d \
+		image/*.o image/.deps/*.o.d \
+		convert/.deps/*.o convert/.deps/*.o.d \
+		mkfs/*.o mkfs/.deps/*.o.d check/*.o check/.deps/*.o.d \
+		cmds/*.o cmds/.deps/*.o.d common/*.o common/.deps/*.o.d \
+		crypto/*.o crypto/.deps/*.o.d \
+		libbtrfs/*.o libbtrfs/.deps/*.o.d \
 	      ioctl-test quick-test library-test library-test-static \
               mktables btrfs.static mkfs.btrfs.static fssum \
 	      btrfs.box btrfs.box.static json-formatter-test \
@@ -797,7 +804,8 @@ clean: $(CLEANDIRS)
 	      $(check_defs) \
 	      libbtrfs.a libbtrfsutil.a $(libs_shared) $(lib_links) \
 	      $(progs_static) \
-	      libbtrfsutil/*.o libbtrfsutil/*.o.d
+	      libbtrfsutil/*.o libbtrfsutil/.deps/*.o.d
+	$(Q)$(RM) -fd -- .deps */.deps */*/.deps
 ifeq ($(PYTHON_BINDINGS),1)
 	$(Q)cd libbtrfsutil/python; \
 		$(PYTHON) setup.py $(SETUP_PY_Q) clean -a
@@ -815,6 +823,12 @@ clean-gen:
 		cscope.files cscope.out cscope.in.out cscope.po.out \
 		config.log config.h config.h.in~ aclocal.m4 \
 		configure autom4te.cache/ config/
+
+clean-dep:
+	@echo "Cleaning dependency files"
+	$(Q)$(RM) -f -- *.o.d */*.o.d */*/*.o.d \
+		.deps/*.o.d */.deps/*.o.d */*/.deps/*.o.d
+	$(Q)$(RM) -fd -- .deps */.deps */*/.deps
 
 $(CLEANDIRS):
 	@echo "Cleaning $(patsubst clean-%,%,$@)"

@@ -55,7 +55,7 @@ Subvolume properties
 
 ro
         read-only flag of subvolume: true or false. Please also see section *SUBVOLUME FLAGS*
-        in ``btrfs-subvolume(8)`` for possible implications regarding incremental send.
+        in :doc:`btrfs-subvolume(8)<btrfs-subvolume>` for possible implications regarding incremental send.
 
 Filesystem properties
 ^^^^^^^^^^^^^^^^^^^^^
@@ -117,13 +117,13 @@ returned in case of failure.
 AVAILABILITY
 ------------
 
-**btrfs** is part of btrfs-progs.
-Please refer to the btrfs wiki http://btrfs.wiki.kernel.org for
-further details.
+**btrfs** is part of btrfs-progs.  Please refer to the documentation at
+https://btrfs.readthedocs.io or wiki http://btrfs.wiki.kernel.org for further
+information.
 
 SEE ALSO
 --------
 
-``mkfs.btrfs(8)``,
+:doc:`mkfs.btrfs(8)<mkfs.btrfs>`,
 ``lsattr(1)``,
 ``chattr(1)``

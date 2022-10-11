@@ -154,13 +154,13 @@ returned in case of failure.
 AVAILABILITY
 ------------
 
-**btrfs** is part of btrfs-progs.
-Please refer to the btrfs wiki http://btrfs.wiki.kernel.org for
-further details.
+**btrfs** is part of btrfs-progs.  Please refer to the documentation at
+https://btrfs.readthedocs.io or wiki http://btrfs.wiki.kernel.org for further
+information.
 
 SEE ALSO
 --------
 
-``mkfs.btrfs(8)``,
-``btrfs-scrub(8)``,
-``btrfs-rescue(8)``
+:doc:`mkfs.btrfs(8)<mkfs.btrfs>`,
+:doc:`btrfs-scrub(8)<btrfs-scrub>`,
+:doc:`btrfs-rescue(8)<btrfs-rescue>`

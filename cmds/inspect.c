@@ -14,25 +14,29 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
+#include <sys/ioctl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <stdint.h>
-#include <sys/ioctl.h>
 #include <errno.h>
 #include <getopt.h>
 #include <limits.h>
-
-#include "kerncompat.h"
-#include "ioctl.h"
-#include "common/utils.h"
+#include <dirent.h>
+#include <string.h>
+#include "kernel-lib/list.h"
+#include "kernel-lib/sizes.h"
 #include "kernel-shared/ctree.h"
-#include "common/send-utils.h"
 #include "kernel-shared/disk-io.h"
-#include "cmds/commands.h"
+#include "common/internal.h"
+#include "common/messages.h"
+#include "common/utils.h"
+#include "common/send-utils.h"
 #include "common/help.h"
 #include "common/open-utils.h"
 #include "common/units.h"
+#include "common/string-utils.h"
+#include "cmds/commands.h"
+#include "ioctl.h"
 
 static const char * const inspect_cmd_group_usage[] = {
 	"btrfs inspect-internal <command> <args>",
@@ -57,7 +61,7 @@ static int __ino_to_path_fd(u64 inum, int fd, const char *prepend)
 		goto out;
 	}
 
-	pr_verbose(1,
+	pr_verbose(LOG_DEBUG,
 	"ioctl ret=%d, bytes_left=%lu, bytes_missing=%lu cnt=%d, missed=%d\n",
 		   ret, (unsigned long)fspath->bytes_left,
 		   (unsigned long)fspath->bytes_missing, fspath->elem_cnt,
@@ -70,9 +74,9 @@ static int __ino_to_path_fd(u64 inum, int fd, const char *prepend)
 		ptr += fspath->val[i];
 		str = (char *)(unsigned long)ptr;
 		if (prepend)
-			printf("%s/%s\n", prepend, str);
+			pr_verbose(LOG_DEFAULT, "%s/%s\n", prepend, str);
 		else
-			printf("%s\n", str);
+			pr_verbose(LOG_DEFAULT, "%s\n", str);
 	}
 
 out:
@@ -148,7 +152,7 @@ static int cmd_inspect_logical_resolve(const struct cmd_struct *cmd,
 	int ret;
 	int fd;
 	int i;
-	int getpath = 1;
+	bool getpath = true;
 	int bytes_left;
 	struct btrfs_ioctl_logical_ino_args loi = { 0 };
 	struct btrfs_data_container *inodes;
@@ -167,7 +171,7 @@ static int cmd_inspect_logical_resolve(const struct cmd_struct *cmd,
 
 		switch (c) {
 		case 'P':
-			getpath = 0;
+			getpath = false;
 			break;
 		case 'v':
 			bconf_be_verbose();
@@ -212,7 +216,7 @@ static int cmd_inspect_logical_resolve(const struct cmd_struct *cmd,
 		goto out;
 	}
 
-	pr_verbose(1,
+	pr_verbose(LOG_DEBUG,
 "ioctl ret=%d, total_size=%llu, bytes_left=%lu, bytes_missing=%lu, cnt=%d, missed=%d\n",
 		   ret, size, (unsigned long)inodes->bytes_left,
 		   (unsigned long)inodes->bytes_missing, inodes->elem_cnt,
@@ -292,7 +296,7 @@ static int cmd_inspect_logical_resolve(const struct cmd_struct *cmd,
 			if (path_fd != fd)
 				close_file_or_dir(path_fd, dirs);
 		} else {
-			printf("inode %llu offset %llu root %llu\n", inum,
+			pr_verbose(LOG_DEFAULT, "inode %llu offset %llu root %llu\n", inum,
 				offset, root);
 		}
 	}
@@ -334,13 +338,12 @@ static int cmd_inspect_subvolid_resolve(const struct cmd_struct *cmd,
 	ret = btrfs_subvolid_resolve(fd, path, sizeof(path), subvol_id);
 
 	if (ret) {
-		error("resolving subvolid %llu error %d",
-			(unsigned long long)subvol_id, ret);
+		error("resolving subvolid %llu error %d", subvol_id, ret);
 		goto out;
 	}
 
 	path[PATH_MAX - 1] = '\0';
-	printf("%s\n", path);
+	pr_verbose(LOG_DEFAULT, "%s\n", path);
 
 out:
 	close_file_or_dir(fd, dirstream);
@@ -380,7 +383,7 @@ static int cmd_inspect_rootid(const struct cmd_struct *cmd,
 		goto out;
 	}
 
-	printf("%llu\n", (unsigned long long)rootid);
+	pr_verbose(LOG_DEFAULT, "%llu\n", rootid);
 out:
 	close_file_or_dir(fd, dirstream);
 
@@ -628,7 +631,7 @@ static int print_min_dev_size(int fd, u64 devid)
 	}
 
 	adjust_dev_min_size(&extents, &holes, &min_size);
-	printf("%llu bytes (%s)\n", min_size, pretty_size(min_size));
+	pr_verbose(LOG_DEFAULT, "%llu bytes (%s)\n", min_size, pretty_size(min_size));
 	ret = 0;
 out:
 	free_dev_extent_list(&extents);

@@ -196,7 +196,14 @@ subvolid-resolve <subvolid> <path>
 tree-stats [options] <device>
         (needs root privileges)
 
-        Print sizes and statistics of trees.
+        Print sizes and statistics of trees. This takes a device as an argument
+        and not a mount point unlike other commands.
+
+        .. note::
+                In case the the filesystem is still mounted it's possible to
+                run the command but the results may be inaccurate or various
+                errors may be printed in case there are ongoing writes to the
+                filesystem. A warning is printed in such case.
 
         ``Options``
 
@@ -212,11 +219,11 @@ returned in case of failure.
 AVAILABILITY
 ------------
 
-**btrfs** is part of btrfs-progs.
-Please refer to the btrfs wiki http://btrfs.wiki.kernel.org for
-further details.
+**btrfs** is part of btrfs-progs.  Please refer to the documentation at
+https://btrfs.readthedocs.io or wiki http://btrfs.wiki.kernel.org for further
+information.
 
 SEE ALSO
 --------
 
-``mkfs.btrfs(8)``
+:doc:`mkfs.btrfs(8)<mkfs.btrfs>`

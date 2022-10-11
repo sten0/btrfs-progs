@@ -17,30 +17,25 @@
  */
 
 #include "kerncompat.h"
-
+#include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <sys/xattr.h>
+#include <linux/fs.h>
+#if HAVE_LINUX_FSVERITY_H
+#include <linux/fsverity.h>
+#endif
 #include <unistd.h>
 #include <stdint.h>
-#include <dirent.h>
 #include <fcntl.h>
-#include <pthread.h>
-#include <math.h>
-#include <ftw.h>
-#include <sys/wait.h>
-#include <assert.h>
 #include <getopt.h>
 #include <limits.h>
 #include <errno.h>
-
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/ioctl.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/uio.h>
-#include <sys/xattr.h>
-#include <linux/fs.h>
+#include <endian.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <uuid/uuid.h>
-
 #include <zlib.h>
 #if COMPRESSION_LZO
 #include <lzo/lzoconf.h>
@@ -49,19 +44,18 @@
 #if COMPRESSION_ZSTD
 #include <zstd.h>
 #endif
-
 #include "kernel-shared/ctree.h"
-#include "ioctl.h"
-#include "cmds/commands.h"
+#include "common/defs.h"
+#include "common/messages.h"
 #include "common/utils.h"
-#include "kernel-lib/list.h"
-#include "kernel-shared/send.h"
 #include "common/send-stream.h"
 #include "common/send-utils.h"
-#include "cmds/receive-dump.h"
 #include "common/help.h"
 #include "common/path-utils.h"
-#include "stubs.h"
+#include "common/string-utils.h"
+#include "cmds/commands.h"
+#include "cmds/receive-dump.h"
+#include "ioctl.h"
 
 struct btrfs_receive
 {
@@ -994,8 +988,7 @@ static int process_update_extent(const char *path, u64 offset, u64 len,
 {
 	if (bconf.verbose >= 3)
 		fprintf(stderr, "update_extent %s: offset=%llu, len=%llu\n",
-				path, (unsigned long long)offset,
-				(unsigned long long)len);
+				path, offset, len);
 
 	/*
 	 * Sent with BTRFS_SEND_FLAG_NO_FILE_DATA, nothing to do.
@@ -1015,7 +1008,7 @@ static int decompress_zlib(struct btrfs_receive *rctx, const char *encoded_data,
 		init = true;
 		rctx->zlib_stream = malloc(sizeof(z_stream));
 		if (!rctx->zlib_stream) {
-			error("failed to allocate zlib stream %m");
+			error_msg(ERROR_MSG_MEMORY, "zlib stream: %m");
 			return -ENOMEM;
 		}
 	}
@@ -1169,7 +1162,7 @@ static int decompress_and_write(struct btrfs_receive *rctx,
 
 	unencoded_data = calloc(unencoded_len, 1);
 	if (!unencoded_data) {
-		error("allocating space for unencoded data failed: %m");
+		error_msg(ERROR_MSG_MEMORY, "unencoded data: %m");
 		return -errno;
 	}
 
@@ -1333,6 +1326,72 @@ static int process_fileattr(const char *path, u64 attr, void *user)
 	return 0;
 }
 
+#if HAVE_LINUX_FSVERITY_H
+static int process_enable_verity(const char *path, u8 algorithm, u32 block_size,
+				 int salt_len, char *salt,
+				 int sig_len, char *sig, void *user)
+{
+	int ret;
+	int ioctl_fd;
+	struct btrfs_receive *rctx = user;
+	char full_path[PATH_MAX];
+	struct fsverity_enable_arg verity_args = {
+		.version = 1,
+		.hash_algorithm = algorithm,
+		.block_size = block_size,
+	};
+
+	if (salt_len) {
+		verity_args.salt_size = salt_len;
+		verity_args.salt_ptr = (__u64)(uintptr_t)salt;
+	}
+
+	if (sig_len) {
+		verity_args.sig_size = sig_len;
+		verity_args.sig_ptr = (__u64)(uintptr_t)sig;
+	}
+
+	ret = path_cat_out(full_path, rctx->full_subvol_path, path);
+	if (ret < 0) {
+		error("write: path invalid: %s", path);
+		goto out;
+	}
+
+	ioctl_fd = open(full_path, O_RDONLY);
+	if (ioctl_fd < 0) {
+		ret = -errno;
+		error("cannot open %s for verity ioctl: %m", full_path);
+		goto out;
+	}
+
+	/*
+	 * Enabling verity denies write access, so it cannot be done with an
+	 * open writeable file descriptor.
+	 */
+	close_inode_for_write(rctx);
+	ret = ioctl(ioctl_fd, FS_IOC_ENABLE_VERITY, &verity_args);
+	if (ret < 0) {
+		ret = -errno;
+		error("failed to enable verity on %s: %d", full_path, ret);
+	}
+
+	close(ioctl_fd);
+out:
+	return ret;
+}
+
+#else
+
+static int process_enable_verity(const char *path, u8 algorithm, u32 block_size,
+				 int salt_len, char *salt,
+				 int sig_len, char *sig, void *user)
+{
+	error("fs-verity for stream not compiled in");
+	return -EOPNOTSUPP;
+}
+
+#endif
+
 static struct btrfs_send_ops send_ops = {
 	.subvol = process_subvol,
 	.snapshot = process_snapshot,
@@ -1358,6 +1417,7 @@ static struct btrfs_send_ops send_ops = {
 	.encoded_write = process_encoded_write,
 	.fallocate = process_fallocate,
 	.fileattr = process_fileattr,
+	.enable_verity = process_enable_verity,
 };
 
 static int do_receive(struct btrfs_receive *rctx, const char *tomnt,
@@ -1367,7 +1427,7 @@ static int do_receive(struct btrfs_receive *rctx, const char *tomnt,
 	int ret;
 	char *dest_dir_full_path;
 	char root_subvol_path[PATH_MAX];
-	int end = 0;
+	bool end = false;
 	int iterations = 0;
 
 	dest_dir_full_path = realpath(tomnt, NULL);
@@ -1480,7 +1540,7 @@ static int do_receive(struct btrfs_receive *rctx, const char *tomnt,
 			ret = 1;
 		}
 		if (ret > 0)
-			end = 1;
+			end = true;
 
 		close_inode_for_write(rctx);
 		ret = finish_subvol(rctx);
@@ -1566,6 +1626,11 @@ static const char * const cmd_receive_usage[] = {
 		", zstd"
 #endif
 	,
+	"Feature support:"
+#if HAVE_LINUX_FSVERITY_H
+		" fsverity"
+#endif
+	,
 	NULL
 };
 
@@ -1577,7 +1642,7 @@ static int cmd_receive(const struct cmd_struct *cmd, int argc, char **argv)
 	struct btrfs_receive rctx;
 	int receive_fd = fileno(stdin);
 	u64 max_errors = 1;
-	int dump = 0;
+	bool dump = false;
 	int ret = 0;
 
 	memset(&rctx, 0, sizeof(rctx));
@@ -1653,7 +1718,7 @@ static int cmd_receive(const struct cmd_struct *cmd, int argc, char **argv)
 			}
 			break;
 		case GETOPT_VAL_DUMP:
-			dump = 1;
+			dump = true;
 			break;
 		case GETOPT_VAL_FORCE_DECOMPRESS:
 			rctx.force_decompress = true;

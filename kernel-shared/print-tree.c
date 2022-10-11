@@ -21,7 +21,6 @@
 #include <uuid/uuid.h>
 #include <ctype.h>
 #include "kerncompat.h"
-#include "kernel-lib/radix-tree.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/print-tree.h"
@@ -1690,6 +1689,9 @@ static struct readable_flag_entry incompat_flags_array[] = {
 	DEF_INCOMPAT_FLAG_ENTRY(METADATA_UUID),
 	DEF_INCOMPAT_FLAG_ENTRY(RAID1C34),
 	DEF_INCOMPAT_FLAG_ENTRY(ZONED),
+#if EXPERIMENTAL
+	DEF_INCOMPAT_FLAG_ENTRY(EXTENT_TREE_V2),
+#endif
 };
 static const int incompat_flags_num = sizeof(incompat_flags_array) /
 				      sizeof(struct readable_flag_entry);
@@ -1787,7 +1789,7 @@ static void print_sys_chunk_array(struct btrfs_super_block *sb)
 
 	buf = malloc(sizeof(*buf) + sizeof(*sb));
 	if (!buf) {
-		error("not enough memory");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return;
 	}
 	write_extent_buffer(buf, sb, 0, sizeof(*sb));

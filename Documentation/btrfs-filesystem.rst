@@ -284,6 +284,7 @@ usage [options] <path> [<path>...]
                     Device allocated:              1.17TiB
                     Device unallocated:          669.99GiB
                     Device missing:                  0.00B
+                    Device slack:                  1.00GiB
                     Used:                          1.14TiB
                     Free (estimated):            692.57GiB      (min: 692.57GiB)
                     Free (statfs, df)            692.57GiB
@@ -292,13 +293,17 @@ usage [options] <path> [<path>...]
                     Global reserve:              512.00MiB      (used: 0.00B)
                     Multiple profiles:                  no
 
-        * *Device size* -- sum of raw device capacity available to the filesystem
+        * *Device size* -- sum of raw device capacity available to the
+          filesystem, note that this may not be the same as the total device
+          size (the difference is accounted as slack)
         * *Device allocated* -- sum of total space allocated for
           data/metadata/system profiles, this also accounts space reserved but
           not yet used for extents
         * *Device unallocated* -- the remaining unallocated space for future
           allocations (difference of the above two numbers)
         * *Device missing* -- sum of capacity of all missing devices
+        * *Device slack* -- sum of slack space on all devices (difference
+          between entire device size and the space occupied by filesystem)
         * *Used* -- sum of the used space of data/metadata/system profiles, not
           including the reserved space
         * *Free (estimated)* -- approximate size of the remaining free space
@@ -318,7 +323,7 @@ usage [options] <path> [<path>...]
           block reserve, used for emergency purposes (like deletion on a full
           filesystem)
         * *Multiple profiles* -- what block group types (data, metadata) have
-          more than one profile (single, raid1, ...), see ``btrfs(5)`` section
+          more than one profile (single, raid1, ...), see :doc:`btrfs(5)<btrfs-man5>` section
           *FILESYSTEMS WITH MULTIPLE BLOCK GROUP PROFILES*.
 
         And on a zoned filesystem there are two more lines in the *Device* section:
@@ -441,12 +446,12 @@ returned in case of failure.
 AVAILABILITY
 ------------
 
-**btrfs** is part of btrfs-progs.
-Please refer to the btrfs wiki http://btrfs.wiki.kernel.org for
-further details.
+**btrfs** is part of btrfs-progs.  Please refer to the documentation at
+https://btrfs.readthedocs.io or wiki http://btrfs.wiki.kernel.org for further
+information.
 
 SEE ALSO
 --------
 
-``btrfs-subvolume(8)``,
-``mkfs.btrfs(8)``
+:doc:`btrfs-subvolume(8)<btrfs-subvolume>`,
+:doc:`mkfs.btrfs(8)<mkfs.btrfs>`

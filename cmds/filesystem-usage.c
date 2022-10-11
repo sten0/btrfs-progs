@@ -14,37 +14,37 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
+#include <sys/ioctl.h>
+#include <sys/statfs.h>
+#include <linux/limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/ioctl.h>
-#include <sys/vfs.h>
 #include <errno.h>
-#include <stdarg.h>
 #include <getopt.h>
 #include <fcntl.h>
-#include <linux/limits.h>
-
-#include "common/utils.h"
-#include "kerncompat.h"
+#include <dirent.h>
+#include <limits.h>
+#include "kernel-lib/sizes.h"
 #include "kernel-shared/ctree.h"
-#include "common/string-table.h"
-#include "cmds/filesystem-usage.h"
-#include "cmds/commands.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/volumes.h"
+#include "common/utils.h"
+#include "common/string-table.h"
 #include "common/open-utils.h"
 #include "common/units.h"
-#include "version.h"
 #include "common/help.h"
 #include "common/device-utils.h"
-#include "common/open-utils.h"
+#include "common/messages.h"
+#include "cmds/filesystem-usage.h"
+#include "cmds/commands.h"
 
 /*
  * Add the chunk info to the chunk_info list
  */
-static int add_info_to_list(struct chunk_info **info_ptr,
+static int add_info_to_list(struct chunk_info **chunkinfo_ret,
 			int *info_count,
 			struct btrfs_chunk *chunk)
 {
@@ -64,24 +64,24 @@ static int add_info_to_list(struct chunk_info **info_ptr,
 		devid = btrfs_stack_stripe_devid(stripe);
 
 		for (i = 0 ; i < *info_count ; i++)
-			if ((*info_ptr)[i].type == type &&
-			    (*info_ptr)[i].devid == devid &&
-			    (*info_ptr)[i].num_stripes == num_stripes ) {
-				p = (*info_ptr) + i;
+			if ((*chunkinfo_ret)[i].type == type &&
+			    (*chunkinfo_ret)[i].devid == devid &&
+			    (*chunkinfo_ret)[i].num_stripes == num_stripes ) {
+				p = (*chunkinfo_ret) + i;
 				break;
 			}
 
 		if (!p) {
 			int tmp = sizeof(struct btrfs_chunk) * (*info_count + 1);
-			struct chunk_info *res = realloc(*info_ptr, tmp);
+			struct chunk_info *res = realloc(*chunkinfo_ret, tmp);
 
 			if (!res) {
-				free(*info_ptr);
-				error("not enough memory");
+				free(*chunkinfo_ret);
+				error_msg(ERROR_MSG_MEMORY, NULL);
 				return -ENOMEM;
 			}
 
-			*info_ptr = res;
+			*chunkinfo_ret = res;
 			p = res + *info_count;
 			(*info_count)++;
 
@@ -96,7 +96,6 @@ static int add_info_to_list(struct chunk_info **info_ptr,
 	}
 
 	return 0;
-
 }
 
 /*
@@ -135,7 +134,8 @@ static int cmp_chunk_info(const void *a, const void *b)
 		((struct chunk_info *)b)->type);
 }
 
-static int load_chunk_info(int fd, struct chunk_info **info_ptr, int *info_count)
+static int load_chunk_info(int fd, struct chunk_info **chunkinfo_ret,
+		int *chunkcount_ret)
 {
 	int ret;
 	struct btrfs_ioctl_search_args args;
@@ -187,9 +187,9 @@ static int load_chunk_info(int fd, struct chunk_info **info_ptr, int *info_count
 			off += sizeof(*sh);
 			item = (struct btrfs_chunk *)(args.buf + off);
 
-			ret = add_info_to_list(info_ptr, info_count, item);
+			ret = add_info_to_list(chunkinfo_ret, chunkcount_ret, item);
 			if (ret) {
-				*info_ptr = NULL;
+				*chunkinfo_ret = NULL;
 				return 1;
 			}
 
@@ -214,7 +214,7 @@ static int load_chunk_info(int fd, struct chunk_info **info_ptr, int *info_count
 			break;
 	}
 
-	qsort(*info_ptr, *info_count, sizeof(struct chunk_info),
+	qsort(*chunkinfo_ret, *chunkcount_ret, sizeof(struct chunk_info),
 		cmp_chunk_info);
 
 	return 0;
@@ -240,7 +240,7 @@ static struct btrfs_ioctl_space_args *load_space_info(int fd, const char *path)
 
 	sargs_orig = sargs = calloc(1, sizeof(struct btrfs_ioctl_space_args));
 	if (!sargs) {
-		error("not enough memory");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return NULL;
 	}
 
@@ -255,7 +255,7 @@ static struct btrfs_ioctl_space_args *load_space_info(int fd, const char *path)
 	}
 	if (!sargs->total_spaces) {
 		free(sargs);
-		printf("No chunks found\n");
+		pr_verbose(LOG_DEFAULT, "No chunks found\n");
 		return NULL;
 	}
 
@@ -265,7 +265,7 @@ static struct btrfs_ioctl_space_args *load_space_info(int fd, const char *path)
 			(count * sizeof(struct btrfs_ioctl_space_info)));
 	if (!sargs) {
 		free(sargs_orig);
-		error("not enough memory");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return NULL;
 	}
 
@@ -335,7 +335,7 @@ static void get_raid56_logical_ratio(struct btrfs_ioctl_space_args *sargs,
  * and the "raw" space used by a chunk (r_*_used)
  */
 static void get_raid56_space_info(struct btrfs_ioctl_space_args *sargs,
-				  struct chunk_info *chunks, int chunkcount,
+				  struct chunk_info *chunkinfo, int chunkcount,
 				  double *max_data_ratio,
 				  u64 *r_data_chunks, u64 *r_data_used,
 				  u64 *r_metadata_chunks, u64 *r_metadata_used,
@@ -350,7 +350,7 @@ static void get_raid56_space_info(struct btrfs_ioctl_space_args *sargs,
 	get_raid56_logical_ratio(sargs, BTRFS_BLOCK_GROUP_RAID6,
 		 &l_data_ratio_r6, &l_metadata_ratio_r6, &l_system_ratio_r6);
 
-	for(info_ptr = chunks; chunkcount > 0; chunkcount--, info_ptr++) {
+	for(info_ptr = chunkinfo; chunkcount > 0; chunkcount--, info_ptr++) {
 		int parities_count;
 		u64 size;
 		double l_data_ratio, l_metadata_ratio, l_system_ratio, rt;
@@ -381,15 +381,15 @@ static void get_raid56_space_info(struct btrfs_ioctl_space_args *sargs,
 		size = info_ptr->size / (info_ptr->num_stripes - parities_count);
 
 		if (info_ptr->type & BTRFS_BLOCK_GROUP_DATA) {
-			assert(l_data_ratio >= 0);
+			ASSERT(l_data_ratio >= 0);
 			*r_data_chunks += size;
 			*r_data_used += size * l_data_ratio;
 		} else if (info_ptr->type & BTRFS_BLOCK_GROUP_METADATA) {
-			assert(l_metadata_ratio >= 0);
+			ASSERT(l_metadata_ratio >= 0);
 			*r_metadata_chunks += size;
 			*r_metadata_used += size * l_metadata_ratio;
 		} else if (info_ptr->type & BTRFS_BLOCK_GROUP_SYSTEM) {
-			assert(l_system_ratio >= 0);
+			ASSERT(l_system_ratio >= 0);
 			*r_system_chunks += size;
 			*r_system_used += size * l_system_ratio;
 		}
@@ -428,6 +428,13 @@ out:
 	return ret;
 }
 
+static u64 calc_slack_size(const struct device_info *devinfo)
+{
+	if (devinfo->device_size > 0)
+		return devinfo->device_size - devinfo->size;
+	return 0;
+}
+
 #define	MIN_UNALOCATED_THRESH	SZ_16M
 static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		int chunkcount, struct device_info *devinfo, int devcount,
@@ -449,6 +456,7 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 	u64 r_total_used = 0;
 	u64 r_total_unused = 0;
 	u64 r_total_missing = 0;	/* sum of missing devices size */
+	u64 r_total_slack = 0;
 	u64 r_data_used = 0;
 	u64 r_data_chunks = 0;
 	u64 l_data_chunks = 0;
@@ -466,7 +474,7 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 	u64 free_min = 0;
 	u64 zone_unusable = 0;
 	double max_data_ratio = 1.0;
-	int mixed = 0;
+	bool mixed = false;
 	struct statfs statfs_buf;
 	struct btrfs_ioctl_feature_flags feature_flags;
 
@@ -479,6 +487,7 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 	r_total_size = 0;
 	for (i = 0; i < devcount; i++) {
 		r_total_size += devinfo[i].size;
+		r_total_slack += calc_slack_size(&devinfo[i]);
 		if (!devinfo[i].device_size)
 			r_total_missing += devinfo[i].size;
 	}
@@ -518,7 +527,7 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		}
 		if ((flags & (BTRFS_BLOCK_GROUP_DATA | BTRFS_BLOCK_GROUP_METADATA))
 		    == (BTRFS_BLOCK_GROUP_DATA | BTRFS_BLOCK_GROUP_METADATA)) {
-			mixed = 1;
+			mixed = true;
 		} else {
 			/*
 			 * As mixed mode is not supported in zoned mode, this
@@ -598,46 +607,48 @@ static int print_filesystem_usage_overall(int fd, struct chunk_info *chunkinfo,
 		ret = 0;
 	}
 
-	printf("Overall:\n");
+	pr_verbose(LOG_DEFAULT, "Overall:\n");
 
-	printf("    Device size:\t\t%*s\n", width,
+	pr_verbose(LOG_DEFAULT, "    Device size:\t\t%*s\n", width,
 		pretty_size_mode(r_total_size, unit_mode));
-	printf("    Device allocated:\t\t%*s\n", width,
+	pr_verbose(LOG_DEFAULT, "    Device allocated:\t\t%*s\n", width,
 		pretty_size_mode(r_total_chunks, unit_mode));
-	printf("    Device unallocated:\t\t%*s\n", width,
+	pr_verbose(LOG_DEFAULT, "    Device unallocated:\t\t%*s\n", width,
 		pretty_size_mode(r_total_unused, unit_mode | UNITS_NEGATIVE));
-	printf("    Device missing:\t\t%*s\n", width,
+	pr_verbose(LOG_DEFAULT, "    Device missing:\t\t%*s\n", width,
 		pretty_size_mode(r_total_missing, unit_mode));
+	pr_verbose(LOG_DEFAULT, "    Device slack:\t\t%*s\n", width,
+		pretty_size_mode(r_total_slack, unit_mode));
 	ret = ioctl(fd, BTRFS_IOC_GET_FEATURES, &feature_flags);
 	if (ret == 0 && (feature_flags.incompat_flags & BTRFS_FEATURE_INCOMPAT_ZONED)) {
 		u64 zone_size;
 
-		printf("    Device zone unusable:\t%*s\n", width,
+		pr_verbose(LOG_DEFAULT, "    Device zone unusable:\t%*s\n", width,
 			pretty_size_mode(zone_unusable, unit_mode));
 		zone_size = get_first_device_zone_size(fd);
-		printf("    Device zone size:\t\t%*s\n", width,
+		pr_verbose(LOG_DEFAULT, "    Device zone size:\t\t%*s\n", width,
 			pretty_size_mode(zone_size, unit_mode));
 	}
-	printf("    Used:\t\t\t%*s\n", width,
+	pr_verbose(LOG_DEFAULT, "    Used:\t\t\t%*s\n", width,
 		pretty_size_mode(r_total_used, unit_mode));
-	printf("    Free (estimated):\t\t%*s\t(",
+	pr_verbose(LOG_DEFAULT, "    Free (estimated):\t\t%*s\t(",
 		width,
 		pretty_size_mode(free_estimated, unit_mode));
-	printf("min: %s)\n", pretty_size_mode(free_min, unit_mode));
-	printf("    Free (statfs, df):\t\t%*s\n", width,
+	pr_verbose(LOG_DEFAULT, "min: %s)\n", pretty_size_mode(free_min, unit_mode));
+	pr_verbose(LOG_DEFAULT, "    Free (statfs, df):\t\t%*s\n", width,
 		pretty_size_mode(statfs_buf.f_bavail * statfs_buf.f_bsize, unit_mode));
-	printf("    Data ratio:\t\t\t%*.2f\n",
+	pr_verbose(LOG_DEFAULT, "    Data ratio:\t\t\t%*.2f\n",
 		width, data_ratio);
-	printf("    Metadata ratio:\t\t%*.2f\n",
+	pr_verbose(LOG_DEFAULT, "    Metadata ratio:\t\t%*.2f\n",
 		width, metadata_ratio);
-	printf("    Global reserve:\t\t%*s\t(used: %s)\n", width,
+	pr_verbose(LOG_DEFAULT, "    Global reserve:\t\t%*s\t(used: %s)\n", width,
 		pretty_size_mode(l_global_reserve, unit_mode),
 		pretty_size_mode(l_global_reserve_used, unit_mode));
 	tmp = btrfs_test_for_multiple_profiles(fd);
 	if (tmp[0])
-		printf("    Multiple profiles:\t\t%*s\t(%s)\n", width, "yes", tmp);
+		pr_verbose(LOG_DEFAULT, "    Multiple profiles:\t\t%*s\t(%s)\n", width, "yes", tmp);
 	else
-		printf("    Multiple profiles:\t\t%*s\n", width, "no");
+		pr_verbose(LOG_DEFAULT, "    Multiple profiles:\t\t%*s\n", width, "no");
 	free(tmp);
 
 exit:
@@ -692,8 +703,8 @@ out:
 /*
  *  This function loads the device_info structure and put them in an array
  */
-static int load_device_info(int fd, struct device_info **device_info_ptr,
-			   int *device_info_count)
+static int load_device_info(int fd, struct device_info **devinfo_ret,
+			   int *devcount_ret)
 {
 	int ret, i, ndevs;
 	struct btrfs_ioctl_fs_info_args fi_args;
@@ -701,8 +712,8 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 	struct device_info *info;
 	u8 fsid[BTRFS_UUID_SIZE];
 
-	*device_info_count = 0;
-	*device_info_ptr = NULL;
+	*devcount_ret = 0;
+	*devinfo_ret = NULL;
 
 	ret = ioctl(fd, BTRFS_IOC_FS_INFO, &fi_args);
 	if (ret < 0) {
@@ -714,14 +725,14 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 
 	info = calloc(fi_args.num_devices, sizeof(struct device_info));
 	if (!info) {
-		error("not enough memory");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return 1;
 	}
 
 	for (i = 0, ndevs = 0 ; i <= fi_args.max_id ; i++) {
 		if (ndevs >= fi_args.num_devices) {
 			error("unexpected number of devices: %d >= %llu", ndevs,
-				(unsigned long long)fi_args.num_devices);
+				fi_args.num_devices);
 			error(
 		"if seed device is used, try running this command as root");
 			goto out;
@@ -761,15 +772,15 @@ static int load_device_info(int fd, struct device_info **device_info_ptr,
 
 	if (ndevs != fi_args.num_devices) {
 		error("unexpected number of devices: %d != %llu", ndevs,
-				(unsigned long long)fi_args.num_devices);
+				fi_args.num_devices);
 		goto out;
 	}
 
 	qsort(info, fi_args.num_devices,
 		sizeof(struct device_info), cmp_device_info);
 
-	*device_info_count = fi_args.num_devices;
-	*device_info_ptr = info;
+	*devcount_ret = fi_args.num_devices;
+	*devinfo_ret = info;
 
 	return 0;
 
@@ -778,12 +789,13 @@ out:
 	return ret;
 }
 
-int load_chunk_and_device_info(int fd, struct chunk_info **chunkinfo,
-		int *chunkcount, struct device_info **devinfo, int *devcount)
+int load_chunk_and_device_info(int fd, struct chunk_info **chunkinfo_ret,
+		int *chunkcount_ret, struct device_info **devinfo_ret,
+		int *devcount_ret)
 {
 	int ret;
 
-	ret = load_chunk_info(fd, chunkinfo, chunkcount);
+	ret = load_chunk_info(fd, chunkinfo_ret, chunkcount_ret);
 	if (ret == -EPERM) {
 		warning(
 "cannot read detailed chunk info, per-device usage will not be shown, run as root");
@@ -791,7 +803,7 @@ int load_chunk_and_device_info(int fd, struct chunk_info **chunkinfo,
 		return ret;
 	}
 
-	ret = load_device_info(fd, devinfo, devcount);
+	ret = load_device_info(fd, devinfo_ret, devcount_ret);
 	if (ret == -EPERM) {
 		warning(
 		"cannot get filesystem info from ioctl(FS_INFO), run as root");
@@ -829,20 +841,25 @@ static void _cmd_filesystem_usage_tabular(unsigned unit_mode,
 					struct btrfs_ioctl_space_args *sargs,
 					struct chunk_info *chunks_info_ptr,
 					int chunks_info_count,
-					struct device_info *device_info_ptr,
-					int device_info_count)
+					struct device_info *devinfo,
+					int devcount)
 {
 	int i;
 	u64 total_unused = 0;
+	u64 total_total = 0;
+	u64 total_slack = 0;
 	struct string_table *matrix = NULL;
 	int  ncols, nrows;
 	int col;
 	int unallocated_col;
 	int spaceinfos_col;
+	int total_col;
+	int slack_col;
+	u64 slack;
 	const int vhdr_skip = 3;	/* amount of vertical header space */
 
-	/* id, path, unallocated */
-	ncols = 3;
+	/* id, path, unallocated, total, slack */
+	ncols = 5;
 	spaceinfos_col = 2;
 	/* Properly count the real space infos */
 	for (i = 0; i < sargs->total_spaces; i++) {
@@ -852,11 +869,11 @@ static void _cmd_filesystem_usage_tabular(unsigned unit_mode,
 	}
 
 	/* 2 for header, empty line, devices, ===, total, used */
-	nrows = vhdr_skip + device_info_count + 1 + 2;
+	nrows = vhdr_skip + devcount + 1 + 2;
 
 	matrix = table_create(ncols, nrows);
 	if (!matrix) {
-		error("not enough memory");
+		error_msg(ERROR_MSG_MEMORY, NULL);
 		return;
 	}
 
@@ -878,33 +895,37 @@ static void _cmd_filesystem_usage_tabular(unsigned unit_mode,
 				btrfs_group_profile_str(flags));
 		col++;
 	}
-	unallocated_col = col;
+	unallocated_col = col++;
+	total_col = col++;
+	slack_col = col++;
 
 	table_printf(matrix, 0, 1, "<Id");
 	table_printf(matrix, 1, 1, "<Path");
 	table_printf(matrix, unallocated_col, 1, "<Unallocated");
+	table_printf(matrix, total_col, 1, "<Total");
+	table_printf(matrix, slack_col, 1, "<Slack");
 
 	/* body */
-	for (i = 0; i < device_info_count; i++) {
+	for (i = 0; i < devcount; i++) {
 		int k;
 		char *p;
 
 		u64  total_allocated = 0, unused;
 
-		p = strrchr(device_info_ptr[i].path, '/');
+		p = strrchr(devinfo[i].path, '/');
 		if (!p)
-			p = device_info_ptr[i].path;
+			p = devinfo[i].path;
 		else
 			p++;
 
 		table_printf(matrix, 0, vhdr_skip + i, ">%llu",
-				device_info_ptr[i].devid);
+				devinfo[i].devid);
 		table_printf(matrix, 1, vhdr_skip + i, "<%s",
-				device_info_ptr[i].path);
+				devinfo[i].path);
 
 		for (col = spaceinfos_col, k = 0; k < sargs->total_spaces; k++) {
 			u64	flags = sargs->spaces[k].flags;
-			u64 devid = device_info_ptr[i].devid;
+			u64 devid = devinfo[i].devid;
 			int	j;
 			u64 size = 0;
 
@@ -930,18 +951,32 @@ static void _cmd_filesystem_usage_tabular(unsigned unit_mode,
 			col++;
 		}
 
-		unused = device_get_partition_size(device_info_ptr[i].path)
+		unused = device_get_partition_size(devinfo[i].path)
 				- total_allocated;
+		unused = devinfo[i].size - total_allocated;
 
 		table_printf(matrix, unallocated_col, vhdr_skip + i, ">%s",
 			pretty_size_mode(unused, unit_mode | UNITS_NEGATIVE));
+		table_printf(matrix, total_col, vhdr_skip + i, ">%s",
+			pretty_size_mode(devinfo[i].size,
+			unit_mode | UNITS_NEGATIVE));
+		slack = calc_slack_size(&devinfo[i]);
+		if (slack > 0) {
+			table_printf(matrix, slack_col, vhdr_skip + i, ">%s",
+				pretty_size_mode(slack,
+				unit_mode | UNITS_NEGATIVE));
+		} else {
+			table_printf(matrix, slack_col, vhdr_skip + i, ">-");
+		}
 		total_unused += unused;
+		total_slack += slack;
+		total_total += devinfo[i].size;
 
 	}
 
 	for (i = 0; i < spaceinfos_col; i++) {
 		table_printf(matrix, i, vhdr_skip - 1, "*-");
-		table_printf(matrix, i, vhdr_skip + device_info_count, "*-");
+		table_printf(matrix, i, vhdr_skip + devcount, "*-");
 	}
 
 	for (i = 0, col = spaceinfos_col; i < sargs->total_spaces; i++) {
@@ -949,34 +984,44 @@ static void _cmd_filesystem_usage_tabular(unsigned unit_mode,
 			continue;
 
 		table_printf(matrix, col, vhdr_skip - 1, "*-");
-		table_printf(matrix, col, vhdr_skip + device_info_count, "*-");
+		table_printf(matrix, col, vhdr_skip + devcount, "*-");
 		col++;
 	}
-	/* One for Unallocated */
+	/* Line under Unallocated, Total, Slack */
 	table_printf(matrix, col, vhdr_skip - 1, "*-");
-	table_printf(matrix, col, vhdr_skip + device_info_count, "*-");
+	table_printf(matrix, col, vhdr_skip + devcount, "*-");
+	table_printf(matrix, col + 1, vhdr_skip - 1, "*-");
+	table_printf(matrix, col + 1, vhdr_skip + devcount, "*-");
+	table_printf(matrix, col + 2, vhdr_skip - 1, "*-");
+	table_printf(matrix, col + 2, vhdr_skip + devcount, "*-");
 
 	/* footer */
-	table_printf(matrix, 1, vhdr_skip + device_info_count + 1, "<Total");
+	table_printf(matrix, 1, vhdr_skip + devcount + 1, "<Total");
 	for (i = 0, col = spaceinfos_col; i < sargs->total_spaces; i++) {
 		if (sargs->spaces[i].flags & BTRFS_SPACE_INFO_GLOBAL_RSV)
 			continue;
 
-		table_printf(matrix, col++, vhdr_skip + device_info_count + 1,
+		table_printf(matrix, col++, vhdr_skip + devcount + 1,
 			">%s",
 			pretty_size_mode(sargs->spaces[i].total_bytes, unit_mode));
 	}
 
-	table_printf(matrix, unallocated_col, vhdr_skip + device_info_count + 1,
+	table_printf(matrix, unallocated_col, vhdr_skip + devcount + 1,
 		">%s",
 		pretty_size_mode(total_unused, unit_mode | UNITS_NEGATIVE));
+	table_printf(matrix, total_col, vhdr_skip + devcount + 1,
+		">%s",
+		pretty_size_mode(total_total, unit_mode | UNITS_NEGATIVE));
+	table_printf(matrix, slack_col, vhdr_skip + devcount + 1,
+		">%s",
+		pretty_size_mode(total_slack, unit_mode | UNITS_NEGATIVE));
 
-	table_printf(matrix, 1, vhdr_skip + device_info_count + 2, "<Used");
+	table_printf(matrix, 1, vhdr_skip + devcount + 2, "<Used");
 	for (i = 0, col = spaceinfos_col; i < sargs->total_spaces; i++) {
 		if (sargs->spaces[i].flags & BTRFS_SPACE_INFO_GLOBAL_RSV)
 			continue;
 
-		table_printf(matrix, col++, vhdr_skip + device_info_count + 2,
+		table_printf(matrix, col++, vhdr_skip + devcount + 2,
 			">%s",
 			pretty_size_mode(sargs->spaces[i].used_bytes, unit_mode));
 	}
@@ -990,23 +1035,22 @@ static void _cmd_filesystem_usage_tabular(unsigned unit_mode,
  */
 static void print_unused(struct chunk_info *info_ptr,
 			  int info_count,
-			  struct device_info *device_info_ptr,
-			  int device_info_count,
+			  struct device_info *devinfo,
+			  int devcount,
 			  unsigned unit_mode)
 {
 	int i;
-	for (i = 0; i < device_info_count; i++) {
+	for (i = 0; i < devcount; i++) {
 		int	j;
 		u64	total = 0;
 
 		for (j = 0; j < info_count; j++)
-			if (info_ptr[j].devid == device_info_ptr[i].devid)
+			if (info_ptr[j].devid == devinfo[i].devid)
 				total += calc_chunk_size(info_ptr+j);
 
-		printf("   %s\t%10s\n",
-			device_info_ptr[i].path,
-			pretty_size_mode(device_info_ptr[i].size - total,
-				unit_mode));
+		pr_verbose(LOG_DEFAULT, "   %s\t%10s\n",
+			devinfo[i].path,
+			pretty_size_mode(devinfo[i].size - total, unit_mode));
 	}
 }
 
@@ -1016,13 +1060,13 @@ static void print_unused(struct chunk_info *info_ptr,
 static void print_chunk_device(u64 chunk_type,
 				struct chunk_info *chunks_info_ptr,
 				int chunks_info_count,
-				struct device_info *device_info_ptr,
-				int device_info_count,
+				struct device_info *devinfo,
+				int devcount,
 				unsigned unit_mode)
 {
 	int i;
 
-	for (i = 0; i < device_info_count; i++) {
+	for (i = 0; i < devcount; i++) {
 		int	j;
 		u64	total = 0;
 
@@ -1030,7 +1074,7 @@ static void print_chunk_device(u64 chunk_type,
 
 			if (chunks_info_ptr[j].type != chunk_type)
 				continue;
-			if (chunks_info_ptr[j].devid != device_info_ptr[i].devid)
+			if (chunks_info_ptr[j].devid != devinfo[i].devid)
 				continue;
 
 			total += calc_chunk_size(&(chunks_info_ptr[j]));
@@ -1038,8 +1082,8 @@ static void print_chunk_device(u64 chunk_type,
 		}
 
 		if (total > 0)
-			printf("   %s\t%10s\n",
-				device_info_ptr[i].path,
+			pr_verbose(LOG_DEFAULT, "   %s\t%10s\n",
+				devinfo[i].path,
 				pretty_size_mode(total, unit_mode));
 	}
 }
@@ -1052,8 +1096,8 @@ static void _cmd_filesystem_usage_linear(unsigned unit_mode,
 					struct btrfs_ioctl_space_args *sargs,
 					struct chunk_info *info_ptr,
 					int info_count,
-					struct device_info *device_info_ptr,
-					int device_info_count)
+					struct device_info *devinfo,
+					int devcount)
 {
 	int i;
 
@@ -1068,24 +1112,24 @@ static void _cmd_filesystem_usage_linear(unsigned unit_mode,
 		description = btrfs_group_type_str(flags);
 		r_mode = btrfs_group_profile_str(flags);
 
-		printf("%s,%s: Size:%s, ",
+		pr_verbose(LOG_DEFAULT, "%s,%s: Size:%s, ",
 			description,
 			r_mode,
 			pretty_size_mode(sargs->spaces[i].total_bytes,
 				unit_mode));
-		printf("Used:%s (%.2f%%)\n",
+		pr_verbose(LOG_DEFAULT, "Used:%s (%.2f%%)\n",
 			pretty_size_mode(sargs->spaces[i].used_bytes, unit_mode),
 			100.0f * sargs->spaces[i].used_bytes /
 			(sargs->spaces[i].total_bytes + 1));
 		print_chunk_device(flags, info_ptr, info_count,
-				device_info_ptr, device_info_count, unit_mode);
-		printf("\n");
+				devinfo, devcount, unit_mode);
+		pr_verbose(LOG_DEFAULT, "\n");
 	}
 
 	if (info_count) {
-		printf("Unallocated:\n");
-		print_unused(info_ptr, info_count, device_info_ptr,
-				device_info_count, unit_mode | UNITS_NEGATIVE);
+		pr_verbose(LOG_DEFAULT, "Unallocated:\n");
+		print_unused(info_ptr, info_count, devinfo,
+				devcount, unit_mode | UNITS_NEGATIVE);
 	}
 }
 
@@ -1169,7 +1213,7 @@ static int cmd_filesystem_usage(const struct cmd_struct *cmd,
 			goto out;
 		}
 		if (more_than_one)
-			printf("\n");
+			pr_verbose(LOG_DEFAULT, "\n");
 
 		ret = load_chunk_and_device_info(fd, &chunkinfo, &chunkcount,
 				&devinfo, &devcount);
@@ -1180,7 +1224,7 @@ static int cmd_filesystem_usage(const struct cmd_struct *cmd,
 				devinfo, devcount, argv[i], unit_mode);
 		if (ret)
 			goto cleanup;
-		printf("\n");
+		pr_verbose(LOG_DEFAULT, "\n");
 		ret = print_filesystem_usage_by_chunk(fd, chunkinfo, chunkcount,
 				devinfo, devcount, argv[i], unit_mode, tabular);
 cleanup:
@@ -1225,7 +1269,7 @@ void print_device_chunks(struct device_info *devinfo,
 		num_stripes = chunks_info_ptr[i].num_stripes;
 
 		if (btrfs_bg_type_is_stripey(profile)) {
-			printf("   %s,%s/%llu:%*s%10s\n",
+			pr_verbose(LOG_DEFAULT, "   %s,%s/%llu:%*s%10s\n",
 				   description,
 				   r_mode,
 				   num_stripes,
@@ -1233,7 +1277,7 @@ void print_device_chunks(struct device_info *devinfo,
 						 - count_digits(num_stripes) - 1), "",
 				   pretty_size_mode(size, unit_mode));
 		} else {
-			printf("   %s,%s:%*s%10s\n",
+			pr_verbose(LOG_DEFAULT, "   %s,%s:%*s%10s\n",
 				   description,
 				   r_mode,
 				   (int)(20 - strlen(description) - strlen(r_mode)), "",
@@ -1243,7 +1287,7 @@ void print_device_chunks(struct device_info *devinfo,
 		allocated += size;
 
 	}
-	printf("   Unallocated: %*s%10s\n",
+	pr_verbose(LOG_DEFAULT, "   Unallocated: %*s%10s\n",
 		(int)(20 - strlen("Unallocated")), "",
 		pretty_size_mode(devinfo->size - allocated,
 			unit_mode | UNITS_NEGATIVE));
@@ -1251,12 +1295,10 @@ void print_device_chunks(struct device_info *devinfo,
 
 void print_device_sizes(struct device_info *devinfo, unsigned unit_mode)
 {
-	printf("   Device size: %*s%10s\n",
+	pr_verbose(LOG_DEFAULT, "   Device size: %*s%10s\n",
 		(int)(20 - strlen("Device size")), "",
 		pretty_size_mode(devinfo->device_size, unit_mode));
-	printf("   Device slack: %*s%10s\n",
+	pr_verbose(LOG_DEFAULT, "   Device slack: %*s%10s\n",
 		(int)(20 - strlen("Device slack")), "",
-		pretty_size_mode(devinfo->device_size > 0 ?
-			devinfo->device_size - devinfo->size : 0,
-			unit_mode));
+		pretty_size_mode(calc_slack_size(devinfo), unit_mode));
 }

@@ -18,17 +18,16 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <errno.h>
 #include <getopt.h>
-
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/print-tree.h"
 #include "kernel-shared/zoned.h"
-#include "common/utils.h"
-#include "cmds/commands.h"
 #include "common/help.h"
+#include "common/string-utils.h"
+#include "common/messages.h"
+#include "cmds/commands.h"
 
 static int load_and_dump_sb(char *filename, int fd, u64 sb_bytenr, int full,
 		int force)
@@ -42,16 +41,15 @@ static int load_and_dump_sb(char *filename, int fd, u64 sb_bytenr, int full,
 		if (ret == 0 && errno == 0)
 			return 0;
 
-		error("failed to read the superblock on %s at %llu",
-				filename, (unsigned long long)sb_bytenr);
+		error("failed to read the superblock on %s at %llu", filename, sb_bytenr);
 		error("error = '%m', errno = %d", errno);
 		return 1;
 	}
-	printf("superblock: bytenr=%llu, device=%s\n", sb_bytenr, filename);
-	printf("---------------------------------------------------------\n");
+	pr_verbose(LOG_DEFAULT, "superblock: bytenr=%llu, device=%s\n", sb_bytenr, filename);
+	pr_verbose(LOG_DEFAULT, "---------------------------------------------------------\n");
 	if (btrfs_super_magic(&sb) != BTRFS_MAGIC && !force) {
 		error("bad magic on superblock on %s at %llu (use --force to dump it anyway)",
-				filename, (unsigned long long)sb_bytenr);
+				filename, sb_bytenr);
 		return 1;
 	}
 	btrfs_print_superblock(&sb, full);
@@ -80,9 +78,9 @@ static const char * const cmd_inspect_dump_super_usage[] = {
 static int cmd_inspect_dump_super(const struct cmd_struct *cmd,
 				  int argc, char **argv)
 {
-	int all = 0;
-	int full = 0;
-	int force = 0;
+	bool all = false;
+	bool full = false;
+	bool force = false;
 	char *filename;
 	int fd = -1;
 	int i;
@@ -120,30 +118,30 @@ static int cmd_inspect_dump_super(const struct cmd_struct *cmd,
 			break;
 
 		case 'a':
-			all = 1;
+			all = true;
 			break;
 		case 'f':
-			full = 1;
+			full = true;
 			break;
 		case 'F':
-			force = 1;
+			force = true;
 			break;
 		case 's':
 			arg = arg_strtou64(optarg);
 			if (BTRFS_SUPER_MIRROR_MAX <= arg) {
 				warning(
 		"deprecated use of -s <bytenr> with %llu, assuming --bytenr",
-						(unsigned long long)arg);
+						arg);
 				sb_bytenr = arg;
 			} else {
 				sb_bytenr = btrfs_sb_offset(arg);
 			}
-			all = 0;
+			all = false;
 			break;
 		case GETOPT_VAL_BYTENR:
 			arg = arg_strtou64(optarg);
 			sb_bytenr = arg;
-			all = 0;
+			all = false;
 			break;
 		default:
 			usage_unknown_option(cmd, argv);
