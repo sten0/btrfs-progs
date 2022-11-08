@@ -1,3 +1,10 @@
+btrfs-progs (6.0.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Spaces→tabs [Jelmer Vernooĳ].
+
+ -- Adam Borowski <kilobyte@angband.pl>  Tue, 08 Nov 2022 18:09:00 +0100
+
 btrfs-progs (6.0-1) unstable; urgency=medium
 
   * New upstream release.
