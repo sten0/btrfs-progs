@@ -909,7 +909,6 @@ static void print_usage(void)
 	printf("Tune settings of filesystem features on an unmounted device\n\n");
 	printf("Options:\n");
 	printf("  change feature status:\n");
-	printf("\t-b          enable block group tree (mkfs: block-group-tree, for less mount time)\n");
 	printf("\t-r          enable extended inode refs (mkfs: extref, for hardlink limits)\n");
 	printf("\t-x          enable skinny metadata extent refs (mkfs: skinny-metadata)\n");
 	printf("\t-n          enable no-holes feature (mkfs: no-holes, more efficient sparse file representation)\n");
@@ -927,6 +926,7 @@ static void print_usage(void)
 	printf("\nEXPERIMENTAL FEATURES:\n");
 	printf("  checksum changes:\n");
 	printf("\t--csum CSUM	switch checksum for data and metadata to CSUM\n");
+	printf("\t-b          enable block group tree (mkfs: block-group-tree, for less mount time)\n");
 #endif
 }
 
@@ -966,6 +966,7 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 			break;
 		switch(c) {
 		case 'b':
+			btrfs_warn_experimental("Feature: conversion to block-group-tree");
 			to_bg_tree = true;
 			break;
 		case 'S':
@@ -1003,9 +1004,10 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 			break;
 #if EXPERIMENTAL
 		case GETOPT_VAL_CSUM:
+			btrfs_warn_experimental(
+				"Switching checksums is experimental, do not use for valuable data!");
 			ctree_flags |= OPEN_CTREE_SKIP_CSUM_CHECK;
 			csum_type = parse_csum_type(optarg);
-			warning("Switching checksums is experimental, do not use for valuable data!");
 			printf("Switch csum to %s\n",
 					btrfs_super_csum_name(csum_type));
 			break;

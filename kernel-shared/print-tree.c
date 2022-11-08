@@ -707,7 +707,7 @@ void print_objectid(FILE *stream, u64 objectid, u8 type)
 		return;
 	case BTRFS_QGROUP_RELATION_KEY:
 		fprintf(stream, "%llu/%llu", btrfs_qgroup_level(objectid),
-		       btrfs_qgroup_subvid(objectid));
+		       btrfs_qgroup_subvolid(objectid));
 		return;
 	case BTRFS_UUID_KEY_SUBVOL:
 	case BTRFS_UUID_KEY_RECEIVED_SUBVOL:
@@ -816,7 +816,7 @@ void btrfs_print_key(struct btrfs_disk_key *disk_key)
 	case BTRFS_QGROUP_INFO_KEY:
 	case BTRFS_QGROUP_LIMIT_KEY:
 		printf(" %llu/%llu)", btrfs_qgroup_level(offset),
-		       btrfs_qgroup_subvid(offset));
+		       btrfs_qgroup_subvolid(offset));
 		break;
 	case BTRFS_UUID_KEY_SUBVOL:
 	case BTRFS_UUID_KEY_RECEIVED_SUBVOL:
@@ -1689,9 +1689,7 @@ static struct readable_flag_entry incompat_flags_array[] = {
 	DEF_INCOMPAT_FLAG_ENTRY(METADATA_UUID),
 	DEF_INCOMPAT_FLAG_ENTRY(RAID1C34),
 	DEF_INCOMPAT_FLAG_ENTRY(ZONED),
-#if EXPERIMENTAL
 	DEF_INCOMPAT_FLAG_ENTRY(EXTENT_TREE_V2),
-#endif
 };
 static const int incompat_flags_num = sizeof(incompat_flags_array) /
 				      sizeof(struct readable_flag_entry);
@@ -1731,7 +1729,7 @@ static void __print_readable_flag(u64 flag, struct readable_flag_entry *array,
 	printf("\t\t\t( ");
 	for (i = 0; i < array_size; i++) {
 		entry = array + i;
-		if (flag & entry->bit) {
+		if ((flag & supported_flags) && (flag & entry->bit)) {
 			if (first)
 				printf("%s ", entry->output);
 			else
