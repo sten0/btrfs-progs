@@ -18,6 +18,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <linux/version.h>
+#include <linux/fs.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,6 +51,7 @@
 #include "common/device-utils.h"
 #include "common/open-utils.h"
 #include "common/parse-utils.h"
+#include "common/string-utils.h"
 #include "common/filesystem-utils.h"
 #include "cmds/commands.h"
 #include "cmds/filesystem-usage.h"
@@ -878,7 +880,7 @@ static int defrag_callback(const char *fpath, const struct stat *sb,
 	int fd = 0;
 
 	if ((typeflag == FTW_F) && S_ISREG(sb->st_mode)) {
-		pr_verbose(1, "%s\n", fpath);
+		pr_verbose(LOG_INFO, "%s\n", fpath);
 		fd = open(fpath, defrag_open_mode);
 		if (fd < 0) {
 			goto error;
@@ -932,6 +934,19 @@ static int cmd_filesystem_defrag(const struct cmd_struct *cmd,
 	 */
 	thresh = SZ_32M;
 
+	/*
+	 * Workaround to emulate previous behaviour, the log level has to be
+	 * adjusted:
+	 *
+	 * - btrfs fi defrag - no file names printed (LOG_DEFAULT)
+	 * - btrfs fi defrag -v - filenames printed (LOG_INFO)
+	 * - btrfs -v fi defrag - filenames printed (LOG_INFO)
+	 * - btrfs -v fi defrag -v - filenames printed (LOG_VERBOSE)
+	 */
+
+	if (bconf.verbose != BTRFS_BCONF_UNSET)
+		bconf.verbose++;
+
 	defrag_global_errors = 0;
 	defrag_global_errors = 0;
 	optind = 0;
@@ -950,7 +965,10 @@ static int cmd_filesystem_defrag(const struct cmd_struct *cmd,
 			flush = true;
 			break;
 		case 'v':
-			bconf_be_verbose();
+			if (bconf.verbose == BTRFS_BCONF_UNSET)
+				bconf.verbose = LOG_INFO;
+			else
+				bconf_be_verbose();
 			break;
 		case 's':
 			start = parse_size_from_string(optarg);
@@ -1050,7 +1068,7 @@ static int cmd_filesystem_defrag(const struct cmd_struct *cmd,
 			/* errors are handled in the callback */
 			ret = 0;
 		} else {
-			pr_verbose(1, "%s\n", argv[i]);
+			pr_verbose(LOG_INFO, "%s\n", argv[i]);
 			ret = ioctl(fd, BTRFS_IOC_DEFRAG_RANGE,
 					&defrag_global_range);
 			defrag_err = errno;
@@ -1122,7 +1140,6 @@ static int check_resize_args(const char *amount, const char *path) {
 		ret = 1;
 		goto out;
 	}
-	ret = 0;
 
 	sizestr = amount_dup;
 	devstr = strchr(sizestr, ':');
@@ -1209,7 +1226,7 @@ static int check_resize_args(const char *amount, const char *path) {
 
 out:
 	free(di_args);
-	return ret;
+	return 0;
 }
 
 static int cmd_filesystem_resize(const struct cmd_struct *cmd,
@@ -1373,6 +1390,135 @@ static int cmd_filesystem_balance(const struct cmd_struct *unused,
 static DEFINE_COMMAND(filesystem_balance, "balance", cmd_filesystem_balance,
 		      cmd_filesystem_balance_usage, NULL, CMD_HIDDEN);
 
+static const char * const cmd_filesystem_mkswapfile_usage[] = {
+	"btrfs filesystem mkswapfile <file>",
+	"Force a sync on a filesystem",
+	HELPINFO_INSERT_GLOBALS,
+	HELPINFO_INSERT_VERBOSE,
+	HELPINFO_INSERT_QUIET,
+	NULL
+};
+
+/*
+ * Swap signature in the first 4KiB, v2:
+ *
+ * 00000400 .. = 01 00 00 00 ff ff 03 00  00 00 00 00 cb 70 8e 60
+ *                                                    ^^^^^^^^^^^
+ *                                                    uuid 4B
+ * 00000420 .. = 1d fb 4e ca be d4 3f 1f  6a 6b 0c 03 00 00 00 00
+ *               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ *               uuid 8B
+ * 00000ff0 .. = 00 00 00 00 00 00 53 57  41 50 53 50 41 43 45 32
+ *                                  S  W   A  P  S  P  A  C  E  2
+ */
+static int write_swap_signature(int fd)
+{
+	int ret;
+	static unsigned char swap[4096] = {
+		[0x400] = 0x01,
+		[0x404] = 0xff,
+		[0x405] = 0xff,
+		[0x406] = 0x03,
+		/* 0x40c .. 0x42b UUID */
+		[0xff6] = 'S',
+		[0xff7] = 'W',
+		[0xff8] = 'A',
+		[0xff9] = 'P',
+		[0xffa] = 'S',
+		[0xffb] = 'P',
+		[0xffc] = 'A',
+		[0xffd] = 'C',
+		[0xffe] = 'E',
+		[0xfff] = '2',
+	};
+
+	uuid_generate(&swap[0x40c]);
+	ret = pwrite(fd, swap, 4096, 0);
+
+	return ret;
+}
+
+static int cmd_filesystem_mkswapfile(const struct cmd_struct *cmd, int argc, char **argv)
+{
+	int ret;
+	int fd;
+	const char *fname;
+	unsigned long flags;
+	u64 size = SZ_2G;
+
+	optind = 0;
+	while (1) {
+		int c;
+		static const struct option long_options[] = {
+			{ "size", required_argument, NULL, 's' },
+			{ NULL, 0, NULL, 0 }
+		};
+
+		c = getopt_long(argc, argv, "s:", long_options, NULL);
+		if (c < 0)
+			break;
+
+		switch (c) {
+		case 's':
+			size = parse_size_from_string(optarg);
+			/* Minimum limit reported by mkswap */
+			if (size < 40 * SZ_1K) {
+				error("swapfile needs to be at least 40 KiB");
+				return 1;
+			}
+			break;
+		default:
+			usage_unknown_option(cmd, argv);
+		}
+	}
+
+	if (check_argc_exact(argc - optind, 1))
+		return 1;
+
+	fname = argv[optind];
+	pr_verbose(LOG_INFO, "create file %s with mode 0600\n", fname);
+	fd = open(fname, O_RDWR | O_CREAT | O_EXCL, 0600);
+	if (fd < 0) {
+		error("cannot create new swapfile: %m");
+		return 1;
+	}
+	ret = ftruncate(fd, 0);
+	if (ret < 0) {
+		error("cannot truncate file: %m");
+		ret = 1;
+		goto out;
+	}
+	pr_verbose(LOG_INFO, "set NOCOW attribute\n");
+	flags = FS_NOCOW_FL;
+	ret = ioctl(fd, FS_IOC_SETFLAGS, &flags);
+	if (ret < 0) {
+		error("cannot set NOCOW flag: %m");
+		ret = 1;
+		goto out;
+	}
+	pr_verbose(LOG_INFO, "fallocate to size %llu\n", size);
+	ret = fallocate(fd, 0, 0, size);
+	if (ret < 0) {
+		error("cannot fallocate file: %m");
+		ret = 1;
+		goto out;
+	}
+	pr_verbose(LOG_INFO, "write swap signature\n");
+	ret = write_swap_signature(fd);
+	if (ret < 0) {
+		error("cannot write swap signature: %m");
+		ret = 1;
+		goto out;
+	}
+	pr_verbose(LOG_DEFAULT, "create swapfile %s size %s (%llu)\n",
+			fname, pretty_size_mode(size, UNITS_HUMAN), size);
+out:
+	close(fd);
+
+	return 0;
+}
+static DEFINE_SIMPLE_COMMAND(filesystem_mkswapfile, "mkswapfile");
+
 static const char filesystem_cmd_group_info[] =
 "overall filesystem tasks and information";
 
@@ -1387,6 +1533,7 @@ static const struct cmd_group filesystem_cmd_group = {
 		&cmd_struct_filesystem_resize,
 		&cmd_struct_filesystem_label,
 		&cmd_struct_filesystem_usage,
+		&cmd_struct_filesystem_mkswapfile,
 		NULL
 	}
 };

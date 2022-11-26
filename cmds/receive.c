@@ -1155,10 +1155,9 @@ static int decompress_and_write(struct btrfs_receive *rctx,
 				u32 compression)
 {
 	int ret = 0;
-	size_t pos;
-	ssize_t w;
 	char *unencoded_data;
 	int sector_shift = 0;
+	u64 written = 0;
 
 	unencoded_data = calloc(unencoded_len, 1);
 	if (!unencoded_data) {
@@ -1209,17 +1208,19 @@ static int decompress_and_write(struct btrfs_receive *rctx,
 		goto out;
 	}
 
-	pos = unencoded_offset;
-	while (pos < unencoded_file_len) {
-		w = pwrite(rctx->write_fd, unencoded_data + pos,
-			   unencoded_file_len - pos, offset);
+	while (written < unencoded_file_len) {
+		ssize_t w;
+
+		w = pwrite(rctx->write_fd, unencoded_data + unencoded_offset,
+			   unencoded_file_len - written, offset);
 		if (w < 0) {
 			ret = -errno;
 			error("writing unencoded data failed: %m");
 			goto out;
 		}
-		pos += w;
+		written += w;
 		offset += w;
+		unencoded_offset += w;
 	}
 out:
 	free(unencoded_data);
@@ -1246,6 +1247,12 @@ static int process_encoded_write(const char *path, const void *data, u64 offset,
 		.encryption = encryption,
 	};
 
+	if (bconf.verbose >= 3)
+		fprintf(stderr,
+"encoded_write %s - offset=%llu, len=%llu, unencoded_offset=%llu, unencoded_file_len=%llu, unencoded_len=%llu, compression=%u, encryption=%u\n",
+			path, offset, len, unencoded_offset, unencoded_file_len,
+			unencoded_len, compression, encryption);
+
 	if (encryption) {
 		error("encoded_write: encryption not supported");
 		return -EOPNOTSUPP;
@@ -1271,6 +1278,10 @@ static int process_encoded_write(const char *path, const void *data, u64 offset,
 			error("encoded_write: writing to %s failed: %m", path);
 			return ret;
 		}
+		if (bconf.verbose >= 3)
+			fprintf(stderr,
+"encoded_write %s - falling back to decompress and write due to errno %d (\"%m\")\n",
+				path, errno);
 	}
 
 	return decompress_and_write(rctx, data, offset, len, unencoded_file_len,
@@ -1284,6 +1295,11 @@ static int process_fallocate(const char *path, int mode, u64 offset, u64 len,
 	int ret;
 	struct btrfs_receive *rctx = user;
 	char full_path[PATH_MAX];
+
+	if (bconf.verbose >= 3)
+		fprintf(stderr,
+			"fallocate %s - offset=%llu, len=%llu, mode=%d\n",
+			path, offset, len, mode);
 
 	ret = path_cat_out(full_path, rctx->full_subvol_path, path);
 	if (ret < 0) {
@@ -1304,25 +1320,33 @@ static int process_fallocate(const char *path, int mode, u64 offset, u64 len,
 
 static int process_fileattr(const char *path, u64 attr, void *user)
 {
-	int ret;
-	struct btrfs_receive *rctx = user;
-	char full_path[PATH_MAX];
+	/*
+	 * Not yet supported, ignored for now, just like in send stream v1.
+	 * The content of 'attr' matches the flags in the btrfs inode item,
+	 * we can't apply them directly with FS_IOC_SETFLAGS, as we need to
+	 * convert them from BTRFS_INODE_* flags to FS_* flags. Plus some
+	 * flags are special and must be applied in a special way.
+	 * The commented code below therefore does not work.
+	 */
 
-	ret = path_cat_out(full_path, rctx->full_subvol_path, path);
-	if (ret < 0) {
-		error("fileattr: path invalid: %s", path);
-		return ret;
-	}
-	ret = open_inode_for_write(rctx, full_path);
-	if (ret < 0)
-		return ret;
-	ret = -EOPNOTSUPP;
-	/* ret = ioctl(rctx->write_fd, FS_IOC_SETFLAGS, &flags); */
-	if (ret < 0) {
-		ret = -errno;
-		error("fileattr: set file attributes on %s failed: %m", path);
-		return ret;
-	}
+	/* int ret; */
+	/* struct btrfs_receive *rctx = user; */
+	/* char full_path[PATH_MAX]; */
+
+	/* ret = path_cat_out(full_path, rctx->full_subvol_path, path); */
+	/* if (ret < 0) { */
+	/* 	error("fileattr: path invalid: %s", path); */
+	/* 	return ret; */
+	/* } */
+	/* ret = open_inode_for_write(rctx, full_path); */
+	/* if (ret < 0) */
+	/* 	return ret; */
+	/* ret = ioctl(rctx->write_fd, FS_IOC_SETFLAGS, &attr); */
+	/* if (ret < 0) { */
+	/* 	ret = -errno; */
+	/* 	error("fileattr: set file attributes on %s failed: %m", path); */
+	/* 	return ret; */
+	/* } */
 	return 0;
 }
 
