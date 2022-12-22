@@ -94,6 +94,8 @@ CFLAGS = $(SUBST_CFLAGS) \
 	 -D_XOPEN_SOURCE=700  \
 	 -fno-strict-aliasing \
 	 -fPIC \
+	 -Wall \
+	 -Wunused-but-set-parameter \
 	 -I$(TOPDIR) \
 	 $(CRYPTO_CFLAGS) \
 	 -DCOMPRESSION_LZO=$(COMPRESSION_LZO) \
@@ -207,6 +209,7 @@ cmds_objects = cmds/subvolume.o cmds/subvolume-list.o \
 	       cmds/rescue-super-recover.o \
 	       cmds/property.o cmds/filesystem-usage.o cmds/inspect-dump-tree.o \
 	       cmds/inspect-dump-super.o cmds/inspect-tree-stats.o cmds/filesystem-du.o \
+	       cmds/reflink.o \
 	       mkfs/common.o check/mode-common.o check/mode-lowmem.o \
 	       check/clear-cache.o
 
@@ -218,7 +221,7 @@ libbtrfs_objects = \
 
 libbtrfs_headers = libbtrfs/send-stream.h libbtrfs/send-utils.h libbtrfs/send.h kernel-lib/rbtree.h \
 	       kernel-lib/list.h kernel-lib/rbtree_types.h kerncompat.h \
-	       ioctl.h libbtrfs/ctree.h version.h
+	       libbtrfs/ioctl.h libbtrfs/ctree.h version.h
 libbtrfsutil_major := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MAJOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
 libbtrfsutil_minor := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MINOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
 libbtrfsutil_patch := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_PATCH ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
@@ -398,7 +401,7 @@ ifdef C
 			grep -v __SIZE_TYPE__ > $(check_defs))
 	check = $(CHECKER)
 	check_echo = echo
-	CSTD = -std=gnu89
+	CSTD = -std=gnu11
 else
 	check = true
 	check_echo = true
@@ -494,6 +497,16 @@ test-json: json-formatter-test
 		for testno in `seq 1 $$max`; do				\
 			echo "    [TEST/json]  $$testno";		\
 			./json-formatter-test $$testno | jq >& /dev/null; \
+		done							\
+	}
+
+test-string-table: string-table-test
+	@echo "    [TEST]   string-table formatting"
+	@{								\
+		max=`./string-table-test`;				\
+		for testno in `seq 1 $$max`; do				\
+			echo "    [TEST/s-t]  $$testno";		\
+			./string-table-test $$testno ;			\
 		done							\
 	}
 
@@ -746,6 +759,10 @@ json-formatter-test: tests/json-formatter-test.c $(objects) libbtrfsutil.a
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
+string-table-test: tests/string-table-test.c $(objects) libbtrfsutil.a
+	@echo "    [LD]     $@"
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
 test-build: test-build-pre test-build-real
 
 test-build-pre:
@@ -792,7 +809,7 @@ clean: $(CLEANDIRS)
 		kernel-lib/*.o kernel-lib/.deps/*.o.d \
 		kernel-shared/*.o kernel-shared/.deps/*.o.d \
 		image/*.o image/.deps/*.o.d \
-		convert/.deps/*.o convert/.deps/*.o.d \
+		convert/*.o convert/.deps/*.o.d \
 		mkfs/*.o mkfs/.deps/*.o.d check/*.o check/.deps/*.o.d \
 		cmds/*.o cmds/.deps/*.o.d common/*.o common/.deps/*.o.d \
 		crypto/*.o crypto/.deps/*.o.d \

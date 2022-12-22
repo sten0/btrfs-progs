@@ -53,8 +53,8 @@ A subvolume is made read-only after the receiving process finishes successfully 
 -m <ROOTMOUNT>
         the root mount point of the destination filesystem
 
-        By default the mountpoint is searched in */proc/self/mounts*.
-        If */proc* is not accessible, eg. in a chroot environment, use this option to
+        By default the mount point is searched in */proc/self/mounts*.
+        If */proc* is not accessible, e.g. in a chroot environment, use this option to
         tell us where this filesystem is mounted.
 
 --force-decompress

@@ -22,7 +22,7 @@ by the option *--readonly*.
 .. warning::
    Do not use *--repair* unless you are advised to do so by a developer
    or an experienced user, and then only after having accepted that no *fsck*
-   successfully repair all types of filesystem corruption. Eg. some other software
+   successfully repair all types of filesystem corruption. E.g. some other software
    or hardware bugs can fatally damage a volume.
 
 The structural integrity check verifies if internal filesystem objects or
@@ -139,7 +139,7 @@ DANGEROUS OPTIONS
 --force
         allow work on a mounted filesystem. Note that this should work fine on a
         quiescent or read-only mounted filesystem but may crash if the device is
-        changed externally, eg. by the kernel module.  Repair without mount checks is
+        changed externally, e.g. by the kernel module.  Repair without mount checks is
         not supported right now.
 
         This option also skips the delay and warning in the repair mode (see
