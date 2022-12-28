@@ -1,3 +1,9 @@
+btrfs-progs (6.0.2-1~bpo11+1) bullseye-backports; urgency=medium
+
+  * Rebuild for bullseye-backports.
+
+ -- Nicholas D Steeves <sten@debian.org>  Wed, 28 Dec 2022 14:05:49 -0500
+
 btrfs-progs (6.0.2-1) unstable; urgency=medium
 
   * New upstream bugfix release.
