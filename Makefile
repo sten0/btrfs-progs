@@ -220,8 +220,8 @@ libbtrfs_objects = \
 		crypto/crc32c.o
 
 libbtrfs_headers = libbtrfs/send-stream.h libbtrfs/send-utils.h libbtrfs/send.h kernel-lib/rbtree.h \
-	       kernel-lib/list.h kernel-lib/rbtree_types.h kerncompat.h \
-	       libbtrfs/ioctl.h libbtrfs/ctree.h version.h
+	       kernel-lib/list.h kernel-lib/rbtree_types.h libbtrfs/kerncompat.h \
+	       libbtrfs/ioctl.h libbtrfs/ctree.h libbtrfs/version.h
 libbtrfsutil_major := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MAJOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
 libbtrfsutil_minor := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MINOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
 libbtrfsutil_patch := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_PATCH ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
@@ -532,7 +532,7 @@ endif
 #
 static: $(progs_static) libbtrfs.a libbtrfsutil.a
 
-version.h: version.h.in configure.ac
+libbtrfs/version.h: libbtrfs/version.h.in configure.ac
 	@echo "    [SH]     $@"
 	$(Q)bash ./config.status --silent $@
 
@@ -546,16 +546,16 @@ kernel-lib/tables.c:
 	@echo "    [TABLE]  $@"
 	$(Q)./mktables > $@ || ($(RM) -f $@ && exit 1)
 
-libbtrfs.so.0.1: $(libbtrfs_objects) libbtrfs.sym
+libbtrfs.so.0.1: $(libbtrfs_objects) libbtrfs/libbtrfs.sym
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) $(filter %.o,$^) $(LDFLAGS) $(LIBBTRFS_LIBS) \
-		-shared -Wl,-soname,libbtrfs.so.0 -Wl,--version-script=libbtrfs.sym -o $@
+		-shared -Wl,-soname,libbtrfs.so.0 -Wl,--version-script=libbtrfs/libbtrfs.sym -o $@
 
 libbtrfs.a: $(libbtrfs_objects)
 	@echo "    [AR]     $@"
 	$(Q)$(AR) cr $@ $^
 
-libbtrfs.so.0 libbtrfs.so: libbtrfs.so.0.1 libbtrfs.sym
+libbtrfs.so.0 libbtrfs.so: libbtrfs.so.0.1 libbtrfs/libbtrfs.sym
 	@echo "    [LN]     $@"
 	$(Q)$(LN_S) -f $< $@
 
@@ -834,7 +834,7 @@ clean-doc:
 
 clean-gen:
 	@echo "Cleaning Generated Files"
-	$(Q)$(RM) -rf -- version.h config.status config.cache config.log \
+	$(Q)$(RM) -rf -- libbtrfs/version.h config.status config.cache config.log \
 		configure.lineno config.status.lineno Makefile.inc \
 		Documentation/Makefile tags TAGS \
 		cscope.files cscope.out cscope.in.out cscope.po.out \
