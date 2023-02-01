@@ -93,7 +93,7 @@ Case study: system root layouts
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 There are two ways how the system root directory and subvolume layout could be
-organized. The interesting usecase for root is to allow rollbacks to previous
+organized. The interesting use case for root is to allow rollbacks to previous
 version, as one atomic step. If the entire filesystem hierarchy starting in "/"
 is in one subvolume, taking snapshot will encompass all files. This is easy for
 the snapshotting part but has undesirable consequences for rollback. For example,
@@ -102,11 +102,11 @@ filesystem but are not meant to be rolled back either (database files, VM
 images, ...).
 
 Here we could utilize the snapshotting barrier mentioned above, each directory
-that stores data to be preserved accross rollbacks is it's own subvolume. This
-could be eg. ``/var``. Further more-fine grained partitioning could be done, eg.
+that stores data to be preserved across rollbacks is it's own subvolume. This
+could be e.g. ``/var``. Further more-fine grained partitioning could be done, e.g.
 adding separate subvolumes for ``/var/log``, ``/var/cache`` etc.
 
-That there are separate subvolumes requrires separate actions to take the
+That there are separate subvolumes requires separate actions to take the
 snapshots (here it gets disconnected from the system root snapshots). This needs
 to be taken care of by system tools, installers together with selection of which
 directories are highly recommended to be separate subvolumes.
@@ -122,7 +122,7 @@ always affect the whole filesystem:
 - generic: noatime/relatime/..., nodev, nosuid, ro, rw, dirsync
 - fs-specific: compress, autodefrag, nodatacow, nodatasum
 
-An example of whole filesystem options is eg. *space_cache*, *rescue*, *device*,
+An example of whole filesystem options is e.g. *space_cache*, *rescue*, *device*,
 *skip_balance*, etc. The exceptional options are *subvol* and *subvolid* that
 are actually used for mounting a given subvolume and can be specified only once
 for the mount.

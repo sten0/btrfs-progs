@@ -6,7 +6,7 @@ You can have a single btrfs mount point that has some files that are
 uncompressed, some that are compressed with LZO, some with ZLIB, for instance
 (though you may not want it that way, it is supported).
 
-Once the compression is set, all newly written data will be compressed, ie.
+Once the compression is set, all newly written data will be compressed, i.e.
 existing data are untouched. Data are split into smaller chunks (128KiB) before
 compression to make random rewrites possible without a high performance hit. Due
 to the increased number of extents the metadata consumption is higher. The
@@ -20,11 +20,11 @@ ZLIB
         * levels: 1 to 9, mapped directly, default level is 3
         * good backward compatibility
 LZO
-        * faster compression and decompression than zlib, worse compression ratio, designed to be fast
+        * faster compression and decompression than ZLIB, worse compression ratio, designed to be fast
         * no levels
         * good backward compatibility
 ZSTD
-        * compression comparable to zlib with higher compression/decompression speeds and different ratio
+        * compression comparable to ZLIB with higher compression/decompression speeds and different ratio
         * levels: 1 to 15, mapped directly (higher levels are not available)
         * since 4.14, levels since 5.1
 

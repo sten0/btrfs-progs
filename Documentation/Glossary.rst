@@ -4,12 +4,12 @@ Glossary
 Terms in *italics* also appear in this glossary.
 
 allocator
-	Usually *allocator* means the *block* allocator, ie. the logic
+	Usually *allocator* means the *block* allocator, i.e. the logic
 	inside filesystem which decides where to place newly allocated blocks
 	in order to maintain several constraints (like data locality, low
 	fragmentation).
 
-	In btrfs, allocator may also refer to *chunk* allocator, ie. the
+	In btrfs, allocator may also refer to *chunk* allocator, i.e. the
 	logic behind placing chunks on devices.
 
 balance
@@ -19,7 +19,7 @@ balance
 	again. It is primarily intended to rebalance the data in the filesystem
 	across the *devices* when a device is added or removed. A balance
 	will regenerate missing copies for the redundant *RAID* levels, if a
-	device has failed. As of linux kernel 3.3, a balance operation can be
+	device has failed. As of Linux kernel 3.3, a balance operation can be
 	made selective about which parts of the filesystem are rewritten.
 
 barrier
@@ -30,7 +30,7 @@ barrier
 
 block
 	A single physically and logically contiguous piece of storage on a
-	device, of size eg. 4K.
+	device, of size e.g. 4K.
 
 block group
 	The unit of allocation of space in btrfs. A block group is laid out on
@@ -47,7 +47,7 @@ B-tree
 	refers to its use of B-trees.
 
 btrfsck
-	Tool in *btrfs-progs* that checks a filesystem *offline* (ie.
+	Tool in *btrfs-progs* that checks a filesystem *offline* (i.e.
 	unmounted), and reports on any errors in the filesystem structures it
 	finds.  By default the tool runs in read-only mode as fixing errors is
         potentially dangerous.  See also *scrub*.
@@ -83,7 +83,7 @@ copy-on-write
 	way. In COW filesystems, files tend to fragment as they are modified.
 	Copy-on-write is also used in the implementation of *snapshots* and
 	*reflink copies*. A copy-on-write filesystem is, in theory,
-	'always' consistent, provided the underlying hardware supports
+	*always* consistent, provided the underlying hardware supports
 	*barriers*.
 
 COW
@@ -142,8 +142,8 @@ fallocate
 	Command line tool in util-linux, and a syscall, that reserves space in
 	the filesystem for a file, without actually writing any file data to
 	the filesystem. First data write will turn the preallocated extents
-	into regular ones. See <code>man 1 fallocate</code> and <code>man 2
-	fallocate</code> for more details.
+        into regular ones. See *fallocate(1)* and *fallocate(2)* manual pages
+        for more details.
 
 filefrag
 	A tool to show the number of extents in a file, and hence the amount of
@@ -160,7 +160,7 @@ free space cache
 
 fsync
 	On Unix and Unix-like operating systems (of which Linux is the latter),
-	the ``lfsync()`` system call causes all buffered file
+	the ``fsync()`` system call causes all buffered file
 	descriptor related data changes to be flushed to the underlying block
 	device. When a file is modified on a modern operating system the
 	changes are generally not written to the disk immediately but rather
@@ -292,9 +292,8 @@ subvolume
 	a reference on the root of another subvolume. Each btrfs filesystem has
 	at least one subvolume, the *top-level subvolume*, which contains
 	everything else in the filesystem. Additional subvolumes can be created
-	and deleted with the *<code>btrfs</code>* tool. All subvolumes share
-	the same pool of free space in the filesystem. See also *default
-	subvolume*.
+        and deleted with the *btrfs<* tool. All subvolumes share the same pool
+        of free space in the filesystem. See also *default subvolume*.
 
 superblock
 	The *block* on the disk, at a fixed known location and of fixed size,
@@ -312,7 +311,7 @@ system array
 top-level subvolume
 	The *subvolume* at the very top of the filesystem. This is the only
 	subvolume present in a newly-created btrfs filesystem, and internally has ID 5,
-	otherwise could be referenced as 0 (eg. within the *set-default* subcommand of
+	otherwise could be referenced as 0 (e.g. within the *set-default* subcommand of
 	*btrfs*).
 
 transaction

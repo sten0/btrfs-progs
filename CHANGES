@@ -1,5 +1,32 @@
+btrfs-progs-6.1 (2022-12-22)
+----------------------------
+   * NOTE: this version breaks build of applications using ctree.h and qgroup items
+   * filesystem df: add json output
+   * qgroup show: add json output
+   * new command: 'inspect-internal map-swapfile' to check swapfile and its
+     swapfile_offset value used for hibernation
+   * corrupt-block: fix parsing of option --root argument
+   * experimental (interfaces not finalized):
+      * new command 'inspect-internal list-chunks'
+      * new group reflink, command clone
+   * other:
+      * synchronize some files with kernel versions
+      * docs updates
+      * build: use gnu11
+
+btrfs-progs-6.1.1 (2023-01-03)
+""""""""""""""""""""""""""""""
+   * subvol list: fix printing of UUID
+   * revert changes to ctree.h regarding qgroup items, breaks build of several
+     applications
+   * hide __init definition in kerncompat.h, may break build
+
+btrfs-progs-6.1.2 (2023-01-05)
+""""""""""""""""""""""""""""""
+   * revert libbtrfs changes to v6.0.2, fix remaining build problems
+
 btrfs-progs-6.0 (2022-10-11)
------------------------------
+----------------------------
    * fi usage: in tabular output, print total size and slack size
    * mkfs:
       * option -O now accepts values from -R to unify the interface (-R will

@@ -1,3 +1,23 @@
+btrfs-progs (6.1.2-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Sun, 08 Jan 2023 01:37:24 +0100
+
+btrfs-progs (6.1.1-1) unstable; urgency=medium
+
+  * New upstream bugfix release, reverts changes that broke btrbk, snapper
+    and more (closes: #1027785, #1027628).
+    This will break programs that have already adapted to the changes. 🫤
+
+ -- Adam Borowski <kilobyte@angband.pl>  Thu, 05 Jan 2023 03:44:03 +0100
+
+btrfs-progs (6.1-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Adam Borowski <kilobyte@angband.pl>  Fri, 23 Dec 2022 00:53:24 +0100
+
 btrfs-progs (6.0.2-1~bpo11+1) bullseye-backports; urgency=medium
 
   * Rebuild for bullseye-backports.

@@ -844,8 +844,8 @@ static void shift_items(struct btrfs_root *root, struct extent_buffer *eb)
 	unsigned int data_end = btrfs_item_offset(eb, nritems - 1);
 
 	/* Shift the item data up to and including slot back by shift space */
-	memmove_extent_buffer(eb, btrfs_leaf_data(eb) + data_end - shift_space,
-			      btrfs_leaf_data(eb) + data_end,
+	memmove_extent_buffer(eb, btrfs_item_nr_offset(eb, 0) + data_end - shift_space,
+			      btrfs_item_nr_offset(eb, 0) + data_end,
 			      btrfs_item_offset(eb, slot - 1) - data_end);
 
 	/* Now update the item pointers. */
@@ -1346,7 +1346,7 @@ int main(int argc, char **argv)
 			{ "item", no_argument, NULL, 'I'},
 			{ "dir-item", no_argument, NULL, 'D'},
 			{ "delete", no_argument, NULL, 'd'},
-			{ "root", no_argument, NULL, 'r'},
+			{ "root", required_argument, NULL, 'r'},
 			{ "csum", required_argument, NULL, 'C'},
 			{ "block-group", required_argument, NULL, GETOPT_VAL_BLOCK_GROUP},
 			{ "value", required_argument, NULL, GETOPT_VAL_VALUE},

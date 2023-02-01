@@ -28,6 +28,7 @@
 #include "kernel-shared/transaction.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/backref.h"
+#include "kernel-shared/compression.h"
 #include "kernel-shared/volumes.h"
 #include "common/messages.h"
 #include "common/internal.h"
@@ -5282,7 +5283,7 @@ static int check_btrfs_root(struct btrfs_root *root, int check_all)
 		      super_generation + 1);
 		err |= INVALID_GENERATION;
 		if (opt_check_repair) {
-			root->node->flags |= EXTENT_BAD_TRANSID;
+			root->node->flags |= EXTENT_BUFFER_BAD_TRANSID;
 			ret = recow_extent_buffer(root, root->node);
 			if (!ret) {
 				printf("Reset generation for root %llu\n",

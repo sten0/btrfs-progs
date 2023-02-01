@@ -20,7 +20,7 @@ Type
 Profile
         A profile describes an allocation policy based on the redundancy/replication
         constraints in connection with the number of devices. The profile applies to
-        data and metadata block groups separately. Eg. *single*, *RAID1*.
+        data and metadata block groups separately. E.g. *single*, *RAID1*.
 
 RAID level
         Where applicable, the level refers to a profile that matches constraints of the
@@ -90,7 +90,7 @@ we're going to lose 50GiB of the second device for obvious reasons.
 
         $ btrfs balance start -dconvert=raid1 /mnt
 
-The balance process needs some workspace (ie. a free device space without any
+The balance process needs some workspace (i.e. a free device space without any
 data or metadata block groups) so the command could fail if there's too much
 data or the block groups occupy the whole first device.
 

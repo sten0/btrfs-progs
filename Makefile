@@ -94,6 +94,8 @@ CFLAGS = $(SUBST_CFLAGS) \
 	 -D_XOPEN_SOURCE=700  \
 	 -fno-strict-aliasing \
 	 -fPIC \
+	 -Wall \
+	 -Wunused-but-set-parameter \
 	 -I$(TOPDIR) \
 	 $(CRYPTO_CFLAGS) \
 	 -DCOMPRESSION_LZO=$(COMPRESSION_LZO) \
@@ -207,6 +209,7 @@ cmds_objects = cmds/subvolume.o cmds/subvolume-list.o \
 	       cmds/rescue-super-recover.o \
 	       cmds/property.o cmds/filesystem-usage.o cmds/inspect-dump-tree.o \
 	       cmds/inspect-dump-super.o cmds/inspect-tree-stats.o cmds/filesystem-du.o \
+	       cmds/reflink.o \
 	       mkfs/common.o check/mode-common.o check/mode-lowmem.o \
 	       check/clear-cache.o
 
@@ -217,8 +220,8 @@ libbtrfs_objects = \
 		crypto/crc32c.o
 
 libbtrfs_headers = libbtrfs/send-stream.h libbtrfs/send-utils.h libbtrfs/send.h kernel-lib/rbtree.h \
-	       kernel-lib/list.h kernel-lib/rbtree_types.h kerncompat.h \
-	       ioctl.h libbtrfs/ctree.h version.h
+	       kernel-lib/list.h kernel-lib/rbtree_types.h libbtrfs/kerncompat.h \
+	       libbtrfs/ioctl.h libbtrfs/ctree.h libbtrfs/version.h
 libbtrfsutil_major := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MAJOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
 libbtrfsutil_minor := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_MINOR ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
 libbtrfsutil_patch := $(shell sed -rn 's/^\#define BTRFS_UTIL_VERSION_PATCH ([0-9])+$$/\1/p' libbtrfsutil/btrfsutil.h)
@@ -398,7 +401,7 @@ ifdef C
 			grep -v __SIZE_TYPE__ > $(check_defs))
 	check = $(CHECKER)
 	check_echo = echo
-	CSTD = -std=gnu89
+	CSTD = -std=gnu11
 else
 	check = true
 	check_echo = true
@@ -497,6 +500,16 @@ test-json: json-formatter-test
 		done							\
 	}
 
+test-string-table: string-table-test
+	@echo "    [TEST]   string-table formatting"
+	@{								\
+		max=`./string-table-test`;				\
+		for testno in `seq 1 $$max`; do				\
+			echo "    [TEST/s-t]  $$testno";		\
+			./string-table-test $$testno ;			\
+		done							\
+	}
+
 test: test-check test-check-lowmem test-mkfs test-misc test-cli test-convert test-fuzz
 
 testsuite: btrfs-corrupt-block btrfs-find-root btrfs-select-super fssum fsstress
@@ -519,7 +532,7 @@ endif
 #
 static: $(progs_static) libbtrfs.a libbtrfsutil.a
 
-version.h: version.h.in configure.ac
+libbtrfs/version.h: libbtrfs/version.h.in configure.ac
 	@echo "    [SH]     $@"
 	$(Q)bash ./config.status --silent $@
 
@@ -533,16 +546,16 @@ kernel-lib/tables.c:
 	@echo "    [TABLE]  $@"
 	$(Q)./mktables > $@ || ($(RM) -f $@ && exit 1)
 
-libbtrfs.so.0.1: $(libbtrfs_objects) libbtrfs.sym
+libbtrfs.so.0.1: $(libbtrfs_objects) libbtrfs/libbtrfs.sym
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) $(filter %.o,$^) $(LDFLAGS) $(LIBBTRFS_LIBS) \
-		-shared -Wl,-soname,libbtrfs.so.0 -Wl,--version-script=libbtrfs.sym -o $@
+		-shared -Wl,-soname,libbtrfs.so.0 -Wl,--version-script=libbtrfs/libbtrfs.sym -o $@
 
 libbtrfs.a: $(libbtrfs_objects)
 	@echo "    [AR]     $@"
 	$(Q)$(AR) cr $@ $^
 
-libbtrfs.so.0 libbtrfs.so: libbtrfs.so.0.1 libbtrfs.sym
+libbtrfs.so.0 libbtrfs.so: libbtrfs.so.0.1 libbtrfs/libbtrfs.sym
 	@echo "    [LN]     $@"
 	$(Q)$(LN_S) -f $< $@
 
@@ -746,6 +759,10 @@ json-formatter-test: tests/json-formatter-test.c $(objects) libbtrfsutil.a
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
+string-table-test: tests/string-table-test.c $(objects) libbtrfsutil.a
+	@echo "    [LD]     $@"
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
 test-build: test-build-pre test-build-real
 
 test-build-pre:
@@ -792,7 +809,7 @@ clean: $(CLEANDIRS)
 		kernel-lib/*.o kernel-lib/.deps/*.o.d \
 		kernel-shared/*.o kernel-shared/.deps/*.o.d \
 		image/*.o image/.deps/*.o.d \
-		convert/.deps/*.o convert/.deps/*.o.d \
+		convert/*.o convert/.deps/*.o.d \
 		mkfs/*.o mkfs/.deps/*.o.d check/*.o check/.deps/*.o.d \
 		cmds/*.o cmds/.deps/*.o.d common/*.o common/.deps/*.o.d \
 		crypto/*.o crypto/.deps/*.o.d \
@@ -817,7 +834,7 @@ clean-doc:
 
 clean-gen:
 	@echo "Cleaning Generated Files"
-	$(Q)$(RM) -rf -- version.h config.status config.cache config.log \
+	$(Q)$(RM) -rf -- libbtrfs/version.h config.status config.cache config.log \
 		configure.lineno config.status.lineno Makefile.inc \
 		Documentation/Makefile tags TAGS \
 		cscope.files cscope.out cscope.in.out cscope.po.out \

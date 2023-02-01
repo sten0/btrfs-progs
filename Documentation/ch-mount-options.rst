@@ -1,5 +1,5 @@
 This section describes mount options specific to BTRFS.  For the generic mount
-options please refer to ``mount(8)`` manpage. The options are sorted alphabetically
+options please refer to ``mount(8)`` manual page. The options are sorted alphabetically
 (discarding the *no* prefix).
 
 .. note::
@@ -11,14 +11,14 @@ options please refer to ``mount(8)`` manpage. The options are sorted alphabetica
         correctly within the Linux VFS framework.
 
 Mount options are processed in order, only the last occurrence of an option
-takes effect and may disable other options due to constraints (see eg.
+takes effect and may disable other options due to constraints (see e.g.
 *nodatacow* and *compress*). The output of **mount** command shows which options
 have been applied.
 
 acl, noacl
         (default: on)
 
-        Enable/disable support for Posix Access Control Lists (ACLs).  See the
+        Enable/disable support for POSIX Access Control Lists (ACLs).  See the
         ``acl(5)`` manual page for more information about ACLs.
 
         The support for ACL is build-time configurable (BTRFS_FS_POSIX_ACL) and
@@ -110,7 +110,7 @@ compress, compress=<type[:level]>, compress-force, compress-force=<type[:level]>
         Both *zlib* and *zstd* (since version 5.1) expose the compression level as a
         tunable knob with higher levels trading speed and memory (*zstd*) for higher
         compression ratios. This can be set by appending a colon and the desired level.
-        Zlib accepts the range [1, 9] and zstd accepts [1, 15]. If no level is set,
+        ZLIB accepts the range [1, 9] and ZSTD accepts [1, 15]. If no level is set,
         both currently use a default level of 3. The value 0 is an alias for the
         default level.
 
@@ -144,7 +144,7 @@ datasum, nodatasum
         (default: on)
 
         Enable data checksumming for newly created files.
-        *Datasum* implies *datacow*, ie. the normal mode of operation. All files created
+        *Datasum* implies *datacow*, i.e. the normal mode of operation. All files created
         under *nodatasum* inherit the "no checksums" property, however there's no
         corresponding file attribute (see ``chattr(1)``).
 
@@ -164,7 +164,7 @@ degraded
         missing, for example if a stripe member is completely missing from RAID0.
 
         Since 4.14, the constraint checks have been improved and are verified on the
-        chunk level, not an the device level. This allows degraded mounts of
+        chunk level, not at the device level. This allows degraded mounts of
         filesystems with mixed RAID profiles for data and metadata, even if the
         device number constraints would not be satisfied for some of the profiles.
 
@@ -179,11 +179,11 @@ degraded
 device=<devicepath>
         Specify a path to a device that will be scanned for BTRFS filesystem during
         mount. This is usually done automatically by a device manager (like udev) or
-        using the **btrfs device scan** command (eg. run from the initial ramdisk). In
+        using the **btrfs device scan** command (e.g. run from the initial ramdisk). In
         cases where this is not possible the *device* mount option can help.
 
         .. note::
-                Booting eg. a RAID1 system may fail even if all filesystem's *device*
+                Booting e.g. a RAID1 system may fail even if all filesystem's *device*
                 paths are provided as the actual device nodes may not be discovered by the
                 system at that point.
 
@@ -228,7 +228,7 @@ fatal_errors=<action>
         panic
                 *panic()* on a fatal error, depending on other system configuration, this may
                 be followed by a reboot. Please refer to the documentation of kernel boot
-                parameters, eg. *panic*, *oops* or *crashkernel*.
+                parameters, e.g. *panic*, *oops* or *crashkernel*.
 
 flushoncommit, noflushoncommit
         (default: off)
@@ -480,13 +480,11 @@ noatime
         performance because no new access time information needs to be written. Without
         this option, the default is *relatime*, which only reduces the number of
         inode atime updates in comparison to the traditional *strictatime*. The worst
-        case for atime updates under 'relatime' occurs when many files are read whose
+        case for atime updates under *relatime* occurs when many files are read whose
         atime is older than 24 h and which are freshly snapshotted. In that case the
         atime is updated and COW happens - for each file - in bulk. See also
         https://lwn.net/Articles/499293/ - *Atime and btrfs: a bad combination? (LWN, 2012-05-31)*.
 
         Note that *noatime* may break applications that rely on atime uptimes like
         the venerable Mutt (unless you use maildir mailboxes).
-
-
 
