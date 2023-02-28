@@ -88,8 +88,8 @@ ENABLE_WARNING_FLAGS := $(call cc-option, -Wimplicit-fallthrough)
 
 # Common build flags
 CFLAGS = $(SUBST_CFLAGS) \
-	 $(CSTD) \
-	 -include config.h \
+	 -std=gnu11 \
+	 -include include/config.h \
 	 -DBTRFS_FLAT_INCLUDES \
 	 -D_XOPEN_SOURCE=700  \
 	 -fno-strict-aliasing \
@@ -97,6 +97,7 @@ CFLAGS = $(SUBST_CFLAGS) \
 	 -Wall \
 	 -Wunused-but-set-parameter \
 	 -I$(TOPDIR) \
+	 -I$(TOPDIR)/include \
 	 $(CRYPTO_CFLAGS) \
 	 -DCOMPRESSION_LZO=$(COMPRESSION_LZO) \
 	 -DCOMPRESSION_ZSTD=$(COMPRESSION_ZSTD) \
@@ -107,7 +108,7 @@ CFLAGS = $(SUBST_CFLAGS) \
 	 $(EXTRA_CFLAGS)
 
 LIBBTRFSUTIL_CFLAGS = $(SUBST_CFLAGS) \
-		      $(CSTD) \
+		      -std=gnu11 \
 		      -D_GNU_SOURCE \
 		      -fPIC \
 		      -fvisibility=hidden \
@@ -128,6 +129,15 @@ LIBBTRFSUTIL_LDFLAGS = $(SUBST_LDFLAGS) \
 
 # Default implementation
 CRYPTO_OBJECTS =
+
+ifeq ($(shell uname -m),x86_64)
+crypto_blake2b_sse2_cflags = -msse2
+crypto_blake2b_sse41_cflags = -msse4.1
+crypto_blake2b_avx2_cflags = -mavx2
+ifeq ($(HAVE_CFLAG_msha),1)
+crypto_sha256_x86_cflags = -msse4.1 -msha
+endif
+endif
 
 LIBS = $(LIBS_BASE) $(LIBS_CRYPTO)
 LIBBTRFS_LIBS = $(LIBS_BASE) $(LIBS_CRYPTO)
@@ -172,6 +182,7 @@ objects = \
 	kernel-shared/uuid-tree.o	\
 	kernel-shared/volumes.o	\
 	kernel-shared/zoned.o	\
+	common/cpu-utils.o	\
 	common/device-scan.o	\
 	common/device-utils.o	\
 	common/extent-cache.o	\
@@ -217,7 +228,7 @@ libbtrfs_objects = \
 		kernel-lib/rbtree.o	\
 		libbtrfs/send-stream.o	\
 		libbtrfs/send-utils.o	\
-		crypto/crc32c.o
+		libbtrfs/crc32c.o
 
 libbtrfs_headers = libbtrfs/send-stream.h libbtrfs/send-utils.h libbtrfs/send.h kernel-lib/rbtree.h \
 	       kernel-lib/list.h kernel-lib/rbtree_types.h libbtrfs/kerncompat.h \
@@ -234,8 +245,10 @@ convert_objects = convert/main.o convert/common.o convert/source-fs.o \
 		  mkfs/common.o
 mkfs_objects = mkfs/main.o mkfs/common.o mkfs/rootdir.o
 image_objects = image/main.o image/sanitize.o
+tune_objects = tune/main.o tune/seeding.o tune/change-uuid.o tune/change-metadata-uuid.o \
+	       tune/convert-bgt.o tune/change-csum.o
 all_objects = $(objects) $(cmds_objects) $(libbtrfs_objects) $(convert_objects) \
-	      $(mkfs_objects) $(image_objects) $(libbtrfsutil_objects)
+	      $(mkfs_objects) $(image_objects) $(tune_objects) $(libbtrfsutil_objects)
 
 udev_rules = 64-btrfs-dm.rules 64-btrfs-zoned.rules
 
@@ -301,11 +314,11 @@ MAKEOPTS = --no-print-directory Q=$(Q)
 # built-in sources into "busybox", all files that contain the main function and
 # are not compiled standalone
 progs_box_main = btrfs.o mkfs/main.o image/main.o convert/main.o \
-		 btrfstune.o
+		 tune/main.o
 
-progs_box_all_objects = $(mkfs_objects) $(image_objects) $(convert_objects)
+progs_box_all_objects = $(mkfs_objects) $(image_objects) $(convert_objects) $(tune_objects)
 progs_box_all_static_objects = $(static_mkfs_objects) $(static_image_objects) \
-			       $(static_convert_objects)
+			       $(static_convert_objects) $(static_tune_objects)
 
 progs_box_objects = $(filter-out %/main.o, $(progs_box_all_objects)) \
 		    $(patsubst %.o, %.box.o, $(progs_box_main))
@@ -344,7 +357,8 @@ btrfs_fragments_libs = -lgd -lpng -ljpeg -lfreetype
 cmds_restore_cflags = -DCOMPRESSION_LZO=$(COMPRESSION_LZO) -DCOMPRESSION_ZSTD=$(COMPRESSION_ZSTD)
 
 ifeq ($(CRYPTOPROVIDER_BUILTIN),1)
-CRYPTO_OBJECTS = crypto/sha224-256.o crypto/blake2b-ref.o
+CRYPTO_OBJECTS = crypto/sha224-256.o crypto/blake2b-ref.o crypto/blake2b-sse2.o \
+		 crypto/blake2b-sse41.o crypto/blake2b-avx2.o crypto/sha256-x86.o
 CRYPTO_CFLAGS = -DCRYPTOPROVIDER_BUILTIN=1
 endif
 
@@ -379,6 +393,7 @@ static_libbtrfsutil_objects = $(patsubst %.o, %.static.o, $(libbtrfsutil_objects
 static_convert_objects = $(patsubst %.o, %.static.o, $(convert_objects))
 static_mkfs_objects = $(patsubst %.o, %.static.o, $(mkfs_objects))
 static_image_objects = $(patsubst %.o, %.static.o, $(image_objects))
+static_tune_objects = $(patsubst %.o, %.static.o, $(tune_objects))
 
 libs_shared = libbtrfs.so.0.1 libbtrfsutil.so.$(libbtrfsutil_version)
 lib_links = libbtrfs.so.0 libbtrfs.so libbtrfsutil.so.$(libbtrfsutil_major) libbtrfsutil.so
@@ -401,7 +416,6 @@ ifdef C
 			grep -v __SIZE_TYPE__ > $(check_defs))
 	check = $(CHECKER)
 	check_echo = echo
-	CSTD = -std=gnu11
 else
 	check = true
 	check_echo = true
@@ -654,11 +668,11 @@ mkfs.btrfs.static: $(static_mkfs_objects) $(static_objects) $(static_libbtrfs_ob
 	@echo "    [LD]     $@"
 	$(Q)$(CC) -o $@ $^ $(STATIC_LDFLAGS) $(STATIC_LIBS)
 
-btrfstune: btrfstune.o $(objects) libbtrfsutil.a
+btrfstune: $(tune_objects) $(objects) libbtrfsutil.a
 	@echo "    [LD]     $@"
 	$(Q)$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-btrfstune.static: btrfstune.static.o $(static_objects) $(static_libbtrfs_objects)
+btrfstune.static: $(static_tune_objects) $(static_objects) $(static_libbtrfs_objects)
 	@echo "    [LD]     $@"
 	$(Q)$(CC) -o $@ $^ $(STATIC_LDFLAGS) $(STATIC_LIBS)
 
@@ -682,20 +696,20 @@ quick-test: quick-test.o $(objects) libbtrfsutil.a $(libs_shared)
 	@echo "    [LD]     $@"
 	$(Q)$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-ioctl-test.o: tests/ioctl-test.c ioctl.h kerncompat.h kernel-shared/ctree.h
-	@echo "    [CC]   $@"
+ioctl-test.o: tests/ioctl-test.c include/ioctl.h include/kerncompat.h kernel-shared/ctree.h
+	@echo "    [CC]     $@"
 	$(Q)$(CC) $(CFLAGS) -c $< -o $@
 
-ioctl-test-32.o: tests/ioctl-test.c ioctl.h kerncompat.h kernel-shared/ctree.h
+ioctl-test-32.o: tests/ioctl-test.c include/ioctl.h include/kerncompat.h kernel-shared/ctree.h
 	@echo "    [CC32]   $@"
 	$(Q)$(CC) $(CFLAGS) -m32 -c $< -o $@
 
-ioctl-test-64.o: tests/ioctl-test.c ioctl.h kerncompat.h kernel-shared/ctree.h
+ioctl-test-64.o: tests/ioctl-test.c include/ioctl.h include/kerncompat.h kernel-shared/ctree.h
 	@echo "    [CC64]   $@"
 	$(Q)$(CC) $(CFLAGS) -m64 -c $< -o $@
 
 ioctl-test: ioctl-test.o
-	@echo "    [LD]   $@"
+	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 	@echo "   ?[PAHOLE] $@.pahole"
 	-$(Q)pahole $@ > $@.pahole
@@ -739,7 +753,7 @@ library-test.static: tests/library-test.c libbtrfs.a libbtrfsutil.a
 	@echo "    [TEST CLEAN] $@"
 	$(Q)$(RM) -rf -- $(TMPD)
 
-fssum: tests/fssum.c crypto/sha224-256.c
+fssum: tests/fssum.c crypto/sha224-256.c crypto/sha256-x86.o common/cpu-utils.o
 	@echo "    [LD]     $@"
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -783,21 +797,21 @@ tags: FORCE
 	@echo "    [TAGS]   $(TAGS_CMD)"
 	$(Q)$(TAGS_CMD) *.[ch] image/*.[ch] convert/*.[ch] mkfs/*.[ch] \
 		check/*.[ch] kernel-lib/*.[ch] kernel-shared/*.[ch] \
-		cmds/*.[ch] common/*.[ch] \
+		cmds/*.[ch] common/*.[ch] tune/*.[ch] \
 		libbtrfsutil/*.[ch]
 
 etags: FORCE
 	@echo "    [ETAGS]   $(ETAGS_CMD)"
 	$(Q)$(ETAGS_CMD) *.[ch] image/*.[ch] convert/*.[ch] mkfs/*.[ch] \
 		check/*.[ch] kernel-lib/*.[ch] kernel-shared/*.[ch] \
-		cmds/*.[ch] common/*.[ch] \
+		cmds/*.[ch] common/*.[ch] tune/*.[ch] \
 		libbtrfsutil/*.[ch]
 
 cscope: FORCE
 	@echo "    [CSCOPE] $(CSCOPE_CMD)"
 	$(Q)ls -1 *.[ch] image/*.[ch] convert/*.[ch] mkfs/*.[ch] check/*.[ch] \
 		kernel-lib/*.[ch] kernel-shared/*.[ch] libbtrfsutil/*.[ch] \
-		cmds/*.[ch] common/*.[ch] \
+		cmds/*.[ch] common/*.[ch] tune/*.[ch] \
 		> cscope.files
 	$(Q)$(CSCOPE_CMD)
 
@@ -813,6 +827,7 @@ clean: $(CLEANDIRS)
 		mkfs/*.o mkfs/.deps/*.o.d check/*.o check/.deps/*.o.d \
 		cmds/*.o cmds/.deps/*.o.d common/*.o common/.deps/*.o.d \
 		crypto/*.o crypto/.deps/*.o.d \
+		tune/*.o tune/.deps/*.o.d \
 		libbtrfs/*.o libbtrfs/.deps/*.o.d \
 	      ioctl-test quick-test library-test library-test-static \
               mktables btrfs.static mkfs.btrfs.static fssum \
@@ -838,7 +853,7 @@ clean-gen:
 		configure.lineno config.status.lineno Makefile.inc \
 		Documentation/Makefile tags TAGS \
 		cscope.files cscope.out cscope.in.out cscope.po.out \
-		config.log config.h config.h.in~ aclocal.m4 \
+		config.log include/config.h include/config.h.in~ aclocal.m4 \
 		configure autom4te.cache/ config/
 
 clean-dep:

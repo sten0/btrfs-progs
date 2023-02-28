@@ -15,8 +15,8 @@
  */
 
 #include "kerncompat.h"
-#include <sys/fcntl.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <getopt.h>
 #include <unistd.h>
@@ -38,9 +38,10 @@ static const char * const cmd_reflink_clone_usage[] = {
 	"Lightweight file copy, extents are cloned and COW if changed. Multiple",
 	"ranges can be specified, source and target file can be the same,",
 	"ranges can be combined from both and processed in the order.",
+	"",
 	"Options:",
-	"  -s RANGESPEC        take range spec from the source file",
-	"  -t RANGESPEC        take range from the target file",
+	OPTLINE("-s RANGESPEC", "take range spec from the source file"),
+	OPTLINE("-t RANGESPEC", "take range from the target file"),
 	"",
 	"RANGESPEC has three parts and is of format SRCOFF:LENGTH:DESTOFF,",
 	"where SRCOFF is offset in the respective file, LENGTH is range length,",
@@ -120,7 +121,7 @@ static int cmd_reflink_clone(const struct cmd_struct *cmd, int argc, char **argv
 		switch (c) {
 		case 's':
 			same_file = true;
-			/* fallthrough */
+			fallthrough;
 		case 'r':
 			range = malloc(sizeof(struct reflink_range));
 			if (!range) {

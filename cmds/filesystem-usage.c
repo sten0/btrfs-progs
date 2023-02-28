@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <limits.h>
+#include <uuid/uuid.h>
 #include "kernel-lib/sizes.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
@@ -38,6 +39,7 @@
 #include "common/help.h"
 #include "common/device-utils.h"
 #include "common/messages.h"
+#include "common/path-utils.h"
 #include "cmds/filesystem-usage.h"
 #include "cmds/commands.h"
 
@@ -700,6 +702,42 @@ out:
 	return ret;
 }
 
+static int device_is_seed(int fd, const char *dev_path, u64 devid, const u8 *mnt_fsid)
+{
+	char fsid_str[BTRFS_UUID_UNPARSED_SIZE];
+	char fsid_path[PATH_MAX];
+	char devid_str[20];
+	u8 fsid[BTRFS_UUID_SIZE];
+	int ret = -1;
+	int sysfs_fd;
+
+	snprintf(devid_str, 20, "%llu", devid);
+	/* devinfo/<devid>/fsid */
+	ret = path_cat3_out(fsid_path, "devinfo", devid_str, "fsid");
+	if (ret < 0)
+		return ret;
+
+	/* /sys/fs/btrfs/<fsid>/devinfo/<devid>/fsid */
+	sysfs_fd = sysfs_open_fsid_file(fd, fsid_path);
+	if (sysfs_fd >= 0) {
+		sysfs_read_file(sysfs_fd, fsid_str, BTRFS_UUID_UNPARSED_SIZE);
+		fsid_str[BTRFS_UUID_UNPARSED_SIZE - 1] = 0;
+		ret = uuid_parse(fsid_str, fsid);
+		close(sysfs_fd);
+	}
+
+	if (ret) {
+		ret = dev_to_fsid(dev_path, fsid);
+		if (ret)
+			return ret;
+	}
+
+	if (memcmp(mnt_fsid, fsid, BTRFS_FSID_SIZE) != 0)
+		return 0;
+
+	return -1;
+}
+
 /*
  *  This function loads the device_info structure and put them in an array
  */
@@ -710,7 +748,6 @@ static int load_device_info(int fd, struct device_info **devinfo_ret,
 	struct btrfs_ioctl_fs_info_args fi_args;
 	struct btrfs_ioctl_dev_info_args dev_info;
 	struct device_info *info;
-	u8 fsid[BTRFS_UUID_SIZE];
 
 	*devcount_ret = 0;
 	*devinfo_ret = NULL;
@@ -748,14 +785,15 @@ static int load_device_info(int fd, struct device_info **devinfo_ret,
 		}
 
 		/*
-		 * Skip seed device by checking device's fsid (requires root).
-		 * And we will skip only if dev_to_fsid is successful and dev
+		 * Skip seed device by checking device's fsid (requires root if
+		 * kernel is not patched to provide fsid from the sysfs).
+		 * And we will skip only if device_is_seed is successful and dev
 		 * is a seed device.
 		 * Ignore any other error including -EACCES, which is seen when
 		 * a non-root process calls dev_to_fsid(path)->open(path).
 		 */
-		ret = dev_to_fsid((const char *)dev_info.path, fsid);
-		if (!ret && memcmp(fi_args.fsid, fsid, BTRFS_FSID_SIZE) != 0)
+		ret = device_is_seed(fd, (const char *)dev_info.path, i, fi_args.fsid);
+		if (!ret)
 			continue;
 
 		info[ndevs].devid = dev_info.devid;
@@ -1164,7 +1202,7 @@ static const char * const cmd_filesystem_usage_usage[] = {
 	"Show detailed information about internal filesystem usage .",
 	"",
 	HELPINFO_UNITS_SHORT_LONG,
-	"-T                 show data in tabular format",
+	OPTLINE("-T", "show data in tabular format"),
 	NULL
 };
 

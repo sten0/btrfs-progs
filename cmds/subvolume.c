@@ -49,7 +49,10 @@ static int wait_for_subvolume_cleaning(int fd, size_t count, uint64_t *ids,
 {
 	size_t i;
 	enum btrfs_util_error err;
+	size_t done = 0;
 
+	pr_verbose(LOG_DEFAULT, "Waiting for %zu subvolume%s\n", count,
+			(count > 1 ? "s" : ""));
 	while (1) {
 		bool clean = true;
 
@@ -58,8 +61,9 @@ static int wait_for_subvolume_cleaning(int fd, size_t count, uint64_t *ids,
 				continue;
 			err = btrfs_util_subvolume_info_fd(fd, ids[i], NULL);
 			if (err == BTRFS_UTIL_ERROR_SUBVOLUME_NOT_FOUND) {
-				pr_verbose(LOG_DEFAULT, "Subvolume id %" PRIu64 " is gone\n",
-				       ids[i]);
+				done++;
+				pr_verbose(LOG_DEFAULT, "Subvolume id %" PRIu64 " is gone (%zu/%zu)\n",
+				       ids[i], done, count);
 				ids[i] = 0;
 			} else if (err) {
 				error_btrfs_util(err);
@@ -87,8 +91,7 @@ static const char * const cmd_subvolume_create_usage[] = {
 	"Create a subvolume <name> in <dest>.  If <dest> is not given",
 	"subvolume <name> will be created in the current directory.",
 	"",
-	"-i <qgroupid>  add the newly created subvolume to a qgroup. This",
-	"               option can be given multiple times.",
+	OPTLINE("-i <qgroupid>", "add the newly created subvolume to a qgroup. This option can be given multiple times."),
 	HELPINFO_INSERT_GLOBALS,
 	HELPINFO_INSERT_QUIET,
 	NULL
@@ -235,10 +238,10 @@ static const char * const cmd_subvolume_delete_usage[] = {
 	"after a crash). Use one of the --commit options to wait until the",
 	"operation is safely stored on the media.",
 	"",
-	"-c|--commit-after      wait for transaction commit at the end of the operation",
-	"-C|--commit-each       wait for transaction commit after deleting each subvolume",
-	"-i|--subvolid          subvolume id of the to be removed subvolume",
-	"-v|--verbose           deprecated, alias for global -v option",
+	OPTLINE("-c|--commit-after", "wait for transaction commit at the end of the operation"),
+	OPTLINE("-C|--commit-each", "wait for transaction commit after deleting each subvolume"),
+	OPTLINE("-i|--subvolid", "subvolume id of the to be removed subvolume"),
+	OPTLINE("-v|--verbose", "deprecated, alias for global -v option"),
 	HELPINFO_INSERT_GLOBALS,
 	HELPINFO_INSERT_VERBOSE,
 	HELPINFO_INSERT_QUIET,
@@ -513,9 +516,8 @@ static const char * const cmd_subvolume_snapshot_usage[] = {
 	"",
 	"When only <subdir> is given, the subvolume will be named the basename of <subvolume>.",
 	"",
-	"-r             Make the new snapshot readonly.",
-	"-i <qgroupid>  Add the new snapshot to a qgroup (a quota group). This",
-	"               option can be given multiple times.",
+	OPTLINE("-r", "make the new snapshot readonly"),
+	OPTLINE("-i <qgroupid>", "Add the new snapshot to a qgroup (a quota group). This option can be given multiple times."),
 	HELPINFO_INSERT_GLOBALS,
 	HELPINFO_INSERT_QUIET,
 	NULL
@@ -1235,8 +1237,8 @@ static const char * const cmd_subvolume_show_usage[] = {
 	"The subvolume can be specified by path, or by root id or UUID that are",
 	"looked up relative to the given path",
 	"",
-	"-r|--rootid ID       root id of the subvolume",
-	"-u|--uuid UUID       UUID of the subvolum",
+	OPTLINE("-r|--rootid ID", "root id of the subvolume"),
+	OPTLINE("-u|--uuid UUID", "UUID of the subvolum"),
 	HELPINFO_UNITS_SHORT_LONG,
 	NULL
 };
@@ -1295,7 +1297,7 @@ static int cmd_subvolume_show(const struct cmd_struct *cmd, int argc, char **arg
 	if (by_rootid && by_uuid) {
 		error(
 		"options --rootid and --uuid cannot be used at the same time");
-		usage(cmd);
+		usage(cmd, 1);
 	}
 
 	fullpath = realpath(argv[optind], NULL);
@@ -1510,7 +1512,7 @@ static const char * const cmd_subvolume_sync_usage[] = {
 	"are completed, but do not wait for subvolumes deleted meanwhile.",
 	"The status of subvolume ids is checked periodically.",
 	"",
-	"-s <N>       sleep N seconds between checks (default: 1)",
+	OPTLINE("-s <N>", "sleep N seconds between checks (default: 1)"),
 	NULL
 };
 

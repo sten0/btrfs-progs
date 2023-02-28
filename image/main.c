@@ -40,8 +40,10 @@
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/extent_io.h"
 #include "crypto/crc32c.h"
+#include "crypto/hash.h"
 #include "common/internal.h"
 #include "common/messages.h"
+#include "common/cpu-utils.h"
 #include "common/box.h"
 #include "common/utils.h"
 #include "common/extent-cache.h"
@@ -49,6 +51,7 @@
 #include "common/device-utils.h"
 #include "common/open-utils.h"
 #include "common/string-utils.h"
+#include "cmds/commands.h"
 #include "image/metadump.h"
 #include "image/sanitize.h"
 #include "ioctl.h"
@@ -92,11 +95,6 @@ struct metadump_struct {
 	struct btrfs_root *root;
 	FILE *out;
 
-	union {
-		struct meta_cluster cluster;
-		char meta_cluster_bytes[IMAGE_BLOCK_SIZE];
-	};
-
 	pthread_t threads[MAX_WORKER_THREADS];
 	size_t num_threads;
 	pthread_mutex_t mutex;
@@ -119,6 +117,11 @@ struct metadump_struct {
 	enum sanitize_mode sanitize_names;
 
 	int error;
+
+	union {
+		struct meta_cluster cluster;
+		char meta_cluster_bytes[IMAGE_BLOCK_SIZE];
+	};
 };
 
 struct mdrestore_struct {
@@ -493,9 +496,6 @@ static int metadump_init(struct metadump_struct *md, struct btrfs_root *root,
 	md->pending_start = (u64)-1;
 	md->compress_level = compress_level;
 	md->sanitize_names = sanitize_names;
-	if (sanitize_names == SANITIZE_COLLISIONS)
-		crc32c_optimization_init();
-
 	md->name_tree.rb_node = NULL;
 	md->num_threads = num_threads;
 	pthread_cond_init(&md->cond, NULL);
@@ -1431,7 +1431,7 @@ static int restore_one_work(struct mdrestore_struct *mdres,
 			switch (ret) {
 			case Z_NEED_DICT:
 				ret = Z_DATA_ERROR;
-				__attribute__ ((fallthrough));
+				fallthrough;
 			case Z_DATA_ERROR:
 			case Z_MEM_ERROR:
 				goto out;
@@ -2243,7 +2243,6 @@ static int build_chunk_tree(struct mdrestore_struct *mdres,
 	struct meta_cluster_header *header;
 	struct meta_cluster_item *item = NULL;
 	u32 i, nritems;
-	u64 bytenr = 0;
 	u8 *buffer;
 	int ret;
 
@@ -2265,7 +2264,6 @@ static int build_chunk_tree(struct mdrestore_struct *mdres,
 		return -EIO;
 	}
 
-	bytenr += IMAGE_BLOCK_SIZE;
 	mdres->compress_method = header->compress;
 	nritems = le32_to_cpu(header->nritems);
 	for (i = 0; i < nritems; i++) {
@@ -2273,7 +2271,6 @@ static int build_chunk_tree(struct mdrestore_struct *mdres,
 
 		if (le64_to_cpu(item->bytenr) == BTRFS_SUPER_INFO_OFFSET)
 			break;
-		bytenr += le32_to_cpu(item->size);
 		if (fseek(mdres->in, le32_to_cpu(item->size), SEEK_CUR)) {
 			error("seek failed: %m");
 			return -EIO;
@@ -3030,22 +3027,28 @@ out:
 	return ret;
 }
 
-static void print_usage(int ret)
-{
-	printf("usage: btrfs-image [options] source target\n");
-	printf("\t-r      \trestore metadump image\n");
-	printf("\t-c value\tcompression level (0 ~ 9)\n");
-	printf("\t-t value\tnumber of threads (1 ~ 32)\n");
-	printf("\t-o      \tdon't mess with the chunk tree when restoring\n");
-	printf("\t-s      \tsanitize file names, use once to just use garbage, use twice if you want crc collisions\n");
-	printf("\t-w      \twalk all trees instead of using extent tree, do this if your extent tree is broken\n");
-	printf("\t-m	   \trestore for multiple devices\n");
-	printf("\t-d	   \talso dump data, conflicts with -w\n");
-	printf("\n");
-	printf("\tIn the dump mode, source is the btrfs device and target is the output file (use '-' for stdout).\n");
-	printf("\tIn the restore mode, source is the dumped image and target is the btrfs device/file.\n");
-	exit(ret);
-}
+static const char * const image_usage[] = {
+	"btrfs-image [options] source target",
+	"Create or restore a filesystem image (metadata)",
+	"",
+	"Options:",
+	OPTLINE("-r", "restore metadump image"),
+	OPTLINE("-c value", "compression level (0 ~ 9)"),
+	OPTLINE("-t value", "number of threads (1 ~ 32)"),
+	OPTLINE("-o", "don't mess with the chunk tree when restoring"),
+	OPTLINE("-s", "sanitize file names, use once to just use garbage, use twice if you want crc collisions"),
+	OPTLINE("-w", "walk all trees instead of using extent tree, do this if your extent tree is broken"),
+	OPTLINE("-m", "restore for multiple devices"),
+	OPTLINE("-d", "also dump data, conflicts with -w"),
+	"",
+	"In the dump mode, source is the btrfs device and target is the output file (use '-' for stdout).",
+	"In the restore mode, source is the dumped image and target is the btrfs device/file.",
+	NULL
+};
+
+static const struct cmd_struct image_cmd = {
+	.usagestr = image_usage
+};
 
 int BOX_MAIN(image)(int argc, char *argv[])
 {
@@ -3063,6 +3066,9 @@ int BOX_MAIN(image)(int argc, char *argv[])
 	bool dump_data = false;
 	int usage_error = 0;
 	FILE *out;
+
+	cpu_detect_flags();
+	hash_init_accel();
 
 	while (1) {
 		static const struct option long_options[] = {
@@ -3114,13 +3120,13 @@ int BOX_MAIN(image)(int argc, char *argv[])
 			break;
 		case GETOPT_VAL_HELP:
 		default:
-			print_usage(c != GETOPT_VAL_HELP);
+			usage(&image_cmd, c != GETOPT_VAL_HELP);
 		}
 	}
 
 	set_argv0(argv);
 	if (check_argc_min(argc - optind, 2))
-		print_usage(1);
+		usage(&image_cmd, 1);
 
 	dev_cnt = argc - optind - 1;
 
@@ -3128,7 +3134,7 @@ int BOX_MAIN(image)(int argc, char *argv[])
 	if (dump_data) {
 		error(
 "data dump feature is experimental and is not configured in this build");
-		print_usage(1);
+		usage(&image_cmd, 1);
 	}
 #endif
 	if (create) {
@@ -3159,7 +3165,7 @@ int BOX_MAIN(image)(int argc, char *argv[])
 	}
 
 	if (usage_error)
-		print_usage(1);
+		usage(&image_cmd, 1);
 
 	source = argv[optind];
 	target = argv[optind + 1];

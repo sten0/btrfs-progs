@@ -1080,6 +1080,15 @@ static int decompress_zstd(struct btrfs_receive *rctx, const char *encoded_buf,
 			return -EIO;
 		}
 	}
+
+	/*
+	 * Zero out the unused part of the output buffer.
+	 * At least with zstd 1.5.2, the decompression can leave some garbage
+	 * at/beyond the offset out_buf.pos.
+	 */
+	if (out_buf.pos < out_buf.size)
+		memset(unencoded_buf + out_buf.pos, 0, out_buf.size - out_buf.pos);
+
 	return 0;
 }
 #endif
@@ -1619,25 +1628,23 @@ static const char * const cmd_receive_usage[] = {
 	"After receiving a subvolume, it is immediately set to",
 	"read-only.",
 	"",
-	"-q|--quiet       suppress all messages, except errors",
-	"-f FILE          read the stream from FILE instead of stdin",
-	"-e               terminate after receiving an <end cmd> marker in the stream.",
-	"                 Without this option the receiver side terminates only in case",
-	"                 of an error on end of file.",
-	"-C|--chroot      confine the process to <mount> using chroot",
-	"-E|--max-errors NERR",
-	"                 terminate as soon as NERR errors occur while",
-	"                 stream processing commands from the stream.",
-	"                 Default value is 1. A value of 0 means no limit.",
-	"-m ROOTMOUNT     the root mount point of the destination filesystem.",
-	"                 If /proc is not accessible, use this to tell us where",
-	"                 this file system is mounted.",
-	"--force-decompress",
-	"                 if the stream contains compressed data, always",
-	"                 decompress it instead of writing it with encoded I/O",
-	"--dump           dump stream metadata, one line per operation,",
-	"                 does not require the MOUNT parameter",
-	"-v               deprecated, alias for global -v option",
+	OPTLINE("-q|--quiet", "suppress all messages, except errors"),
+	OPTLINE("-f FILE", "read the stream from FILE instead of stdin"),
+	OPTLINE("-e", "terminate after receiving an <end cmd> marker in the stream. "
+		"Without this option the receiver side terminates only in case "
+		"of an error on end of file."),
+	OPTLINE("-C|--chroot", "confine the process to <mount> using chroot"),
+	OPTLINE("-E|--max-errors NERR", "terminate as soon as NERR errors occur while "
+		"stream processing commands from the stream. "
+		"Default value is 1. A value of 0 means no limit."),
+	OPTLINE("-m ROOTMOUNT", "the root mount point of the destination filesystem. "
+		"If /proc is not accessible, use this to tell us where "
+		"this file system is mounted."),
+	OPTLINE("--force-decompress", "if the stream contains compressed data, always "
+		"decompress it instead of writing it with encoded I/O"),
+	OPTLINE("--dump", "dump stream metadata, one line per operation, "
+		"does not require the MOUNT parameter"),
+	OPTLINE("-v", "deprecated, alias for global -v option"),
 	HELPINFO_INSERT_GLOBALS,
 	HELPINFO_INSERT_VERBOSE,
 	HELPINFO_INSERT_QUIET,
@@ -1753,9 +1760,9 @@ static int cmd_receive(const struct cmd_struct *cmd, int argc, char **argv)
 	}
 
 	if (dump && check_argc_exact(argc - optind, 0))
-		usage(cmd);
+		usage(cmd, 1);
 	if (!dump && check_argc_exact(argc - optind, 1))
-		usage(cmd);
+		usage(cmd, 1);
 
 	tomnt = argv[optind];
 

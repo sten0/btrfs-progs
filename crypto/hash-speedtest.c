@@ -14,7 +14,7 @@
  * Boston, MA 021110-1307, USA.
  */
 
-#include "../kerncompat.h"
+#include "kerncompat.h"
 #include <time.h>
 #include <getopt.h>
 #include <unistd.h>
@@ -29,6 +29,7 @@
 #include "crypto/sha.h"
 #include "crypto/blake2.h"
 #include "common/messages.h"
+#include "common/cpu-utils.h"
 
 #ifdef __x86_64__
 static const int cycles_supported = 1;
@@ -181,15 +182,34 @@ int main(int argc, char **argv) {
 		int digest_size;
 		u64 cycles;
 		u64 time;
+		unsigned long cpu_flag;
+		void (*init_accel)(void);
 	} contestants[] = {
 		{ .name = "NULL-NOP", .digest = hash_null_nop, .digest_size = 32 },
 		{ .name = "NULL-MEMCPY", .digest = hash_null_memcpy, .digest_size = 32 },
-		{ .name = "CRC32C", .digest = hash_crc32c, .digest_size = 4 },
+		{ .name = "CRC32C-ref", .digest = hash_crc32c, .digest_size = 4,
+		  .cpu_flag = CPU_FLAG_NONE, .init_accel = hash_init_crc32c },
+		{ .name = "CRC32C-NI", .digest = hash_crc32c, .digest_size = 4,
+		  .cpu_flag = CPU_FLAG_SSE42, .init_accel = hash_init_crc32c },
 		{ .name = "XXHASH", .digest = hash_xxhash, .digest_size = 8 },
-		{ .name = "SHA256", .digest = hash_sha256, .digest_size = 32 },
-		{ .name = "BLAKE2", .digest = hash_blake2b, .digest_size = 32 },
+		{ .name = "SHA256-ref", .digest = hash_sha256, .digest_size = 32,
+		  .cpu_flag = CPU_FLAG_NONE, .init_accel = hash_init_sha256 },
+		{ .name = "SHA256-NI", .digest = hash_sha256, .digest_size = 32,
+		  .cpu_flag = CPU_FLAG_SHA, .init_accel = hash_init_sha256 },
+		{ .name = "BLAKE2-ref", .digest = hash_blake2b, .digest_size = 32,
+		  .cpu_flag = CPU_FLAG_NONE, .init_accel = hash_init_blake2 },
+		{ .name = "BLAKE2-SSE2", .digest = hash_blake2b, .digest_size = 32,
+		  .cpu_flag = CPU_FLAG_SSE2, .init_accel = hash_init_blake2 },
+		{ .name = "BLAKE2-SSE41", .digest = hash_blake2b, .digest_size = 32,
+		  .cpu_flag = CPU_FLAG_SSE41, .init_accel = hash_init_blake2 },
+		{ .name = "BLAKE2-AVX2", .digest = hash_blake2b, .digest_size = 32,
+		  .cpu_flag = CPU_FLAG_AVX2, .init_accel = hash_init_blake2 },
 	};
 	int units = UNITS_CYCLES;
+
+	cpu_detect_flags();
+	cpu_print_flags();
+	hash_init_accel();
 
 	optind = 0;
 	while (1) {
@@ -235,7 +255,6 @@ int main(int argc, char **argv) {
 			iterations = 1;
 	}
 
-	crc32c_optimization_init();
 	memset(buf, 0, 4096);
 
 	printf("Block size:     %d\n", blocksize);
@@ -250,9 +269,17 @@ int main(int argc, char **argv) {
 		u64 tstart, tend;
 		u64 total = 0;
 
+		if (c->cpu_flag != 0 && !cpu_has_feature(c->cpu_flag)) {
+			printf("%12s: no CPU support\n", c->name);
+			continue;
+		}
 		printf("%12s: ", c->name);
 		fflush(stdout);
 
+		if (c->cpu_flag) {
+			cpu_set_level(c->cpu_flag);
+			c->init_accel();
+		}
 		tstart = get_time();
 		start = get_cycles(units);
 		for (iter = 0; iter < iterations; iter++) {
@@ -264,6 +291,7 @@ int main(int argc, char **argv) {
 		tend = get_time();
 		c->cycles = end - start;
 		c->time = tend - tstart;
+		cpu_reset_level();
 
 		if (units == UNITS_CYCLES || units == UNITS_PERF)
 			total = c->cycles;
