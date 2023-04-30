@@ -38,10 +38,11 @@
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
 #include "kernel-shared/zoned.h"
-#include "crypto/crc32c.h"
+#include "crypto/hash.h"
 #include "common/defs.h"
 #include "common/internal.h"
 #include "common/messages.h"
+#include "common/cpu-utils.h"
 #include "common/utils.h"
 #include "common/path-utils.h"
 #include "common/device-utils.h"
@@ -53,6 +54,7 @@
 #include "common/box.h"
 #include "common/units.h"
 #include "common/string-utils.h"
+#include "cmds/commands.h"
 #include "check/qgroup-verify.h"
 #include "mkfs/common.h"
 #include "mkfs/rootdir.h"
@@ -408,38 +410,42 @@ static int create_raid_groups(struct btrfs_trans_handle *trans,
 	return ret;
 }
 
-static void print_usage(int ret)
-{
-	printf("Usage: mkfs.btrfs [options] dev [ dev ... ]\n");
-	printf("Options:\n");
-	printf("  allocation profiles:\n");
-	printf("\t-d|--data PROFILE           data profile, raid0, raid1, raid1c3, raid1c4, raid5, raid6, raid10, dup or single\n");
-	printf("\t-m|--metadata PROFILE       metadata profile, values like for data profile\n");
-	printf("\t-M|--mixed                  mix metadata and data together\n");
-	printf("  features:\n");
-	printf("\t--csum TYPE\n");
-	printf("\t--checksum TYPE             checksum algorithm to use, crc32c (default), xxhash, sha256, blake2\n");
-	printf("\t-n|--nodesize SIZE          size of btree nodes\n");
-	printf("\t-s|--sectorsize SIZE        data block size (may not be mountable by current kernel)\n");
-	printf("\t-O|--features LIST          comma separated list of filesystem features (use '-O list-all' to list features)\n");
-	printf("\t-R|--runtime-features LIST  comma separated list of runtime features (use '-R list-all' to list runtime features)\n");
-	printf("\t-L|--label LABEL            set the filesystem label\n");
-	printf("\t-U|--uuid UUID              specify the filesystem UUID (must be unique)\n");
-	printf("  creation:\n");
-	printf("\t-b|--byte-count SIZE        set size of each device to SIZE (filesystem size is sum of all device sizes)\n");
-	printf("\t-r|--rootdir DIR            copy files from DIR to the image root directory\n");
-	printf("\t--shrink                    (with --rootdir) shrink the filled filesystem to minimal size\n");
-	printf("\t-K|--nodiscard              do not perform whole device TRIM\n");
-	printf("\t-f|--force                  force overwrite of existing filesystem\n");
-	printf("  general:\n");
-	printf("\t-q|--quiet                  no messages except errors\n");
-	printf("\t-v|--verbose                increase verbosity level, default is 1\n");
-	printf("\t-V|--version                print the mkfs.btrfs version and exit\n");
-	printf("\t--help                      print this help and exit\n");
-	printf("  deprecated:\n");
-	printf("\t-l|--leafsize SIZE          removed in 6.0, use --nodesize\n");
-	exit(ret);
-}
+static const char * const mkfs_usage[] = {
+	"mkfs.btrfs [options] <dev> [<dev...>]",
+	"Create a BTRFS filesystem on a device or multiple devices",
+	"",
+	"Allocation profiles:",
+	OPTLINE("-d|--data PROFILE", "data profile, raid0, raid1, raid1c3, raid1c4, raid5, raid6, raid10, dup or single"),
+	OPTLINE("-m|--metadata PROFILE", "metadata profile, values like for data profile"),
+	OPTLINE("-M|--mixed","mix metadata and data together"),
+	"Features:",
+	OPTLINE("--csum TYPE", ""),
+	OPTLINE("--checksum TYPE", "checksum algorithm to use, crc32c (default), xxhash, sha256, blake2"),
+	OPTLINE("-n|--nodesize SIZE", "size of btree nodes"),
+	OPTLINE("-s|--sectorsize SIZE", "data block size (may not be mountable by current kernel)"),
+	OPTLINE("-O|--features LIST", "comma separated list of filesystem features (use '-O list-all' to list features)"),
+	OPTLINE("-R|--runtime-features LIST", "comma separated list of runtime features (use '-R list-all' to list runtime features)"),
+	OPTLINE("-L|--label LABEL", "set the filesystem label"),
+	OPTLINE("-U|--uuid UUID", "specify the filesystem UUID (must be unique)"),
+	"Creation:",
+	OPTLINE("-b|--byte-count SIZE", "set size of each device to SIZE (filesystem size is sum of all device sizes)"),
+	OPTLINE("-r|--rootdir DIR", "copy files from DIR to the image root directory"),
+	OPTLINE("--shrink", "(with --rootdir) shrink the filled filesystem to minimal size"),
+	OPTLINE("-K|--nodiscard", "do not perform whole device TRIM"),
+	OPTLINE("-f|--force", "force overwrite of existing filesystem"),
+	"General:",
+	OPTLINE("-q|--quiet", "no messages except errors"),
+	OPTLINE("-v|--verbose", "increase verbosity level, default is 1"),
+	OPTLINE("-V|--version", "print the mkfs.btrfs version and exit"),
+	OPTLINE("--help", "print this help and exit"),
+	"Deprecated:",
+	OPTLINE("-l|--leafsize SIZE", "removed in 6.0, use --nodesize"),
+	NULL
+};
+
+static const struct cmd_struct mkfs_cmd = {
+	.usagestr = mkfs_usage
+};
 
 static int zero_output_file(int out_fd, u64 size)
 {
@@ -479,7 +485,6 @@ static void list_all_devices(struct btrfs_root *root)
 	struct btrfs_fs_devices *fs_devices;
 	struct btrfs_device *device;
 	int number_of_devices = 0;
-	u64 total_block_count = 0;
 
 	fs_devices = root->fs_info->fs_devices;
 
@@ -489,8 +494,6 @@ static void list_all_devices(struct btrfs_root *root)
 	list_sort(NULL, &fs_devices->devices, _cmp_device_by_id);
 
 	printf("Number of devices:  %d\n", number_of_devices);
-	/* printf("Total devices size: %10s\n", */
-		/* pretty_size(total_block_count)); */
 	printf("Devices:\n");
 	printf("   ID        SIZE  PATH\n");
 	list_for_each_entry(device, &fs_devices->devices, dev_list) {
@@ -498,7 +501,6 @@ static void list_all_devices(struct btrfs_root *root)
 			device->devid,
 			pretty_size(device->total_bytes),
 			device->name);
-		total_block_count += device->total_bytes;
 	}
 
 	printf("\n");
@@ -1027,7 +1029,8 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	char *source_dir = NULL;
 	bool source_dir_set = false;
 
-	crc32c_optimization_init();
+	cpu_detect_flags();
+	hash_init_accel();
 	btrfs_config_init();
 	btrfs_assert_feature_buf_size();
 
@@ -1194,7 +1197,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 				break;
 			case GETOPT_VAL_HELP:
 			default:
-				print_usage(c != GETOPT_VAL_HELP);
+				usage(&mkfs_cmd, c != GETOPT_VAL_HELP);
 		}
 	}
 
@@ -1215,7 +1218,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	saved_optind = optind;
 	device_count = argc - optind;
 	if (device_count == 0)
-		print_usage(1);
+		usage(&mkfs_cmd, 1);
 
 	opt_zoned = !!(features.incompat_flags & BTRFS_FEATURE_INCOMPAT_ZONED);
 

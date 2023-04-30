@@ -4,7 +4,7 @@ btrfs(8)
 SYNOPSIS
 --------
 
-**btrfs** <command> [<args>]
+**btrfs** [global] <group> [<group>...] <command> [<args>]
 
 DESCRIPTION
 -----------
@@ -43,6 +43,30 @@ All numbers will be formatted according to the rules of the `C` locale
 
 For an overview of a given command use **btrfs command --help**
 or **btrfs [command...] --help --full** to print all available options.
+
+There are global options that are passed between *btrfs* and the *group* name
+and affect behaviour not specific to the command, e.g. verbosity or the type
+of the output.
+
+--format <format>
+        if supported by the command, print subcommand output in that format (text, json)
+
+-v|--verbose
+        increase verbosity of the subcommand\n"
+
+-q|--quiet
+        print only errors\n"
+
+--log <level>
+        set log level (default, info, verbose, debug, quiet)\n"
+
+The remaining options are relevant only for the main tool:
+
+--help
+        print condensed help for all subcommands
+
+--version
+        print version string
 
 COMMANDS
 --------
@@ -125,17 +149,6 @@ btrfs-select-super
         rescue tool to overwrite primary superblock from a spare copy
 btrfs-find-root
         rescue helper to find tree roots in a filesystem
-
-Deprecated and obsolete tools:
-
-btrfs-debug-tree
-        moved to **btrfs inspect-internal dump-tree**. Removed from
-        source distribution.
-btrfs-show-super
-        moved to **btrfs inspect-internal dump-super**, standalone
-        removed.
-btrfs-zero-log
-        moved to **btrfs rescue zero-log**, standalone removed.
 
 For space-constrained environments, it's possible to build a single binary with
 functionality of several standalone tools. This is following the concept of

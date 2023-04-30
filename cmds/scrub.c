@@ -602,7 +602,7 @@ again:
 			memset(p[curr], 0, sizeof(**p));
 			p[curr + 1] = NULL;
 			++state;
-			/* fall through */
+			fallthrough;
 		case 2: /* start of line, skip space */
 			while (isspace(l[i]) && i < avail) {
 				if (l[i] == '\n')
@@ -613,7 +613,7 @@ again:
 			    (!eof && !memchr(l + i, '\n', avail - i)))
 				goto again;
 			++state;
-			/* fall through */
+			fallthrough;
 		case 3: /* read fsid */
 			if (i == avail)
 				continue;
@@ -629,7 +629,7 @@ again:
 				_SCRUB_INVALID;
 			i += j + 1;
 			++state;
-			/* fall through */
+			fallthrough;
 		case 4: /* read dev id */
 			for (j = 0; isdigit(l[i + j]) && i+j < avail; ++j)
 				;
@@ -638,7 +638,7 @@ again:
 			p[curr]->devid = atoll(&l[i]);
 			i += j + 1;
 			++state;
-			/* fall through */
+			fallthrough;
 		case 5: /* read key/value pair */
 			ret = 0;
 			_SCRUB_KVREAD(ret, &i, data_extents_scrubbed, avail, l,
@@ -682,7 +682,7 @@ again:
 			if (ret != 1)
 				_SCRUB_INVALID;
 			++state;
-			/* fall through */
+			fallthrough;
 		case 6: /* after number */
 			if (l[i] == '|')
 				state = 5;
@@ -1171,7 +1171,6 @@ static int scrub_start(const struct cmd_struct *cmd, int argc, char **argv,
 	int ioprio_class = IOPRIO_CLASS_IDLE;
 	int ioprio_classdata = 0;
 	int n_start = 0;
-	int n_skip = 0;
 	int n_resume = 0;
 	struct btrfs_ioctl_fs_info_args fi_args;
 	struct btrfs_ioctl_dev_info_args *di_args = NULL;
@@ -1337,7 +1336,6 @@ static int scrub_start(const struct cmd_struct *cmd, int argc, char **argv,
 			sp[i].scrub_args.start = last_scrub->p.last_physical;
 			sp[i].resumed = last_scrub;
 		} else if (resume) {
-			++n_skip;
 			sp[i].skip = 1;
 			sp[i].resumed = last_scrub;
 			continue;
@@ -1626,16 +1624,14 @@ static const char * const cmd_scrub_start_usage[] = {
 	"btrfs scrub start [-BdqrRf] [-c ioprio_class -n ioprio_classdata] <path>|<device>",
 	"Start a new scrub. If a scrub is already running, the new one fails.",
 	"",
-	"-B     do not background",
-	"-d     stats per device (-B only)",
-	"-q     be quiet",
-	"-r     read only mode",
-	"-R     raw print mode, print full data instead of summary",
-	"-c     set ioprio class (see ionice(1) manpage)",
-	"-n     set ioprio classdata (see ionice(1) manpage)",
-	"-f     force starting new scrub even if a scrub is already running",
-	"       this is useful when scrub stats record file is damaged",
-	"-q     deprecated, alias for global -q option",
+	OPTLINE("-B", "do not background"),
+	OPTLINE("-d", "stats per device (-B only)"),
+	OPTLINE("-r", "read only mode"),
+	OPTLINE("-R", "raw print mode, print full data instead of summary"),
+	OPTLINE("-c", "set ioprio class (see ionice(1) manpage)"),
+	OPTLINE("-n", "set ioprio classdata (see ionice(1) manpage)"),
+	OPTLINE("-f", "force starting new scrub even if a scrub is already running this is useful when scrub stats record file is damaged"),
+	OPTLINE("-q", "deprecated, alias for global -q option"),
 	HELPINFO_INSERT_GLOBALS,
 	HELPINFO_INSERT_QUIET,
 	NULL
@@ -1700,13 +1696,13 @@ static const char * const cmd_scrub_resume_usage[] = {
 	"btrfs scrub resume [-BdqrR] [-c ioprio_class -n ioprio_classdata] <path>|<device>",
 	"Resume previously canceled or interrupted scrub",
 	"",
-	"-B     do not background",
-	"-d     stats per device (-B only)",
-	"-r     read only mode",
-	"-R     raw print mode, print full data instead of summary",
-	"-c     set ioprio class (see ionice(1) manpage)",
-	"-n     set ioprio classdata (see ionice(1) manpage)",
-	"-q     deprecated, alias for global -q option",
+	OPTLINE("-B", "do not background"),
+	OPTLINE("-d", "stats per device (-B only)"),
+	OPTLINE("-r", "read only mode"),
+	OPTLINE("-R", "raw print mode, print full data instead of summary"),
+	OPTLINE("-c", "set ioprio class (see ionice(1) manpage)"),
+	OPTLINE("-n", "set ioprio classdata (see ionice(1) manpage)"),
+	OPTLINE("-q", "deprecated, alias for global -q option"),
 	HELPINFO_INSERT_GLOBALS,
 	HELPINFO_INSERT_QUIET,
 	NULL
@@ -1722,8 +1718,8 @@ static const char * const cmd_scrub_status_usage[] = {
 	"btrfs scrub status [-dR] <path>|<device>",
 	"Show status of running or finished scrub",
 	"",
-	"-d                 stats per device",
-	"-R                 print raw stats",
+	OPTLINE("-d", "stats per device"),
+	OPTLINE("-R", "print raw stats"),
 	HELPINFO_UNITS_LONG,
 	NULL
 };

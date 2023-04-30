@@ -694,8 +694,8 @@ static const char * const cmd_filesystem_show_usage[] = {
 	"btrfs filesystem show [options] [<path>|<uuid>|<device>|label]",
 	"Show the structure of a filesystem",
 	"",
-	"-d|--all-devices   show only disks under /dev containing btrfs filesystem",
-	"-m|--mounted       show only mounted btrfs",
+	OPTLINE("-d|--all-devices", "show only disks under /dev containing btrfs filesystem"),
+	OPTLINE("-m|--mounted", "show only mounted btrfs"),
 	HELPINFO_UNITS_LONG,
 	"",
 	"If no argument is given, structure of all present filesystems is shown.",
@@ -752,7 +752,7 @@ static int cmd_filesystem_show(const struct cmd_struct *cmd,
 	if (argc > optind) {
 		search = argv[optind];
 		if (*search == 0)
-			usage(cmd);
+			usage(cmd, 1);
 		type = check_arg_type(search);
 
 		/*
@@ -899,13 +899,13 @@ static const char * const cmd_filesystem_defrag_usage[] = {
 	"btrfs filesystem defragment [options] <file>|<dir> [<file>|<dir>...]",
 	"Defragment a file or a directory",
 	"",
-	"-r                  defragment files recursively",
-	"-c[zlib,lzo,zstd]   compress the file while defragmenting",
-	"-f                  flush data to disk immediately after defragmenting",
-	"-s start            defragment only from byte onward",
-	"-l len              defragment only up to len bytes",
-	"-t size             target extent size hint (default: 32M)",
-	"-v                  deprecated, alias for global -v option",
+	OPTLINE("-r", "defragment files recursively"),
+	OPTLINE("-c[zlib,lzo,zstd]", "compress the file while defragmenting, optional parameter (no space in between)"),
+	OPTLINE("-f", "flush data to disk immediately after defragmenting"),
+	OPTLINE("-s start", "defragment only from byte onward"),
+	OPTLINE("-l len", "defragment only up to len bytes"),
+	OPTLINE("-t size", "target extent size hint (default: 32M)"),
+	OPTLINE("-v", "deprecated, alias for global -v option"),
 	HELPINFO_INSERT_GLOBALS,
 	HELPINFO_INSERT_VERBOSE,
 	"",
@@ -1150,8 +1150,7 @@ static const char * const cmd_filesystem_resize_usage[] = {
 	"on the device 'devid'.",
 	"[kK] means KiB, which denotes 1KiB = 1024B, 1MiB = 1024KiB, etc.",
 	"",
-	"--enqueue         wait if there's another exclusive operation running,",
-	"                  otherwise continue",
+	OPTLINE("--enqueue", "wait if there's another exclusive operation running, otherwise continue"),
 	NULL
 };
 
@@ -1441,7 +1440,8 @@ static const char * const cmd_filesystem_mkswapfile_usage[] = {
         "Create a new file that's suitable and formatted as a swapfile. Default",
         "size is 2GiB, minimum size is 40KiB.",
 	"",
-	"s|--size SIZE      create file of SIZE (accepting k/m/g/e/p suffix)",
+	OPTLINE("-s|--size SIZE", "create file of SIZE (accepting k/m/g/e/p suffix)"),
+	OPTLINE("-U|--uuid UUID", "specify UUID to use, or a special value: clear (all zeros), random, time (time-based random)"),
 	HELPINFO_INSERT_GLOBALS,
 	HELPINFO_INSERT_VERBOSE,
 	HELPINFO_INSERT_QUIET,
@@ -1460,7 +1460,7 @@ static const char * const cmd_filesystem_mkswapfile_usage[] = {
  * 00000ff0 .. = 00 00 00 00 00 00 53 57  41 50 53 50 41 43 45 32
  *                                  S  W   A  P  S  P  A  C  E  2
  */
-static int write_swap_signature(int fd, u32 page_count)
+static int write_swap_signature(int fd, u32 page_count, const uuid_t uuid)
 {
 	int ret;
 	static unsigned char swap[SZ_4K] = {
@@ -1483,7 +1483,7 @@ static int write_swap_signature(int fd, u32 page_count)
 	u32 *pages = (u32 *)&swap[0x404];
 
 	*pages = cpu_to_le32(page_count);
-	uuid_generate(&swap[0x40c]);
+	memcpy(&swap[0x40c], uuid, 16);
 	ret = pwrite(fd, swap, SZ_4K, 0);
 
 	return ret;
@@ -1497,16 +1497,19 @@ static int cmd_filesystem_mkswapfile(const struct cmd_struct *cmd, int argc, cha
 	unsigned long flags;
 	u64 size = SZ_2G;
 	u64 page_count;
+	uuid_t uuid;
 
+	uuid_generate(uuid);
 	optind = 0;
 	while (1) {
 		int c;
 		static const struct option long_options[] = {
 			{ "size", required_argument, NULL, 's' },
+			{ "uuid", required_argument, NULL, 'U' },
 			{ NULL, 0, NULL, 0 }
 		};
 
-		c = getopt_long(argc, argv, "s:", long_options, NULL);
+		c = getopt_long(argc, argv, "s:U:", long_options, NULL);
 		if (c < 0)
 			break;
 
@@ -1517,6 +1520,21 @@ static int cmd_filesystem_mkswapfile(const struct cmd_struct *cmd, int argc, cha
 			if (size < 40 * SZ_1K) {
 				error("swapfile needs to be at least 40 KiB");
 				return 1;
+			}
+			break;
+		case 'U':
+			if (strcmp(optarg, "clear") == 0) {
+				uuid_clear(uuid);
+			} else if (strcmp(optarg, "random") == 0) {
+				uuid_generate(uuid);
+			} else if (strcmp(optarg, "time") == 0) {
+				uuid_generate_time(uuid);
+			} else {
+				ret = uuid_parse(optarg, uuid);
+				if (ret == -1) {
+					error("UUID not recognized: %s", optarg);
+					return 1;
+				}
 			}
 			break;
 		default:
@@ -1571,7 +1589,7 @@ static int cmd_filesystem_mkswapfile(const struct cmd_struct *cmd, int argc, cha
 		goto out;
 	}
 	pr_verbose(LOG_INFO, "write swap signature\n");
-	ret = write_swap_signature(fd, page_count);
+	ret = write_swap_signature(fd, page_count, uuid);
 	if (ret < 0) {
 		error("cannot write swap signature: %m");
 		ret = 1;

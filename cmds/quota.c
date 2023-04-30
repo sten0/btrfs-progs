@@ -79,7 +79,7 @@ static int cmd_quota_enable(const struct cmd_struct *cmd, int argc, char **argv)
 	ret = quota_ctl(BTRFS_QUOTA_CTL_ENABLE, argc, argv);
 
 	if (ret < 0)
-		usage(cmd);
+		usage(cmd, 1);
 	return ret;
 }
 static DEFINE_SIMPLE_COMMAND(quota_enable, "enable");
@@ -100,7 +100,7 @@ static int cmd_quota_disable(const struct cmd_struct *cmd,
 	ret = quota_ctl(BTRFS_QUOTA_CTL_DISABLE, argc, argv);
 
 	if (ret < 0)
-		usage(cmd);
+		usage(cmd, 1);
 	return ret;
 }
 static DEFINE_SIMPLE_COMMAND(quota_disable, "disable");
@@ -109,9 +109,9 @@ static const char * const cmd_quota_rescan_usage[] = {
 	"btrfs quota rescan [-sw] <path>",
 	"Trash all qgroup numbers and scan the metadata again with the current config.",
 	"",
-	"-s|--status         show status of a running rescan operation",
-	"-w|--wait           start rescan and wait for it to finish (can be already in progress)",
-	"-W|--wait-norescan  wait for rescan to finish without starting it",
+	OPTLINE("-s|--status", "show status of a running rescan operation"),
+	OPTLINE("-w|--wait", "start rescan and wait for it to finish (can be already in progress)"),
+	OPTLINE("-W|--wait-norescan", "wait for rescan to finish without starting it"),
 	HELPINFO_INSERT_GLOBALS,
 	HELPINFO_INSERT_QUIET,
 	NULL
