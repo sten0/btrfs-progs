@@ -29,7 +29,6 @@ Package: btrfs-progs
 Architecture: linux-any
 Multi-Arch: foreign
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Breaks: initramfs-tools (<< 0.137~)
 Suggests: duperemove
 Description: Checksumming Copy on Write Filesystem utilities
  Btrfs is a copy on write filesystem for Linux aimed at implementing
@@ -68,7 +67,6 @@ Architecture: linux-any
 Multi-Arch: same
 Section: libs
 Depends: ${misc:Depends}, ${shlibs:Depends}
-Breaks: python3-btrfsutil (<< 5.5)
 Description: Checksumming Copy on Write Filesystem utilities (runtime util library)
  Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
