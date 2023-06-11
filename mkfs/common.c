@@ -25,7 +25,9 @@
 #include <time.h>
 #include <uuid/uuid.h>
 #include <blkid/blkid.h>
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
+#include "kernel-shared/accessors.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
@@ -38,7 +40,6 @@
 #include "common/device-utils.h"
 #include "common/open-utils.h"
 #include "mkfs/common.h"
-#include "ioctl.h"
 
 static u64 reference_root_table[] = {
 	[MKFS_ROOT_TREE]	=	BTRFS_ROOT_TREE_OBJECTID,
@@ -1084,8 +1085,11 @@ int test_dev_for_mkfs(const char *file, int force_overwrite)
 	ret = test_status_for_mkfs(file, force_overwrite);
 	if (ret)
 		return 1;
-	/* check if the device is busy */
-	fd = open(file, O_RDWR|O_EXCL);
+	/*
+	 * Check if the device is busy. Open it in read-only mode to avoid triggering
+	 * udev events.
+	 */
+	fd = open(file, O_RDONLY | O_EXCL);
 	if (fd < 0) {
 		error("unable to open %s: %m", file);
 		return 1;

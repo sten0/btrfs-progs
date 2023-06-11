@@ -35,9 +35,11 @@
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/transaction.h"
+#include "kernel-shared/file-item.h"
 #include "common/internal.h"
 #include "common/messages.h"
 #include "common/path-utils.h"
+#include "common/utils.h"
 #include "mkfs/rootdir.h"
 
 static u32 fs_block_size;
@@ -305,17 +307,18 @@ static int add_file_items(struct btrfs_trans_handle *trans,
 			  struct btrfs_inode_item *btrfs_inode, u64 objectid,
 			  struct stat *st, const char *path_name)
 {
+	struct btrfs_fs_info *fs_info = trans->fs_info;
 	int ret = -1;
 	ssize_t ret_read;
 	u64 bytes_read = 0;
 	struct btrfs_key key;
 	int blocks;
-	u32 sectorsize = root->fs_info->sectorsize;
+	u32 sectorsize = fs_info->sectorsize;
 	u64 first_block = 0;
 	u64 file_pos = 0;
 	u64 cur_bytes;
 	u64 total_bytes;
-	struct extent_buffer *eb = NULL;
+	void *buf = NULL;
 	int fd;
 
 	if (st->st_size == 0)
@@ -331,7 +334,7 @@ static int add_file_items(struct btrfs_trans_handle *trans,
 	if (st->st_size % sectorsize)
 		blocks += 1;
 
-	if (st->st_size <= BTRFS_MAX_INLINE_DATA_SIZE(root->fs_info) &&
+	if (st->st_size <= BTRFS_MAX_INLINE_DATA_SIZE(fs_info) &&
 	    st->st_size < sectorsize) {
 		char *buffer = malloc(st->st_size);
 
@@ -340,7 +343,7 @@ static int add_file_items(struct btrfs_trans_handle *trans,
 			goto end;
 		}
 
-		ret_read = pread64(fd, buffer, st->st_size, bytes_read);
+		ret_read = pread(fd, buffer, st->st_size, bytes_read);
 		if (ret_read == -1) {
 			error("cannot read %s at offset %llu length %llu: %m",
 				path_name, bytes_read, (unsigned long long)st->st_size);
@@ -357,12 +360,8 @@ static int add_file_items(struct btrfs_trans_handle *trans,
 	/* round up our st_size to the FS blocksize */
 	total_bytes = (u64)blocks * sectorsize;
 
-	/*
-	 * do our IO in extent buffers so it can work
-	 * against any raid type
-	 */
-	eb = calloc(1, sizeof(*eb) + sectorsize);
-	if (!eb) {
+	buf = malloc(sectorsize);
+	if (!buf) {
 		ret = -ENOMEM;
 		goto end;
 	}
@@ -384,36 +383,27 @@ again:
 
 	while (bytes_read < cur_bytes) {
 
-		memset(eb->data, 0, sectorsize);
+		memset(buf, 0, sectorsize);
 
-		ret_read = pread64(fd, eb->data, sectorsize, file_pos +
-				   bytes_read);
+		ret_read = pread(fd, buf, sectorsize, file_pos + bytes_read);
 		if (ret_read == -1) {
 			error("cannot read %s at offset %llu length %u: %m",
 				path_name, file_pos + bytes_read, sectorsize);
 			goto end;
 		}
 
-		eb->start = first_block + bytes_read;
-		eb->len = sectorsize;
-		eb->fs_info = root->fs_info;
-
-		/*
-		 * we're doing the csum before we record the extent, but
-		 * that's ok
-		 */
-		ret = btrfs_csum_file_block(trans,
-				first_block + bytes_read + sectorsize,
-				first_block + bytes_read,
-				eb->data, sectorsize);
-		if (ret)
-			goto end;
-
-		ret = write_and_map_eb(root->fs_info, eb);
+		ret = write_data_to_disk(root->fs_info, buf,
+					 first_block + bytes_read, sectorsize);
 		if (ret) {
 			error("failed to write %s", path_name);
 			goto end;
 		}
+
+		ret = btrfs_csum_file_block(trans, first_block + bytes_read,
+					    BTRFS_EXTENT_CSUM_OBJECTID,
+					    fs_info->csum_type, buf);
+		if (ret)
+			goto end;
 
 		bytes_read += sectorsize;
 	}
@@ -433,7 +423,7 @@ again:
 		goto again;
 
 end:
-	free(eb);
+	free(buf);
 	close(fd);
 	return ret;
 }
@@ -521,6 +511,8 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 		}
 
 		for (i = 0; i < count; i++) {
+			char tmp[PATH_MAX];
+
 			cur_file = files[i];
 
 			if (lstat(cur_file->d_name, &st) == -1) {
@@ -528,6 +520,10 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 					cur_file->d_name);
 				ret = -1;
 				goto fail;
+			}
+			if (bconf.verbose >= LOG_INFO) {
+				path_cat_out(tmp, parent_dir_entry->path, cur_file->d_name);
+				pr_verbose(LOG_INFO, "ADD: %s\n", tmp);
 			}
 
 			/*
@@ -577,8 +573,6 @@ static int traverse_directory(struct btrfs_trans_handle *trans,
 			}
 
 			if (S_ISDIR(st.st_mode)) {
-				char tmp[PATH_MAX];
-
 				dir_entry = malloc(sizeof(*dir_entry));
 				if (!dir_entry) {
 					ret = -ENOMEM;
@@ -642,8 +636,7 @@ fail_no_dir:
 	goto out;
 }
 
-int btrfs_mkfs_fill_dir(const char *source_dir, struct btrfs_root *root,
-			bool verbose)
+int btrfs_mkfs_fill_dir(const char *source_dir, struct btrfs_root *root)
 {
 	int ret;
 	struct btrfs_trans_handle *trans;
@@ -680,8 +673,6 @@ int btrfs_mkfs_fill_dir(const char *source_dir, struct btrfs_root *root,
 		goto out;
 	}
 
-	if (verbose)
-		printf("Making image is completed.\n");
 	return 0;
 fail:
 	/*
@@ -929,7 +920,7 @@ int btrfs_mkfs_shrink_fs(struct btrfs_fs_info *fs_info, u64 *new_size_ret,
 	u64 new_size;
 	struct btrfs_device *device;
 	struct list_head *cur;
-	struct stat64 file_stat;
+	struct stat file_stat;
 	int nr_devs = 0;
 	int ret;
 
@@ -963,14 +954,14 @@ int btrfs_mkfs_shrink_fs(struct btrfs_fs_info *fs_info, u64 *new_size_ret,
 		*new_size_ret = new_size;
 
 	if (shrink_file_size) {
-		ret = fstat64(device->fd, &file_stat);
+		ret = fstat(device->fd, &file_stat);
 		if (ret < 0) {
 			error("failed to stat devid %llu: %m", device->devid);
 			return ret;
 		}
 		if (!S_ISREG(file_stat.st_mode))
 			return ret;
-		ret = ftruncate64(device->fd, new_size);
+		ret = ftruncate(device->fd, new_size);
 		if (ret < 0) {
 			error("failed to truncate device file of devid %llu: %m",
 				device->devid);

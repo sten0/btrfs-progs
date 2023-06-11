@@ -282,7 +282,7 @@ features see [[Status]] page.
 5.0 - metadata uuid
         An optional incompat feature to assign a new filesystem UUID without
         overwriting all metadata blocks, stored only in superblock, unlike what
-        ``btrfstune -u``
+        :command:`btrfstune -u`
 
 5.1 - FORGET_DEV ioctl
         Unregister devices previously added by the scan ioctl, same effect as
@@ -315,7 +315,7 @@ features see [[Status]] page.
 
 5.7 - faster balance cancel
         More cancellation points in balance that will shorten the time to stop
-        processing once ``btrfs balance cancel`` is called.
+        processing once :command:`btrfs balance cancel` is called.
 
 5.7 - *removed flag BTRFS_SUBVOL_CREATE_ASYNC*
         Remove support of flag BTRFS_SUBVOL_CREATE_ASYNC from subvolume creation ioctl.
@@ -527,3 +527,23 @@ features see [[Status]] page.
         Devices that support trim/discard will enable the asynchronous discard
         for the whole filesystem.
 
+6.3 - discard=async settings tuned
+        The default IOPS limit has changed from 100 to 1000 and writing value 0
+        to '/sys/fs/btrfs/FSID/discard/iops_limit' newly means to not do any
+        throttling.
+
+6.3 - block group allocation class heuristics
+        Pack files by size (up to 128k, up to 8M, more) to avoid fragmentation
+        in block groups, assuming that file size and life time is correlated,
+        in particular this may help during balance. The stats about the number
+        of used classes per block group type is exported in
+        '/sys/fs/btrfs/FSID/allocation/\*/size_classes'.
+
+6.3 - in DEV_INFO ioctl export per-device FSID
+        A seeding device could have a different FSID, available in syfs and now
+        available via DEV_INFO ioctl.
+
+6.3 - send utimes cache, reduced stream size
+        Utimes for directories are emitted into the send steram only when
+        finalizing the directory, the cache also gains significant speedups (up
+        to 10x).

@@ -31,6 +31,7 @@
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/transaction.h"
 #include "kernel-shared/extent_io.h"
+#include "kernel-shared/file-item.h"
 #include "common/extent-cache.h"
 #include "common/internal.h"
 #include "common/messages.h"
@@ -351,7 +352,6 @@ static int convert_direct(struct btrfs_trans_handle *trans,
 	struct btrfs_key key;
 	u32 sectorsize = root->fs_info->sectorsize;
 	int ret;
-	struct extent_buffer *eb;
 
 	BUG_ON(length > sectorsize);
 	ret = btrfs_reserve_extent(trans, root, sectorsize,
@@ -359,14 +359,7 @@ static int convert_direct(struct btrfs_trans_handle *trans,
 	if (ret)
 		return ret;
 
-	eb = alloc_extent_buffer(root->fs_info, key.objectid, sectorsize);
-
-	if (!eb)
-		return -ENOMEM;
-
-	write_extent_buffer(eb, body, 0, length);
-	ret = write_and_map_eb(root->fs_info, eb);
-	free_extent_buffer(eb);
+	ret = write_data_to_disk(root->fs_info, body, key.objectid, sectorsize);
 	if (ret)
 		return ret;
 

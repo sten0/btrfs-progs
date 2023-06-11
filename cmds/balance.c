@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <stdbool.h>
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/volumes.h"
 #include "common/open-utils.h"
@@ -33,11 +34,10 @@
 #include "common/messages.h"
 #include "common/help.h"
 #include "cmds/commands.h"
-#include "ioctl.h"
 
 static const char * const balance_cmd_group_usage[] = {
 	"btrfs balance <command> [options] <path>",
-	"btrfs balance <path>",
+	"btrfs balance <path>        (deprecated, use 'btrfs balance start')",
 	NULL
 };
 
@@ -865,10 +865,27 @@ static const struct cmd_group balance_cmd_group = {
 
 static int cmd_balance(const struct cmd_struct *cmd, int argc, char **argv)
 {
-	if (argc == 2 && strcmp("start", argv[1]) != 0) {
-		/* old 'btrfs filesystem balance <path>' syntax */
+	bool old_syntax = true;
+
+	/*
+	 * Exclude all valid subcommands from being potentially confused as path
+	 * for the obsolete syntax: btrfs balance <path>
+	 */
+	if (argc == 2) {
+		for (int i = 0; balance_cmd_group.commands[i] != NULL; i++) {
+			if (strcmp(argv[1], balance_cmd_group.commands[i]->token) == 0) {
+				old_syntax = false;
+				break;
+			}
+		}
+	} else {
+		old_syntax = false;
+	}
+
+	if (old_syntax) {
 		struct btrfs_ioctl_balance_args args;
 
+		warning("deprecated syntax, please use 'btrfs balance start'");
 		memset(&args, 0, sizeof(args));
 		args.flags |= BTRFS_BALANCE_TYPE_MASK;
 

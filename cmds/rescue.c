@@ -322,8 +322,8 @@ static int clear_uuid_tree(struct btrfs_fs_info *fs_info)
 		ret = btrfs_search_slot(trans, uuid_root, &key, &path, -1, 1);
 		if (ret < 0)
 			goto out;
-		ASSERT(ret > 0);
-		ASSERT(path.slots[0] == 0);
+		UASSERT(ret > 0);
+		UASSERT(path.slots[0] == 0);
 
 		nr = btrfs_header_nritems(path.nodes[0]);
 		if (nr == 0) {
@@ -340,10 +340,11 @@ static int clear_uuid_tree(struct btrfs_fs_info *fs_info)
 	if (ret < 0)
 		goto out;
 	list_del(&uuid_root->dirty_list);
-	ret = clean_tree_block(uuid_root->node);
+	ret = btrfs_clear_buffer_dirty(uuid_root->node);
 	if (ret < 0)
 		goto out;
-	ret = btrfs_free_tree_block(trans, uuid_root, uuid_root->node, 0, 1);
+	ret = btrfs_free_tree_block(trans, btrfs_root_id(uuid_root),
+				    uuid_root->node, 0, 1);
 	if (ret < 0)
 		goto out;
 	free_extent_buffer(uuid_root->node);

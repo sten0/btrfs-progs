@@ -28,6 +28,7 @@
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/extent_io.h"
+#include "kernel-shared/file-item.h"
 #include "common/utils.h"
 #include "common/help.h"
 #include "common/messages.h"
@@ -152,7 +153,9 @@ static int walk_nodes(struct btrfs_root *root, struct btrfs_path *path,
 		path->slots[level] = i;
 		if ((level - 1) > 0 || find_inline) {
 			tmp = read_tree_block(root->fs_info, cur_blocknr,
-					      btrfs_node_ptr_generation(b, i));
+					      btrfs_header_owner(b),
+					      btrfs_node_ptr_generation(b, i),
+					      level - 1, NULL);
 			if (!extent_buffer_uptodate(tmp)) {
 				error("failed to read blocknr %llu",
 					btrfs_node_blockptr(b, i));
@@ -468,8 +471,9 @@ static int cmd_inspect_tree_stats(const struct cmd_struct *cmd,
 		errno = -ret;
 		warning("unable to check mount status of: %m");
 	} else if (ret) {
-		warning("%s already mounted, results may be inaccurate",
-				argv[optind]);
+		warning("%s already mounted, tree-stats accesses the block devices directly, this may\n"
+			"\tresult in inaccurate numbers, various errors or it may crash if the filesystem\n"
+			"\tchanges unexpectedly, restart if needed or remount read-only", argv[optind]);
 	}
 
 	root = open_ctree(argv[optind], 0, 0);

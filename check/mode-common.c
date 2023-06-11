@@ -28,6 +28,7 @@
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/backref.h"
 #include "kernel-shared/compression.h"
+#include "kernel-shared/file-item.h"
 #include "common/internal.h"
 #include "common/messages.h"
 #include "common/utils.h"
@@ -131,7 +132,7 @@ static int check_prealloc_shared_data_ref(u64 parent, u64 disk_bytenr)
 	int i;
 	int ret = 0;
 
-	eb = read_tree_block(gfs_info, parent, 0);
+	eb = read_tree_block(gfs_info, parent, 0, 0, 0, NULL);
 	if (!extent_buffer_uptodate(eb)) {
 		ret = -EIO;
 		goto out;
@@ -224,8 +225,8 @@ int check_prealloc_extent_written(u64 disk_bytenr, u64 num_bytes)
 
 		iref = (struct btrfs_extent_inline_ref *)ptr;
 		type = btrfs_extent_inline_ref_type(path.nodes[0], iref);
-		ASSERT(type == BTRFS_EXTENT_DATA_REF_KEY ||
-		       type == BTRFS_SHARED_DATA_REF_KEY);
+		UASSERT(type == BTRFS_EXTENT_DATA_REF_KEY ||
+			type == BTRFS_SHARED_DATA_REF_KEY);
 
 		if (type == BTRFS_EXTENT_DATA_REF_KEY) {
 			struct btrfs_extent_data_ref *dref;
@@ -398,7 +399,7 @@ int insert_inode_item(struct btrfs_trans_handle *trans,
 	btrfs_set_stack_timespec_sec(&ii.mtime, now);
 
 	ret = btrfs_insert_inode(trans, root, ino, &ii);
-	ASSERT(!ret);
+	UASSERT(!ret);
 
 	warning("root %llu inode %llu recreating inode item, this may "
 		"be incomplete, please check permissions and content after "
@@ -595,10 +596,11 @@ void reset_cached_block_groups()
 
 	while (1) {
 		ret = find_first_extent_bit(&gfs_info->free_space_cache, 0,
-					    &start, &end, EXTENT_DIRTY);
+					    &start, &end, EXTENT_DIRTY, NULL);
 		if (ret)
 			break;
-		clear_extent_dirty(&gfs_info->free_space_cache, start, end);
+		clear_extent_dirty(&gfs_info->free_space_cache, start, end,
+				   NULL);
 	}
 
 	start = 0;
@@ -625,7 +627,7 @@ int exclude_metadata_blocks(void)
 	excluded_extents = malloc(sizeof(*excluded_extents));
 	if (!excluded_extents)
 		return -ENOMEM;
-	extent_io_tree_init(excluded_extents);
+	extent_io_tree_init(gfs_info, excluded_extents, 0);
 	gfs_info->excluded_extents = excluded_extents;
 
 	return btrfs_mark_used_tree_blocks(gfs_info, excluded_extents);
@@ -634,7 +636,7 @@ int exclude_metadata_blocks(void)
 void cleanup_excluded_extents(void)
 {
 	if (gfs_info->excluded_extents) {
-		extent_io_tree_cleanup(gfs_info->excluded_extents);
+		extent_io_tree_release(gfs_info->excluded_extents);
 		free(gfs_info->excluded_extents);
 	}
 	gfs_info->excluded_extents = NULL;
@@ -764,7 +766,7 @@ static int find_file_type_dir_index(struct btrfs_root *root, u64 ino, u64 dirid,
 	if (location.objectid != ino || location.type != BTRFS_INODE_ITEM_KEY ||
 	    location.offset != 0)
 		goto out;
-	filetype = btrfs_dir_type(path.nodes[0], di);
+	filetype = btrfs_dir_ftype(path.nodes[0], di);
 	if (filetype >= BTRFS_FT_MAX || filetype == BTRFS_FT_UNKNOWN)
 		goto out;
 	len = min_t(u32, BTRFS_NAME_LEN,
@@ -823,7 +825,7 @@ static int find_file_type_dir_item(struct btrfs_root *root, u64 ino, u64 dirid,
 		    location.type != BTRFS_INODE_ITEM_KEY ||
 		    location.offset != 0)
 			continue;
-		filetype = btrfs_dir_type(path.nodes[0], di);
+		filetype = btrfs_dir_ftype(path.nodes[0], di);
 		if (filetype >= BTRFS_FT_MAX || filetype == BTRFS_FT_UNKNOWN)
 			continue;
 		len = min_t(u32, BTRFS_NAME_LEN,
@@ -985,7 +987,7 @@ int repair_imode_common(struct btrfs_root *root, struct btrfs_path *path)
 	int ret;
 
 	btrfs_item_key_to_cpu(path->nodes[0], &key, path->slots[0]);
-	ASSERT(key.type == BTRFS_INODE_ITEM_KEY);
+	UASSERT(key.type == BTRFS_INODE_ITEM_KEY);
 	if (root->objectid == BTRFS_ROOT_TREE_OBJECTID) {
 		/* In root tree we only have two possible imode */
 		if (key.objectid == BTRFS_ROOT_TREE_OBJECTID)
@@ -1033,7 +1035,7 @@ int check_repair_free_space_inode(struct btrfs_path *path)
 	int ret = 0;
 
 	btrfs_item_key_to_cpu(path->nodes[0], &key, path->slots[0]);
-	ASSERT(key.type == BTRFS_INODE_ITEM_KEY && is_fstree(key.objectid));
+	UASSERT(key.type == BTRFS_INODE_ITEM_KEY && is_fstree(key.objectid));
 	iitem = btrfs_item_ptr(path->nodes[0], path->slots[0],
 			       struct btrfs_inode_item);
 	mode = btrfs_inode_mode(path->nodes[0], iitem);
@@ -1125,7 +1127,7 @@ int get_extent_item_generation(u64 bytenr, u64 *gen_ret)
 	    BTRFS_EXTENT_FLAG_TREE_BLOCK) {
 		struct extent_buffer *eb;
 
-		eb = read_tree_block(gfs_info, bytenr, 0);
+		eb = read_tree_block(gfs_info, bytenr, 0, 0, 0, NULL);
 		if (extent_buffer_uptodate(eb)) {
 			*gen_ret = btrfs_header_generation(eb);
 			ret = 0;
@@ -1207,18 +1209,19 @@ static int populate_csum(struct btrfs_trans_handle *trans,
 			 struct btrfs_root *csum_root, char *buf, u64 start,
 			 u64 len)
 {
+	struct btrfs_fs_info *fs_info = trans->fs_info;
 	u64 offset = 0;
-	u64 sectorsize;
+	u64 sectorsize = fs_info->sectorsize;
 	int ret = 0;
 
 	while (offset < len) {
-		sectorsize = gfs_info->sectorsize;
-		ret = read_data_from_disk(gfs_info, buf, start + offset,
+		ret = read_data_from_disk(fs_info, buf, start + offset,
 					  &sectorsize, 0);
 		if (ret)
 			break;
-		ret = btrfs_csum_file_block(trans, start + len, start + offset,
-					    buf, sectorsize);
+		ret = btrfs_csum_file_block(trans, start + offset,
+					    BTRFS_EXTENT_CSUM_OBJECTID,
+					    fs_info->csum_type, buf);
 		if (ret)
 			break;
 		offset += sectorsize;
@@ -1311,7 +1314,7 @@ static int fill_csum_tree_from_one_fs_root(struct btrfs_trans_handle *trans,
 		if (type == BTRFS_FILE_EXTENT_PREALLOC) {
 			start += btrfs_file_extent_offset(node, fi);
 			len = btrfs_file_extent_num_bytes(node, fi);
-			ret = btrfs_del_csums(trans, start, len);
+			ret = btrfs_del_csums(trans, csum_root, start, len);
 			if (ret < 0)
 				goto out;
 		}
@@ -1473,7 +1476,8 @@ static int remove_csum_for_file_extent(u64 ino, u64 offset, u64 rootid, void *ct
 	btrfs_release_path(&path);
 
 	/* Now delete the csum for the preallocated or nodatasum range */
-	ret = btrfs_del_csums(trans, disk_bytenr, disk_len);
+	root = btrfs_csum_root(fs_info, disk_bytenr);
+	ret = btrfs_del_csums(trans, root, disk_bytenr, disk_len);
 out:
 	btrfs_release_path(&path);
 	return ret;
@@ -1607,7 +1611,7 @@ static int get_num_devs_in_chunk_tree(struct btrfs_fs_info *fs_info)
 		return ret;
 
 	/* We should be the first slot, and chunk tree should not be empty*/
-	ASSERT(path.slots[0] == 0 && btrfs_header_nritems(path.nodes[0]));
+	UASSERT(path.slots[0] == 0 && btrfs_header_nritems(path.nodes[0]));
 
 	btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
 

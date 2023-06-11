@@ -39,6 +39,7 @@
 #endif
 #include "kernel-lib/overflow.h"
 #include "kernel-lib/list.h"
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/disk-io.h"
@@ -50,7 +51,6 @@
 #include "common/defs.h"
 #include "common/open-utils.h"
 #include "common/units.h"
-#include "ioctl.h"
 
 static int btrfs_scan_done = 0;
 
@@ -76,7 +76,7 @@ int check_arg_type(const char *input)
 		if (path_is_block_device(path) == 1)
 			return BTRFS_ARG_BLKDEV;
 
-		if (path_is_mount_point(path) == 1)
+		if (path_is_a_mount_point(path) == 1)
 			return BTRFS_ARG_MNTPOINT;
 
 		if (path_is_reg_file(path))

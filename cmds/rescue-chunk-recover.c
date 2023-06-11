@@ -26,6 +26,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "kernel-lib/list.h"
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/volumes.h"
@@ -37,7 +38,6 @@
 #include "common/utils.h"
 #include "cmds/rescue.h"
 #include "check/common.h"
-#include "ioctl.h"
 
 struct recover_control {
 	int verbose;
@@ -754,7 +754,7 @@ static int scan_one_device(void *dev_scan_struct)
 		if (is_super_block_address(bytenr))
 			bytenr += rc->sectorsize;
 
-		if (pread64(fd, buf->data, rc->nodesize, bytenr) <
+		if (pread(fd, buf->data, rc->nodesize, bytenr) <
 		    rc->nodesize)
 			break;
 
@@ -1099,7 +1099,7 @@ static int block_group_free_all_extent(struct btrfs_trans_handle *trans,
 
 	if (list_empty(&cache->dirty_list))
 		list_add_tail(&cache->dirty_list, &trans->dirty_bgs);
-	set_extent_dirty(&info->free_space_cache, start, end);
+	set_extent_dirty(&info->free_space_cache, start, end, GFP_NOFS);
 
 	cache->used = 0;
 
@@ -1146,9 +1146,9 @@ static int __rebuild_chunk_root(struct btrfs_trans_handle *trans,
 	btrfs_set_disk_key_type(&disk_key, BTRFS_DEV_ITEM_KEY);
 	btrfs_set_disk_key_offset(&disk_key, min_devid);
 
-	cow = btrfs_alloc_free_block(trans, root, root->fs_info->nodesize,
+	cow = btrfs_alloc_tree_block(trans, root, root->fs_info->nodesize,
 				     BTRFS_CHUNK_TREE_OBJECTID,
-				     &disk_key, 0, 0, 0);
+				     &disk_key, 0, 0, 0, BTRFS_NESTING_NORMAL);
 	btrfs_set_header_bytenr(cow, cow->start);
 	btrfs_set_header_generation(cow, trans->transid);
 	btrfs_set_header_nritems(cow, 0);
@@ -1455,7 +1455,7 @@ open_ctree_with_broken_chunk(struct recover_control *rc)
 		goto out_devices;
 	}
 
-	ASSERT(!memcmp(disk_super->fsid, rc->fs_devices->fsid, BTRFS_FSID_SIZE));
+	UASSERT(!memcmp(disk_super->fsid, rc->fs_devices->fsid, BTRFS_FSID_SIZE));
 	fs_info->sectorsize = btrfs_super_sectorsize(disk_super);
 	fs_info->nodesize = btrfs_super_nodesize(disk_super);
 	fs_info->stripesize = btrfs_super_stripesize(disk_super);
@@ -1467,7 +1467,7 @@ open_ctree_with_broken_chunk(struct recover_control *rc)
 	features = btrfs_super_incompat_flags(disk_super);
 
 	if (features & BTRFS_FEATURE_INCOMPAT_METADATA_UUID)
-		ASSERT(!memcmp(disk_super->metadata_uuid,
+		UASSERT(!memcmp(disk_super->metadata_uuid,
 			       fs_info->fs_devices->metadata_uuid,
 			       BTRFS_FSID_SIZE));
 
@@ -1869,12 +1869,12 @@ static int check_one_csum(int fd, u64 start, u32 len, u32 tree_csum,
 	int csum_size = 0;
 	u8 expected_csum[BTRFS_CSUM_SIZE];
 
-	ASSERT(0);
+	UASSERT(0);
 
 	data = malloc(len);
 	if (!data)
 		return -1;
-	ret = pread64(fd, data, len, start);
+	ret = pread(fd, data, len, start);
 	if (ret < 0 || ret != len) {
 		ret = -1;
 		goto out;

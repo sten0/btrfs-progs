@@ -92,7 +92,7 @@ u64 zone_size(const char *file)
 	return strtoull((const char *)chunk, NULL, 10) << SECTOR_SHIFT;
 }
 
-u64 max_zone_append_size(const char *file)
+static u64 max_zone_append_size(const char *file)
 {
 	char chunk[32];
 	int ret;
@@ -194,7 +194,7 @@ static int sb_write_pointer(int fd, struct blk_zone *zones, u64 *wp_ret)
 			bytenr = ((zones[i].start + zones[i].len)
 				   << SECTOR_SHIFT) - BTRFS_SUPER_INFO_SIZE;
 
-			ret = pread64(fd, buf[i], BTRFS_SUPER_INFO_SIZE, bytenr);
+			ret = pread(fd, buf[i], BTRFS_SUPER_INFO_SIZE, bytenr);
 			if (ret != BTRFS_SUPER_INFO_SIZE)
 				return -EIO;
 			super[i] = (struct btrfs_super_block *)&buf[i];
@@ -515,8 +515,8 @@ size_t btrfs_sb_io(int fd, void *buf, off_t offset, int rw)
 	/* We can call pread/pwrite if 'fd' is non-zoned device/file */
 	if (zone_size_sector == 0) {
 		if (rw == READ)
-			return pread64(fd, buf, count, offset);
-		return pwrite64(fd, buf, count, offset);
+			return pread(fd, buf, count, offset);
+		return pwrite(fd, buf, count, offset);
 	}
 
 	ASSERT(IS_ALIGNED(zone_size_sector, sb_size_sector));
@@ -594,64 +594,6 @@ size_t btrfs_sb_io(int fd, void *buf, off_t offset, int rw)
 	}
 
 	return ret_sz;
-}
-
-/*
- * Check if spcecifeid region is suitable for allocation
- *
- * @device:	the device to allocate a region
- * @pos:	the position of the region
- * @num_bytes:	the size of the region
- *
- * In non-ZONED device, anywhere is suitable for allocation. In ZONED
- * device, check if:
- * 1) the region is not on non-empty sequential zones,
- * 2) all zones in the region have the same zone type,
- * 3) it does not contain super block location
- */
-bool btrfs_check_allocatable_zones(struct btrfs_device *device, u64 pos,
-				   u64 num_bytes)
-{
-	struct btrfs_zoned_device_info *zinfo = device->zone_info;
-	u64 nzones, begin, end;
-	u64 sb_pos;
-	bool is_sequential;
-	int shift;
-	int i;
-
-	if (!zinfo || zinfo->model == ZONED_NONE)
-		return true;
-
-	nzones = num_bytes / zinfo->zone_size;
-	begin = pos / zinfo->zone_size;
-	end = begin + nzones;
-
-	ASSERT(IS_ALIGNED(pos, zinfo->zone_size));
-	ASSERT(IS_ALIGNED(num_bytes, zinfo->zone_size));
-
-	if (end > zinfo->nr_zones)
-		return false;
-
-	shift = ilog2(zinfo->zone_size);
-	for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++) {
-		sb_pos = sb_zone_number(shift, i);
-		if (!(end < sb_pos || sb_pos + 1 < begin))
-			return false;
-	}
-
-	is_sequential = btrfs_dev_is_sequential(device, pos);
-
-	while (num_bytes) {
-		if (is_sequential && !btrfs_dev_is_empty_zone(device, pos))
-			return false;
-		if (is_sequential != btrfs_dev_is_sequential(device, pos))
-			return false;
-
-		pos += zinfo->zone_size;
-		num_bytes -= zinfo->zone_size;
-	}
-
-	return true;
 }
 
 /**

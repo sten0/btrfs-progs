@@ -28,6 +28,7 @@
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/transaction.h"
 #include "kernel-shared/extent_io.h"
+#include "kernel-shared/file-item.h"
 #include "common/utils.h"
 #include "common/help.h"
 #include "common/extent-cache.h"
@@ -37,40 +38,46 @@
 
 #define FIELD_BUF_LEN 80
 
-static int debug_corrupt_block(struct extent_buffer *eb,
-		struct btrfs_root *root, u64 bytenr, u32 blocksize, u64 copy)
+static int debug_corrupt_sector(struct btrfs_root *root, u64 logical, int mirror)
 {
+	const u32 sectorsize = root->fs_info->sectorsize;
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	int ret;
 	int num_copies;
 	int mirror_num = 1;
+	void *buf;
+
+	buf = malloc(root->fs_info->sectorsize);
+	if (!buf) {
+		error_msg(ERROR_MSG_MEMORY, "allocating memory for bytenr %llu",
+			  logical);
+		return -ENOMEM;
+	}
 
 	while (1) {
-		if (!copy || mirror_num == copy) {
-			u64 read_len = eb->len;
+		if (!mirror || mirror_num == mirror) {
+			u64 read_len = sectorsize;
 
-			ret = read_data_from_disk(eb->fs_info, eb->data,
-						  eb->start, &read_len,
-						  mirror_num);
-			if (read_len < eb->len)
+			ret = read_data_from_disk(fs_info, buf, logical,
+						  &read_len, mirror_num);
+			if (read_len < sectorsize)
 				ret = -EIO;
 			if (ret < 0) {
 				errno = -ret;
-				error("cannot read eb bytenr %llu: %m", eb->start);
+				error("cannot read bytenr %llu: %m", logical);
 				return ret;
 			}
-			printf("corrupting %llu copy %d\n", eb->start,
-			       mirror_num);
-			memset(eb->data, 0, eb->len);
-			ret = write_and_map_eb(eb->fs_info, eb);
+			printf("corrupting %llu copy %d\n", logical, mirror_num);
+			memset(buf, 0, sectorsize);
+			ret = write_data_to_disk(fs_info, buf, logical, sectorsize);
 			if (ret < 0) {
 				errno = -ret;
-				error("cannot write eb bytenr %llu: %m", eb->start);
+				error("cannot write bytenr %llu: %m", logical);
 				return ret;
 			}
 		}
 
-		num_copies = btrfs_num_copies(root->fs_info, eb->start,
-					      eb->len);
+		num_copies = btrfs_num_copies(root->fs_info, logical, sectorsize);
 		if (num_copies == 1)
 			break;
 
@@ -156,7 +163,7 @@ static void corrupt_keys(struct btrfs_trans_handle *trans,
 		u16 csum_type = fs_info->csum_type;
 
 		csum_tree_block_size(eb, csum_size, 0, csum_type);
-		write_and_map_eb(eb->fs_info, eb);
+		write_data_to_disk(eb->fs_info, eb->data, eb->start, eb->len);
 	}
 }
 
@@ -165,7 +172,7 @@ static int corrupt_keys_in_block(struct btrfs_fs_info *fs_info, u64 bytenr)
 {
 	struct extent_buffer *eb;
 
-	eb = read_tree_block(fs_info, bytenr, 0);
+	eb = read_tree_block(fs_info, bytenr, 0, 0, 0, NULL);
 	if (!extent_buffer_uptodate(eb))
 		return -EIO;;
 
@@ -295,7 +302,9 @@ static void btrfs_corrupt_extent_tree(struct btrfs_trans_handle *trans,
 		struct extent_buffer *next;
 
 		next = read_tree_block(fs_info, btrfs_node_blockptr(eb, i),
-				       btrfs_node_ptr_generation(eb, i));
+				       btrfs_header_owner(eb),
+				       btrfs_node_ptr_generation(eb, i),
+				       btrfs_header_level(eb) - 1, NULL);
 		if (!extent_buffer_uptodate(next))
 			continue;
 		btrfs_corrupt_extent_tree(trans, root, next);
@@ -859,7 +868,7 @@ static int corrupt_metadata_block(struct btrfs_fs_info *fs_info, u64 block,
 		return -EINVAL;
 	}
 
-	eb = read_tree_block(fs_info, block, 0);
+	eb = read_tree_block(fs_info, block, 0, 0, 0, NULL);
 	if (!extent_buffer_uptodate(eb)) {
 		error("couldn't read in tree block %s", field);
 		return -EINVAL;
@@ -875,7 +884,7 @@ static int corrupt_metadata_block(struct btrfs_fs_info *fs_info, u64 block,
 		btrfs_set_header_generation(eb, bogus);
 		csum_tree_block_size(eb, fs_info->csum_size, 0,
 				     fs_info->csum_type);
-		ret = write_and_map_eb(fs_info, eb);
+		ret = write_data_to_disk(fs_info, eb->data, eb->start, eb->len);
 		free_extent_buffer(eb);
 		if (ret < 0) {
 			errno = -ret;
@@ -1098,7 +1107,7 @@ static int delete_csum(struct btrfs_root *root, u64 bytenr, u64 bytes)
 		return ret;
 	}
 
-	ret = btrfs_del_csums(trans, bytenr, bytes);
+	ret = btrfs_del_csums(trans, root, bytenr, bytes);
 	if (ret)
 		error("error deleting csums %d", ret);
 	btrfs_commit_transaction(trans, root);
@@ -1604,8 +1613,11 @@ int main(int argc, char **argv)
 				goto out_close;
 			}
 
-			debug_corrupt_block(eb, root, logical,
-					    root->fs_info->sectorsize, copy);
+			ret = debug_corrupt_sector(root, logical, (int)copy);
+			if (ret < 0) {
+				ret = 1;
+				goto out_close;
+			}
 			free_extent_buffer(eb);
 		}
 		logical += root->fs_info->sectorsize;

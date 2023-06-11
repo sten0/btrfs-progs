@@ -31,6 +31,7 @@
 #include <unistd.h>
 #include "kernel-lib/list.h"
 #include "kernel-lib/sizes.h"
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "common/internal.h"
@@ -43,7 +44,6 @@
 #include "common/string-utils.h"
 #include "common/string-table.h"
 #include "cmds/commands.h"
-#include "ioctl.h"
 
 static const char * const inspect_cmd_group_usage[] = {
 	"btrfs inspect-internal <command> <args>",
@@ -730,7 +730,7 @@ struct list_chunks_ctx {
 	struct list_chunks_entry *stats;
 };
 
-int cmp_cse_devid_start(const void *va, const void *vb)
+static int cmp_cse_devid_start(const void *va, const void *vb)
 {
 	const struct list_chunks_entry *a = va;
 	const struct list_chunks_entry *b = vb;
@@ -751,7 +751,7 @@ int cmp_cse_devid_start(const void *va, const void *vb)
 	return 1;
 }
 
-int cmp_cse_devid_lstart(const void *va, const void *vb)
+static int cmp_cse_devid_lstart(const void *va, const void *vb)
 {
 	const struct list_chunks_entry *a = va;
 	const struct list_chunks_entry *b = vb;
@@ -772,8 +772,8 @@ int cmp_cse_devid_lstart(const void *va, const void *vb)
 	return 1;
 }
 
-int print_list_chunks(struct list_chunks_ctx *ctx, unsigned sort_mode,
-		      unsigned unit_mode, bool with_usage, bool with_empty)
+static int print_list_chunks(struct list_chunks_ctx *ctx, unsigned sort_mode,
+			     unsigned unit_mode, bool with_usage, bool with_empty)
 {
 	u64 devid;
 	struct list_chunks_entry e;

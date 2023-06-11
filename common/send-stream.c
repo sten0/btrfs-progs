@@ -21,12 +21,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/send.h"
 #include "crypto/crc32c.h"
 #include "common/send-stream.h"
 #include "common/messages.h"
-#include "ioctl.h"
 
 struct btrfs_send_attribute {
 	u16 tlv_type;
@@ -44,7 +44,7 @@ struct btrfs_send_stream {
 	int fd;
 
 	int cmd;
-	struct btrfs_send_attribute cmd_attrs[BTRFS_SEND_A_MAX + 1];
+	struct btrfs_send_attribute cmd_attrs[__BTRFS_SEND_A_MAX + 1];
 	u32 version;
 
 	/*
@@ -183,7 +183,7 @@ static int read_cmd(struct btrfs_send_stream *sctx)
 		}
 		tlv_type = le16_to_cpu(*(__le16 *)data);
 
-		if (tlv_type == 0 || tlv_type > BTRFS_SEND_A_MAX) {
+		if (tlv_type == 0 || tlv_type > __BTRFS_SEND_A_MAX) {
 			error("invalid tlv in cmd tlv_type = %hu", tlv_type);
 			ret = -EINVAL;
 			goto out;
@@ -228,7 +228,7 @@ static int tlv_get(struct btrfs_send_stream *sctx, int attr, void **data, int *l
 	int ret;
 	struct btrfs_send_attribute *send_attr;
 
-	if (attr <= 0 || attr > BTRFS_SEND_A_MAX) {
+	if (attr <= 0 || attr > __BTRFS_SEND_A_MAX) {
 		error("invalid attribute requested, attr = %d", attr);
 		ret = -EINVAL;
 		goto out;

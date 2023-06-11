@@ -21,6 +21,7 @@
 #include <string.h>
 #include <uuid/uuid.h>
 #include "kernel-lib/sizes.h"
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/extent_io.h"
 #include "kernel-shared/disk-io.h"
@@ -29,7 +30,6 @@
 #include "common/messages.h"
 #include "mkfs/common.h"
 #include "convert/common.h"
-#include "ioctl.h"
 
 #define BTRFS_CONVERT_META_GROUP_SIZE SZ_32M
 
@@ -44,7 +44,7 @@ static int reserve_free_space(struct cache_tree *free_tree, u64 len,
 	struct cache_extent *cache;
 	int found = 0;
 
-	ASSERT(ret_start != NULL);
+	UASSERT(ret_start != NULL);
 	cache = first_cache_extent(free_tree);
 	while (cache) {
 		if (cache->size > len) {
@@ -807,7 +807,7 @@ int make_convert_btrfs(int fd, struct btrfs_mkfs_config *cfg,
 	int ret;
 
 	/* Source filesystem must be opened, checked and analyzed in advance */
-	ASSERT(!cache_tree_empty(used_space));
+	UASSERT(!cache_tree_empty(used_space));
 
 	/*
 	 * reserve space for temporary superblock first

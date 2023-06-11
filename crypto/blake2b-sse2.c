@@ -23,10 +23,14 @@
 #ifdef HAVE_SSE2
 
 #include <emmintrin.h>
+#if defined(HAVE_SSSE3)
+#include <tmmintrin.h>
+#endif
 #if defined(HAVE_XOP)
 #include <x86intrin.h>
 #endif
 
+#include "blake2b-load-sse2.h"
 #include "blake2b-round.h"
 
 static const uint64_t blake2b_IV[8] =

@@ -1,10 +1,10 @@
 AC_INIT([btrfs-progs],
 	m4_flatten(m4_include([VERSION])),
 	[linux-btrfs@vger.kernel.org],,
-	[http://btrfs.wiki.kernel.org])
+	[https://btrfs.readthedocs.io])
 
 if test "x$PACKAGE_URL" = "x"; then
-	AC_DEFINE([PACKAGE_URL], ["http://btrfs.wiki.kernel.org"], [URL])
+	AC_DEFINE([PACKAGE_URL], ["https://btrfs.readthedocs.io"], [URL])
 fi
 
 dnl Package version
@@ -30,6 +30,7 @@ AC_SUBST([CFLAGS])
 AC_PREREQ([2.60])
 
 AC_CONFIG_AUX_DIR([config])
+AC_CONFIG_MACRO_DIR([config])
 dnl AC_USE_SYSTEM_EXTENSIONS must be called before any macros that run
 dnl the compiler (like AC_PROG_LIBTOOL) to avoid autoconf errors.
 AC_USE_SYSTEM_EXTENSIONS
@@ -42,6 +43,18 @@ AC_CANONICAL_HOST
 AC_C_CONST
 AC_C_VOLATILE
 AC_C_BIGENDIAN
+
+AX_CHECK_COMPILE_FLAG([-msse2], [HAVE_CFLAG_msse2=1], [HAVE_CFLAG_msse2=0])
+AC_SUBST([HAVE_CFLAG_msse2])
+AC_DEFINE_UNQUOTED([HAVE_CFLAG_msse2], [$HAVE_CFLAG_msse2], [Compiler supports -msse2])
+
+AX_CHECK_COMPILE_FLAG([-msse4.1], [HAVE_CFLAG_msse41=1], [HAVE_CFLAG_msse41=0])
+AC_SUBST([HAVE_CFLAG_msse41])
+AC_DEFINE_UNQUOTED([HAVE_CFLAG_msse41], [$HAVE_CFLAG_msse41], [Compiler supports -msse4.1])
+
+AX_CHECK_COMPILE_FLAG([-mavx2], [HAVE_CFLAG_mavx2=1], [HAVE_CFLAG_mavx2=0])
+AC_SUBST([HAVE_CFLAG_mavx2])
+AC_DEFINE_UNQUOTED([HAVE_CFLAG_mavx2], [$HAVE_CFLAG_mavx2], [Compiler supports -mavx2])
 
 AX_CHECK_COMPILE_FLAG([-msha], [HAVE_CFLAG_msha=1], [HAVE_CFLAG_msha=0])
 AC_SUBST([HAVE_CFLAG_msha])
@@ -73,6 +86,7 @@ AX_GCC_BUILTIN([__builtin_mul_overflow])
 AC_CHECK_HEADERS([linux/perf_event.h])
 AC_CHECK_HEADERS([linux/hw_breakpoint.h])
 AC_CHECK_HEADERS([linux/fsverity.h])
+AC_CHECK_HEADERS([printf.h])
 
 if grep -q 'HAVE_LINUX_FSVERITY_H.*1' confdefs.h; then
 	have_fsverity='yes'
@@ -224,29 +238,38 @@ AC_ARG_WITH([crypto],
 cryptoprovider=
 cryptoproviderversion=
 CRYPTOPROVIDER_BUILTIN=0
+CRYPTOPROVIDER_LIBGCRYPT=0
+CRYPTOPROVIDER_LIBSODIUM=0
+CRYPTOPROVIDER_LIBKCAPI=0
 if test "$with_crypto" = "builtin"; then
 	cryptoprovider="builtin"
 	CRYPTOPROVIDER_BUILTIN=1
-	AC_DEFINE([CRYPTOPROVIDER_BUILTIN],[1],[Use builtin implementation])
 elif test "$with_crypto" = "libgcrypt"; then
 	cryptoprovider="libgcrypt"
 	PKG_CHECK_MODULES(GCRYPT, [libgcrypt >= 1.8.0])
-	AC_DEFINE([CRYPTOPROVIDER_LIBGCRYPT],[1],[Use libcrypt])
+	CRYPTOPROVIDER_LIBGCRYPT=1
 	cryptoproviderversion=`${PKG_CONFIG} libgcrypt --version`
 elif test "$with_crypto" = "libsodium"; then
 	cryptoprovider="libsodium"
 	PKG_CHECK_MODULES(SODIUM, [libsodium >= 1.0.4])
-	AC_DEFINE([CRYPTOPROVIDER_LIBSODIUM],[1],[Use libsodium])
+	CRYPTOPROVIDER_LIBSODIUM=1
 	cryptoproviderversion=`${PKG_CONFIG} libsodium --version`
 elif test "$with_crypto" = "libkcapi"; then
 	cryptoprovider="libkcapi"
 	PKG_CHECK_MODULES(KCAPI, [libkcapi >= 1.0.0])
-	AC_DEFINE([CRYPTOPROVIDER_LIBKCAPI],[1],[Use libkcapi])
+	CRYPTOPROVIDER_LIBKCAPI=1
 	cryptoproviderversion=`${PKG_CONFIG} libkcapi --version`
 else
 	AC_MSG_ERROR([unrecognized crypto provider: $with_crypto])
 fi
 AC_SUBST([CRYPTOPROVIDER_BUILTIN])
+AC_DEFINE_UNQUOTED([CRYPTOPROVIDER_BUILTIN],[$CRYPTOPROVIDER_BUILTIN],[Use builtin implementation])
+AC_SUBST([CRYPTOPROVIDER_LIBGCRYPT])
+AC_DEFINE_UNQUOTED([CRYPTOPROVIDER_LIBGCRYPT],[$CRYPTOPROVIDER_LIBGCRYPT],[Use libcrypt])
+AC_SUBST([CRYPTOPROVIDER_LIBSODIUM])
+AC_DEFINE_UNQUOTED([CRYPTOPROVIDER_LIBSODIUM],[$CRYPTOPROVIDER_LIBSODIUM],[Use libsodium])
+AC_SUBST([CRYPTOPROVIDER_LIBKCAPI])
+AC_DEFINE_UNQUOTED([CRYPTOPROVIDER_LIBKCAPI],[$CRYPTOPROVIDER_LIBKCAPI],[Use libkcapi])
 AC_DEFINE_UNQUOTED([CRYPTOPROVIDER],["$cryptoprovider"],[Crypto implementation source name])
 
 AX_CHECK_DEFINE([linux/fiemap.h], [FIEMAP_EXTENT_SHARED], [],

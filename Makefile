@@ -84,7 +84,8 @@ DISABLE_WARNING_FLAGS := $(call cc-disable-warning, format-truncation) \
 	$(call cc-disable-warning, address-of-packed-member)
 
 # Warnings that we want by default
-ENABLE_WARNING_FLAGS := $(call cc-option, -Wimplicit-fallthrough)
+ENABLE_WARNING_FLAGS := $(call cc-option, -Wimplicit-fallthrough) \
+			$(call cc-option, -Wmissing-prototypes)
 
 # Common build flags
 CFLAGS = $(SUBST_CFLAGS) \
@@ -130,13 +131,17 @@ LIBBTRFSUTIL_LDFLAGS = $(SUBST_LDFLAGS) \
 # Default implementation
 CRYPTO_OBJECTS =
 
-ifeq ($(shell uname -m),x86_64)
+ifeq ($(HAVE_CFLAG_msse2),1)
 crypto_blake2b_sse2_cflags = -msse2
+endif
+ifeq ($(HAVE_CFLAG_msse41),1)
 crypto_blake2b_sse41_cflags = -msse4.1
+endif
+ifeq ($(HAVE_CFLAG_mavx2),1)
 crypto_blake2b_avx2_cflags = -mavx2
+endif
 ifeq ($(HAVE_CFLAG_msha),1)
 crypto_sha256_x86_cflags = -msse4.1 -msha
-endif
 endif
 
 LIBS = $(LIBS_BASE) $(LIBS_CRYPTO)
@@ -162,11 +167,14 @@ objects = \
 	kernel-lib/raid56.o	\
 	kernel-lib/rbtree.o	\
 	kernel-lib/tables.o	\
+	kernel-shared/accessors.o	\
+	kernel-shared/async-thread.o	\
 	kernel-shared/backref.o \
 	kernel-shared/ctree.o	\
 	kernel-shared/delayed-ref.o	\
 	kernel-shared/dir-item.o	\
 	kernel-shared/disk-io.o	\
+	kernel-shared/extent-io-tree.o	\
 	kernel-shared/extent-tree.o	\
 	kernel-shared/extent_io.o	\
 	kernel-shared/file-item.o	\
@@ -175,9 +183,12 @@ objects = \
 	kernel-shared/free-space-tree.o	\
 	kernel-shared/inode-item.o	\
 	kernel-shared/inode.o	\
+	kernel-shared/locking.o	\
+	kernel-shared/messages.o	\
 	kernel-shared/print-tree.o	\
 	kernel-shared/root-tree.o	\
 	kernel-shared/transaction.o	\
+	kernel-shared/tree-checker.o	\
 	kernel-shared/ulist.o	\
 	kernel-shared/uuid-tree.o	\
 	kernel-shared/volumes.o	\
@@ -246,7 +257,7 @@ convert_objects = convert/main.o convert/common.o convert/source-fs.o \
 mkfs_objects = mkfs/main.o mkfs/common.o mkfs/rootdir.o
 image_objects = image/main.o image/sanitize.o
 tune_objects = tune/main.o tune/seeding.o tune/change-uuid.o tune/change-metadata-uuid.o \
-	       tune/convert-bgt.o tune/change-csum.o
+	       tune/convert-bgt.o tune/change-csum.o check/clear-cache.o
 all_objects = $(objects) $(cmds_objects) $(libbtrfs_objects) $(convert_objects) \
 	      $(mkfs_objects) $(image_objects) $(tune_objects) $(libbtrfsutil_objects)
 
@@ -510,7 +521,7 @@ test-json: json-formatter-test
 		max=`./json-formatter-test`;				\
 		for testno in `seq 1 $$max`; do				\
 			echo "    [TEST/json]  $$testno";		\
-			./json-formatter-test $$testno | jq >& /dev/null; \
+			./json-formatter-test $$testno | jq >/dev/null; \
 		done							\
 	}
 
@@ -520,7 +531,7 @@ test-string-table: string-table-test
 		max=`./string-table-test`;				\
 		for testno in `seq 1 $$max`; do				\
 			echo "    [TEST/s-t]  $$testno";		\
-			./string-table-test $$testno ;			\
+			./string-table-test $$testno >/dev/null;	\
 		done							\
 	}
 
@@ -696,15 +707,15 @@ quick-test: quick-test.o $(objects) libbtrfsutil.a $(libs_shared)
 	@echo "    [LD]     $@"
 	$(Q)$(CC) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-ioctl-test.o: tests/ioctl-test.c include/ioctl.h include/kerncompat.h kernel-shared/ctree.h
+ioctl-test.o: tests/ioctl-test.c kernel-shared/uapi/btrfs.h include/kerncompat.h kernel-shared/ctree.h
 	@echo "    [CC]     $@"
 	$(Q)$(CC) $(CFLAGS) -c $< -o $@
 
-ioctl-test-32.o: tests/ioctl-test.c include/ioctl.h include/kerncompat.h kernel-shared/ctree.h
+ioctl-test-32.o: tests/ioctl-test.c kernel-shared/uapi/btrfs.h include/kerncompat.h kernel-shared/ctree.h
 	@echo "    [CC32]   $@"
 	$(Q)$(CC) $(CFLAGS) -m32 -c $< -o $@
 
-ioctl-test-64.o: tests/ioctl-test.c include/ioctl.h include/kerncompat.h kernel-shared/ctree.h
+ioctl-test-64.o: tests/ioctl-test.c kernel-shared/uapi/btrfs.h include/kerncompat.h kernel-shared/ctree.h
 	@echo "    [CC64]   $@"
 	$(Q)$(CC) $(CFLAGS) -m64 -c $< -o $@
 
@@ -854,7 +865,7 @@ clean-gen:
 		Documentation/Makefile tags TAGS \
 		cscope.files cscope.out cscope.in.out cscope.po.out \
 		config.log include/config.h include/config.h.in~ aclocal.m4 \
-		configure autom4te.cache/ config/
+		configure autom4te.cache/
 
 clean-dep:
 	@echo "Cleaning dependency files"

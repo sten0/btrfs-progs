@@ -1,13 +1,12 @@
 #!/bin/bash
 # Basic check if mkfs supports the runtime feature free-space-tree
 
-source "$TEST_TOP/common"
+source "$TEST_TOP/common" || exit
 
 check_prereq mkfs.btrfs
 check_prereq btrfs
 
 setup_root_helper
-
 setup_loopdevs 4
 prepare_loopdevs
 dev1=${loopdevs[1]}

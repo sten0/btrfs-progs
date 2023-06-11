@@ -27,11 +27,12 @@
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/print-tree.h"
 #include "kernel-shared/transaction.h"
-#include "crypto/crc32c.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/free-space-cache.h"
 #include "kernel-shared/free-space-tree.h"
 #include "kernel-shared/zoned.h"
+#include "kernel-shared/file-item.h"
+#include "crypto/crc32c.h"
 #include "common/utils.h"
 
 #define PENDING_EXTENT_INSERT 0
@@ -73,7 +74,7 @@ static int remove_sb_from_cache(struct btrfs_root *root,
 		BUG_ON(ret);
 		while (nr--) {
 			clear_extent_dirty(free_space_cache, logical[nr],
-				logical[nr] + stripe_len - 1);
+				logical[nr] + stripe_len - 1, NULL);
 		}
 		kfree(logical);
 	}
@@ -141,7 +142,7 @@ static int cache_block_group(struct btrfs_root *root,
 			if (key.objectid > last) {
 				hole_size = key.objectid - last;
 				set_extent_dirty(free_space_cache, last,
-						 last + hole_size - 1);
+						 last + hole_size - 1, GFP_NOFS);
 			}
 			if (key.type == BTRFS_METADATA_ITEM_KEY)
 				last = key.objectid + root->fs_info->nodesize;
@@ -154,7 +155,8 @@ next:
 
 	if (block_group->start + block_group->length > last) {
 		hole_size = block_group->start + block_group->length - last;
-		set_extent_dirty(free_space_cache, last, last + hole_size - 1);
+		set_extent_dirty(free_space_cache, last, last + hole_size - 1,
+				 GFP_NOFS);
 	}
 	remove_sb_from_cache(root, block_group);
 	block_group->cached = 1;
@@ -294,7 +296,8 @@ again:
 
 	while(1) {
 		ret = find_first_extent_bit(&root->fs_info->free_space_cache,
-					    last, &start, &end, EXTENT_DIRTY);
+					    last, &start, &end, EXTENT_DIRTY,
+					    NULL);
 		if (ret) {
 			goto new_group;
 		}
@@ -1238,11 +1241,10 @@ static int remove_extent_backref(struct btrfs_trans_handle *trans,
 }
 
 int btrfs_inc_extent_ref(struct btrfs_trans_handle *trans,
-			 struct btrfs_root *root,
 			 u64 bytenr, u64 num_bytes, u64 parent,
 			 u64 root_objectid, u64 owner, u64 offset)
 {
-	struct btrfs_root *extent_root = btrfs_extent_root(root->fs_info,
+	struct btrfs_root *extent_root = btrfs_extent_root(trans->fs_info,
 							   bytenr);
 	struct btrfs_path *path;
 	struct extent_buffer *leaf;
@@ -1371,26 +1373,29 @@ out:
 	return ret;
 }
 
-int btrfs_set_block_flags(struct btrfs_trans_handle *trans, u64 bytenr,
-			  int level, u64 flags)
+int btrfs_set_disk_extent_flags(struct btrfs_trans_handle *trans,
+				struct extent_buffer *eb, u64 flags)
 {
 	struct btrfs_fs_info *fs_info = trans->fs_info;
-	struct btrfs_root *extent_root = btrfs_extent_root(fs_info, bytenr);
+	struct btrfs_root *extent_root;
 	struct btrfs_path *path;
 	int ret;
 	struct btrfs_key key;
 	struct extent_buffer *l;
 	struct btrfs_extent_item *item;
 	u32 item_size;
+	u64 bytenr = eb->start;
 	int skinny_metadata = btrfs_fs_incompat(fs_info, SKINNY_METADATA);
 
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
 
+	extent_root = btrfs_extent_root(fs_info, bytenr);
+
 	key.objectid = bytenr;
 	if (skinny_metadata) {
-		key.offset = level;
+		key.offset = btrfs_header_level(eb);
 		key.type = BTRFS_METADATA_ITEM_KEY;
 	} else {
 		key.offset = fs_info->nodesize;
@@ -1460,14 +1465,13 @@ static int __btrfs_mod_ref(struct btrfs_trans_handle *trans,
 	int level;
 	int ret = 0;
 	int (*process_func)(struct btrfs_trans_handle *trans,
-			    struct btrfs_root *root,
 			    u64, u64, u64, u64, u64, u64);
 
 	ref_root = btrfs_header_owner(buf);
 	nritems = btrfs_header_nritems(buf);
 	level = btrfs_header_level(buf);
 
-	if (!root->ref_cows && level == 0)
+	if (!test_bit(BTRFS_ROOT_SHAREABLE, &root->state) && level == 0)
 		return 0;
 
 	if (inc)
@@ -1497,9 +1501,8 @@ static int __btrfs_mod_ref(struct btrfs_trans_handle *trans,
 
 			num_bytes = btrfs_file_extent_disk_num_bytes(buf, fi);
 			key.offset -= btrfs_file_extent_offset(buf, fi);
-			ret = process_func(trans, root, bytenr, num_bytes,
-					   parent, ref_root, key.objectid,
-					   key.offset);
+			ret = process_func(trans, bytenr, num_bytes, parent,
+					   ref_root, key.objectid, key.offset);
 			if (ret) {
 				WARN_ON(1);
 				goto fail;
@@ -1507,8 +1510,8 @@ static int __btrfs_mod_ref(struct btrfs_trans_handle *trans,
 		} else {
 			bytenr = btrfs_node_blockptr(buf, i);
 			num_bytes = root->fs_info->nodesize;
-			ret = process_func(trans, root, bytenr, num_bytes,
-					   parent, ref_root, level - 1, 0);
+			ret = process_func(trans, bytenr, num_bytes, parent,
+					   ref_root, level - 1, 0);
 			if (ret) {
 				WARN_ON(1);
 				goto fail;
@@ -1551,8 +1554,14 @@ static int update_block_group_item(struct btrfs_trans_handle *trans,
 	 */
 	if (btrfs_super_flags(fs_info->super_copy) &
 	    BTRFS_SUPER_FLAG_CHANGING_BG_TREE &&
-	    cache->start >= fs_info->last_converted_bg_bytenr)
-		root = fs_info->block_group_root;
+	    cache->start >= fs_info->last_converted_bg_bytenr) {
+		if (btrfs_fs_compat_ro(fs_info, BLOCK_GROUP_TREE))
+			/* Converting back to extent tree. */
+			root = btrfs_extent_root(fs_info, 0);
+		else
+			/* Convert to new bg tree.*/
+			root = fs_info->block_group_root;
+	}
 
 	key.objectid = cache->start;
 	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
@@ -1796,7 +1805,8 @@ static int update_block_group(struct btrfs_trans_handle *trans, u64 bytenr,
 			cache->space_info->bytes_used -= num_bytes;
 			if (mark_free) {
 				set_extent_dirty(&info->free_space_cache,
-						bytenr, bytenr + num_bytes - 1);
+						bytenr, bytenr + num_bytes - 1,
+						GFP_NOFS);
 			}
 		}
 		cache->used = old_val;
@@ -1814,10 +1824,10 @@ static int update_pinned_extents(struct btrfs_fs_info *fs_info,
 
 	if (pin) {
 		set_extent_dirty(&fs_info->pinned_extents,
-				bytenr, bytenr + num - 1);
+				bytenr, bytenr + num - 1, GFP_NOFS);
 	} else {
 		clear_extent_dirty(&fs_info->pinned_extents,
-				bytenr, bytenr + num - 1);
+				bytenr, bytenr + num - 1, NULL);
 	}
 	while (num > 0) {
 		cache = btrfs_lookup_block_group(fs_info, bytenr);
@@ -1854,13 +1864,13 @@ void btrfs_finish_extent_commit(struct btrfs_trans_handle *trans)
 
 	while(1) {
 		ret = find_first_extent_bit(pinned_extents, 0, &start, &end,
-					    EXTENT_DIRTY);
+					    EXTENT_DIRTY, NULL);
 		if (ret)
 			break;
 		update_pinned_extents(trans->fs_info, start, end + 1 - start,
 				      0);
-		clear_extent_dirty(pinned_extents, start, end);
-		set_extent_dirty(free_space_cache, start, end);
+		clear_extent_dirty(pinned_extents, start, end, NULL);
+		set_extent_dirty(free_space_cache, start, end, GFP_NOFS);
 	}
 }
 
@@ -1882,13 +1892,13 @@ static int pin_down_bytes(struct btrfs_trans_handle *trans, u64 bytenr,
 	 * reuse anything from the tree log root because
 	 * it has tiny sub-transactions.
 	 */
-	if (btrfs_buffer_uptodate(buf, 0)) {
+	if (btrfs_buffer_uptodate(buf, 0, 0)) {
 		u64 header_owner = btrfs_header_owner(buf);
 		u64 header_transid = btrfs_header_generation(buf);
 		if (header_owner != BTRFS_TREE_LOG_OBJECTID &&
 		    header_transid == trans->transid &&
 		    !btrfs_header_flag(buf, BTRFS_HEADER_FLAG_WRITTEN)) {
-			clean_tree_block(buf);
+			btrfs_clear_buffer_dirty(buf);
 			free_extent_buffer(buf);
 			return 1;
 		}
@@ -2109,7 +2119,11 @@ static int __free_extent(struct btrfs_trans_handle *trans,
 		btrfs_release_path(path);
 
 		if (is_data) {
-			ret = btrfs_del_csums(trans, bytenr, num_bytes);
+			struct btrfs_root *csum_root;
+
+			csum_root = btrfs_csum_root(trans->fs_info, bytenr);
+			ret = btrfs_del_csums(trans, csum_root, bytenr,
+					      num_bytes);
 			BUG_ON(ret);
 		}
 
@@ -2125,13 +2139,10 @@ fail:
 	return ret;
 }
 
-int btrfs_free_tree_block(struct btrfs_trans_handle *trans,
-			  struct btrfs_root *root,
-			  struct extent_buffer *buf,
-			  u64 parent, int last_ref)
+int btrfs_free_tree_block(struct btrfs_trans_handle *trans, u64 root_id,
+			  struct extent_buffer *buf, u64 parent, int last_ref)
 {
-	return btrfs_free_extent(trans, root, buf->start, buf->len, parent,
-				 root->root_key.objectid,
+	return btrfs_free_extent(trans, buf->start, buf->len, parent, root_id,
 				 btrfs_header_level(buf), 0);
 }
 
@@ -2140,13 +2151,12 @@ int btrfs_free_tree_block(struct btrfs_trans_handle *trans,
  */
 
 int btrfs_free_extent(struct btrfs_trans_handle *trans,
-		      struct btrfs_root *root,
 		      u64 bytenr, u64 num_bytes, u64 parent,
 		      u64 root_objectid, u64 owner, u64 offset)
 {
 	int ret;
 
-	WARN_ON(num_bytes < root->fs_info->sectorsize);
+	WARN_ON(num_bytes < trans->fs_info->sectorsize);
 	/*
 	 * tree log blocks never actually go into the extent allocation
 	 * tree, just update pinning info and exit early.
@@ -2243,20 +2253,23 @@ check_failed:
 	}
 
 	if (test_range_bit(&info->extent_ins, ins->objectid,
-			   ins->objectid + num_bytes -1, EXTENT_LOCKED, 0)) {
+			   ins->objectid + num_bytes -1, EXTENT_LOCKED, 0,
+			   NULL)) {
 		search_start = ins->objectid + num_bytes;
 		goto new_group;
 	}
 
 	if (test_range_bit(&info->pinned_extents, ins->objectid,
-			   ins->objectid + num_bytes -1, EXTENT_DIRTY, 0)) {
+			   ins->objectid + num_bytes -1, EXTENT_DIRTY, 0,
+			   NULL)) {
 		search_start = ins->objectid + num_bytes;
 		goto new_group;
 	}
 
 	if (info->excluded_extents &&
 	    test_range_bit(info->excluded_extents, ins->objectid,
-			   ins->objectid + num_bytes -1, EXTENT_DIRTY, 0)) {
+			   ins->objectid + num_bytes -1, EXTENT_DIRTY, 0,
+			   NULL)) {
 		search_start = ins->objectid + num_bytes;
 		goto new_group;
 	}
@@ -2341,11 +2354,11 @@ int btrfs_reserve_extent(struct btrfs_trans_handle *trans,
 	}
 
 	/*
-	 * Also preallocate metadata for csum tree and fs trees (root->ref_cows
-	 * already set), as they can consume a lot of metadata space.
-	 * Pre-allocate to avoid unexpected ENOSPC.
+	 * Also preallocate metadata for csum tree and fs trees
+	 * (BTRFS_ROOT_SHAREABLE already set) as they can consume a lot of
+	 * metadata space.  Pre-allocate to avoid unexpected ENOSPC.
 	 */
-	if (root->ref_cows ||
+	if (test_bit(BTRFS_ROOT_SHAREABLE, &root->state) ||
 	    root->root_key.objectid == BTRFS_CSUM_TREE_OBJECTID) {
 		if (!(profile & BTRFS_BLOCK_GROUP_METADATA)) {
 			ret = do_chunk_alloc(trans, info,
@@ -2366,7 +2379,8 @@ int btrfs_reserve_extent(struct btrfs_trans_handle *trans,
 	if (ret < 0)
 		return ret;
 	clear_extent_dirty(&info->free_space_cache,
-			   ins->objectid, ins->objectid + ins->offset - 1);
+			   ins->objectid, ins->objectid + ins->offset - 1,
+			   NULL);
 	return ret;
 }
 
@@ -2407,7 +2421,7 @@ static int alloc_reserved_tree_block(struct btrfs_trans_handle *trans,
 	if (ref->root == BTRFS_EXTENT_TREE_OBJECTID) {
 		ret = find_first_extent_bit(&trans->fs_info->extent_ins,
 					    node->bytenr, &start, &end,
-					    EXTENT_LOCKED);
+					    EXTENT_LOCKED, NULL);
 		ASSERT(!ret);
 		ASSERT(start == node->bytenr);
 		ASSERT(end == node->bytenr + node->num_bytes - 1);
@@ -2536,11 +2550,12 @@ static int alloc_tree_block(struct btrfs_trans_handle *trans,
  * helper function to allocate a block for a given tree
  * returns the tree buffer or NULL.
  */
-struct extent_buffer *btrfs_alloc_free_block(struct btrfs_trans_handle *trans,
+struct extent_buffer *btrfs_alloc_tree_block(struct btrfs_trans_handle *trans,
 					struct btrfs_root *root,
 					u32 blocksize, u64 root_objectid,
 					struct btrfs_disk_key *key, int level,
-					u64 hint, u64 empty_size)
+					u64 hint, u64 empty_size,
+					enum btrfs_lock_nesting nest)
 {
 	struct btrfs_key ins;
 	int ret;
@@ -2556,8 +2571,8 @@ struct extent_buffer *btrfs_alloc_free_block(struct btrfs_trans_handle *trans,
 
 	buf = btrfs_find_create_tree_block(root->fs_info, ins.objectid);
 	if (!buf) {
-		btrfs_free_extent(trans, root, ins.objectid, ins.offset,
-				  0, root->root_key.objectid, level, 0);
+		btrfs_free_extent(trans, ins.objectid, ins.offset, 0,
+				  root->root_key.objectid, level, 0);
 		BUG_ON(1);
 		return ERR_PTR(-ENOMEM);
 	}
@@ -2589,10 +2604,10 @@ int btrfs_free_block_groups(struct btrfs_fs_info *info)
 
 	while(1) {
 		ret = find_first_extent_bit(&info->free_space_cache, 0,
-					    &start, &end, EXTENT_DIRTY);
+					    &start, &end, EXTENT_DIRTY, NULL);
 		if (ret)
 			break;
-		clear_extent_dirty(&info->free_space_cache, start, end);
+		clear_extent_dirty(&info->free_space_cache, start, end, NULL);
 	}
 
 	while (!list_empty(&info->space_info)) {
@@ -2741,6 +2756,56 @@ static int get_last_converted_bg(struct btrfs_fs_info *fs_info)
 	struct btrfs_key key = {0};
 	int ret;
 
+	/* Converting back to extent tree case. */
+	if (btrfs_fs_compat_ro(fs_info, BLOCK_GROUP_TREE)) {
+		struct btrfs_root *extent_root = btrfs_extent_root(fs_info, 0);
+
+		/* Load the first bg in bg tree. */
+		ret = btrfs_search_slot(NULL, bg_root, &key, &path, 0, 0);
+		if (ret < 0)
+			return ret;
+		ASSERT(ret > 0);
+		/* We should always be at the slot 0 of the first leaf. */
+		ASSERT(path.slots[0] == 0);
+
+		key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+
+		/* Empty bg tree, all converted, then grab the first bg. */
+		if (btrfs_header_nritems(path.nodes[0]) == 0) {
+			btrfs_release_path(&path);
+			ret = find_first_block_group(extent_root, &path, &key);
+			/* We should have at least one bg item in extent tree. */
+			ASSERT(ret == 0);
+
+			btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
+			fs_info->last_converted_bg_bytenr = key.objectid;
+			goto out;
+		}
+		btrfs_release_path(&path);
+
+		/* Grab the last bg in extent tree as the last converted one. */
+		key.objectid = (u64)-1;
+		key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+		key.offset = (u64)-1;
+
+		ret = btrfs_search_slot(NULL, extent_root, &key, &path, 0, 0);
+		if (ret < 0)
+			goto out;
+		ASSERT(ret > 0);
+		ret = btrfs_previous_item(extent_root, &path, 0, BTRFS_BLOCK_GROUP_ITEM_KEY);
+		if (ret < 0)
+			goto out;
+
+		/* No converted bg item in extent tree.*/
+		if (ret > 0) {
+			ret = 0;
+			fs_info->last_converted_bg_bytenr = (u64)-1;
+			goto out;
+		}
+		btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
+		fs_info->last_converted_bg_bytenr = key.objectid;
+		goto out;
+	}
 	/* Load the first bg in bg tree, that would be our last converted bg. */
 	ret = btrfs_search_slot(NULL, bg_root, &key, &path, 0, 0);
 	if (ret < 0)
@@ -2758,7 +2823,6 @@ static int get_last_converted_bg(struct btrfs_fs_info *fs_info)
 	btrfs_item_key_to_cpu(path.nodes[0], &key, path.slots[0]);
 	ASSERT(key.type == BTRFS_BLOCK_GROUP_ITEM_KEY);
 	fs_info->last_converted_bg_bytenr = key.objectid;
-
 out:
 	btrfs_release_path(&path);
 	return ret;
@@ -2881,12 +2945,19 @@ out:
 
 static int read_converting_block_groups(struct btrfs_fs_info *fs_info)
 {
-	struct btrfs_root *old_root = btrfs_extent_root(fs_info, 0);
-	struct btrfs_root *new_root = btrfs_block_group_root(fs_info);
+	struct btrfs_root *old_root;
+	struct btrfs_root *new_root;
 	int ret;
 
-	/* Currently we only support converting to bg tree feature. */
-	ASSERT(!btrfs_fs_compat_ro(fs_info, BLOCK_GROUP_TREE));
+	if (btrfs_fs_compat_ro(fs_info, BLOCK_GROUP_TREE)) {
+		/* Converting back to extent tree. */
+		old_root = fs_info->block_group_root;
+		new_root = btrfs_extent_root(fs_info, 0);
+	} else {
+		/* Converting to block group tree. */
+		old_root = btrfs_extent_root(fs_info, 0);
+		new_root = fs_info->block_group_root;
+	}
 
 	ret = get_last_converted_bg(fs_info);
 	if (ret < 0) {
@@ -2994,8 +3065,15 @@ static int insert_block_group_item(struct btrfs_trans_handle *trans,
 	 */
 	if (btrfs_super_flags(fs_info->super_copy) &
 	    BTRFS_SUPER_FLAG_CHANGING_BG_TREE &&
-	    block_group->start >= fs_info->last_converted_bg_bytenr)
-		root = fs_info->block_group_root;
+	    block_group->start >= fs_info->last_converted_bg_bytenr) {
+		if (btrfs_super_compat_ro_flags(fs_info->super_copy) &
+		    BTRFS_FEATURE_COMPAT_RO_BLOCK_GROUP_TREE)
+			/* Converting to extent tree, return extent root. */
+			root = btrfs_extent_root(fs_info, block_group->start);
+		else
+			/* Converting to bg tree, return bg root. */
+			root = fs_info->block_group_root;
+	}
 
 	return btrfs_insert_item(trans, root, &key, &bgi, sizeof(bgi));
 }
@@ -3637,7 +3715,7 @@ static int __btrfs_record_file_extent(struct btrfs_trans_handle *trans,
 	btrfs_set_stack_inode_nbytes(inode, nbytes);
 	btrfs_release_path(path);
 
-	ret = btrfs_inc_extent_ref(trans, root, extent_bytenr, extent_num_bytes,
+	ret = btrfs_inc_extent_ref(trans, extent_bytenr, extent_num_bytes,
 				   0, root->root_key.objectid, objectid,
 				   file_pos - extent_offset);
 	if (ret)
@@ -3764,7 +3842,8 @@ u64 add_new_free_space(struct btrfs_block_group *block_group,
 	while (start < end) {
 		ret = find_first_extent_bit(&info->pinned_extents, start,
 					    &extent_start, &extent_end,
-					    EXTENT_DIRTY | EXTENT_UPTODATE);
+					    EXTENT_DIRTY | EXTENT_UPTODATE,
+					    NULL);
 		if (ret)
 			break;
 
@@ -4041,11 +4120,6 @@ int btrfs_convert_one_bg(struct btrfs_trans_handle *trans, u64 bytenr)
 	ASSERT(old_root);
 	ASSERT(btrfs_super_flags(fs_info->super_copy) &
 	       BTRFS_SUPER_FLAG_CHANGING_BG_TREE);
-	/*
-	 * Only support converting to bg tree yet, thus the feature should not
-	 * be set.
-	 */
-	ASSERT(!btrfs_fs_compat_ro(fs_info, BLOCK_GROUP_TREE));
 
 	bg = btrfs_lookup_block_group(fs_info, bytenr);
 	if (!bg) {

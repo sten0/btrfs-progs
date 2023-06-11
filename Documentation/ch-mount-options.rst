@@ -15,7 +15,7 @@ options please refer to ``mount(8)`` manual page. The options are sorted alphabe
 
 Mount options are processed in order, only the last occurrence of an option
 takes effect and may disable other options due to constraints (see e.g.
-*nodatacow* and *compress*). The output of **mount** command shows which options
+*nodatacow* and *compress*). The output of :command:`mount` command shows which options
 have been applied.
 
 acl, noacl
@@ -43,7 +43,7 @@ autodefrag, noautodefrag
                 Defragmenting with Linux kernel versions < 3.9 or ≥ 3.14-rc2 as
                 well as with Linux stable kernel versions ≥ 3.10.31, ≥ 3.12.12 or
                 ≥ 3.13.4 will break up the reflinks of COW data (for example files
-                copied with **cp --reflink**, snapshots or de-duplicated data).
+                copied with :command:`cp --reflink`, snapshots or de-duplicated data).
                 This may cause considerable increase of space usage depending on the
                 broken up reflinks.
 
@@ -89,8 +89,19 @@ check_int, check_int_data, check_int_print_mask=<value>
         for more information.
 
 clear_cache
-        Force clearing and rebuilding of the disk space cache if something
-        has gone wrong. See also: *space_cache*.
+        Force clearing and rebuilding of the free space cache if something
+        has gone wrong.
+
+        For free space cache *v1*, this only clears (and, unless *nospace_cache* is
+        used, rebuilds) the free space cache for block groups that are modified while
+        the filesystem is mounted with that option. To actually clear an entire free
+        space cache *v1*, see :command:`btrfs check --clear-space-cache v1`.
+
+        For free space cache *v2*, this clears the entire free space cache.
+        To do so without requiring to mounting the filesystem, see
+        :command:`btrfs check --clear-space-cache v2`.
+
+        See also: *space_cache*.
 
 commit=<seconds>
         (since: 3.12, default: 30)
@@ -191,7 +202,7 @@ device=<devicepath>
                 system at that point.
 
 discard, discard=sync, discard=async, nodiscard
-        (default: off, async support since: 5.6)
+        (default: async when devices support it since 6.2, async support since: 5.6)
 
         Enable discarding of freed file blocks.  This is useful for SSD devices, thinly
         provisioned LUNs, or virtual machine images; however, every storage layer must
@@ -207,7 +218,7 @@ discard, discard=sync, discard=async, nodiscard
         negligible compared to the previous mode and it's supposed to be the preferred
         mode if needed.
 
-        If it is not necessary to immediately discard freed blocks, then the ``fstrim``
+        If it is not necessary to immediately discard freed blocks, then the :command:`fstrim`
         tool can be used to discard all free blocks in a batch. Scheduling a TRIM
         during a period of low system activity will prevent latent interference with
         the performance of other operations. Also, a device may ignore the TRIM command
@@ -330,12 +341,12 @@ skip_balance
         (since: 3.3, default: off)
 
         Skip automatic resume of an interrupted balance operation. The operation can
-        later be resumed with **btrfs balance resume**, or the paused state can be
-        removed with **btrfs balance cancel**. The default behaviour is to resume an
+        later be resumed with :command:`btrfs balance resume`, or the paused state can be
+        removed with :command:`btrfs balance cancel`. The default behaviour is to resume an
         interrupted balance immediately after a volume is mounted.
 
 space_cache, space_cache=<version>, nospace_cache
-        (*nospace_cache* since: 3.2, *space_cache=v1* and *space_cache=v2* since 4.5, default: *space_cache=v1*)
+        (*nospace_cache* since: 3.2, *space_cache=v1* and *space_cache=v2* since 4.5, default: *space_cache=v2*)
 
         Options to control the free space cache. The free space cache greatly improves
         performance when reading block group free space into memory. However, managing
@@ -343,22 +354,26 @@ space_cache, space_cache=<version>, nospace_cache
         space.
 
         There are two implementations of the free space cache. The original
-        one, referred to as *v1*, is the safe default. The *v1* space cache can be
-        disabled at mount time with *nospace_cache* without clearing.
+        one, referred to as *v1*, used to be a safe default but has been
+        superseded by *v2*.  The *v1* space cache can be disabled at mount time
+        with *nospace_cache* without clearing.
 
         On very large filesystems (many terabytes) and certain workloads, the
         performance of the *v1* space cache may degrade drastically. The *v2*
         implementation, which adds a new b-tree called the free space tree, addresses
         this issue. Once enabled, the *v2* space cache will always be used and cannot
         be disabled unless it is cleared. Use *clear_cache,space_cache=v1* or
-        *clear_cache,nospace_cache* to do so. If *v2* is enabled, kernels without *v2*
+        *clear_cache,nospace_cache* to do so. If *v2* is enabled, and *v1* space
+        cache will be cleared (at the first mount) and kernels without *v2*
         support will only be able to mount the filesystem in read-only mode.
+        On an unmounted filesystem the caches (both versions) can be cleared by
+        "btrfs check --clear-space-cache".
 
         The :doc:`btrfs-check(8)<btrfs-check>` and `:doc:`mkfs.btrfs(8)<mkfs.btrfs>` commands have full *v2* free space
         cache support since v4.19.
 
         If a version is not explicitly specified, the default implementation will be
-        chosen, which is *v1*.
+        chosen, which is *v2*.
 
 ssd, ssd_spread, nossd, nossd_spread
         (default: SSD autodetected)
@@ -394,7 +409,7 @@ subvol=<path>
 
 subvolid=<subvolid>
         Mount subvolume specified by a *subvolid* number rather than the toplevel
-        subvolume.  You can use **btrfs subvolume list** of **btrfs subvolume show** to see
+        subvolume.  You can use :command:`btrfs subvolume list` of :command:`btrfs subvolume show` to see
         subvolume ID numbers.
         This mount option overrides the default subvolume set for the given filesystem.
 
@@ -468,8 +483,7 @@ inode_cache, noinode_cache
 
         .. note::
                 The functionality has been removed in 5.11, any stale data created by
-                previous use of the *inode_cache* option can be removed by **btrfs check
-                --clear-ino-cache**.
+                previous use of the *inode_cache* option can be removed by :command:`btrfs check --clear-ino-cache`.
 
 
 NOTES ON GENERIC MOUNT OPTIONS

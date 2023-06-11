@@ -28,6 +28,8 @@
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/transaction.h"
 #include "kernel-shared/volumes.h"
+#include "kernel-shared/free-space-cache.h"
+#include "kernel-shared/free-space-tree.h"
 #include "common/utils.h"
 #include "common/open-utils.h"
 #include "common/parse-utils.h"
@@ -38,6 +40,7 @@
 #include "common/box.h"
 #include "cmds/commands.h"
 #include "tune/tune.h"
+#include "check/clear-cache.h"
 
 static char *device;
 static int force = 0;
@@ -60,6 +63,36 @@ static int set_super_incompat_flags(struct btrfs_root *root, u64 flags)
 	return ret;
 }
 
+static int convert_to_fst(struct btrfs_fs_info *fs_info)
+{
+	int ret;
+
+	/* We may have invalid old v2 cache, clear them first. */
+	if (btrfs_fs_compat_ro(fs_info, FREE_SPACE_TREE)) {
+		ret = btrfs_clear_free_space_tree(fs_info);
+		if (ret < 0) {
+			errno = -ret;
+			error("failed to clear stale v2 free space cache: %m");
+			return ret;
+		}
+	}
+	ret = btrfs_clear_v1_cache(fs_info);
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to clear v1 free space cache: %m");
+		return ret;
+	}
+
+	ret = btrfs_create_free_space_tree(fs_info);
+	if (ret < 0) {
+		errno = -ret;
+		error("failed to create free space tree: %m");
+		return ret;
+	}
+	pr_verbose(LOG_DEFAULT, "Converted to free space tree feature\n");
+	return ret;
+}
+
 static const char * const tune_usage[] = {
 	"btrfstune [options] device",
 	"Tune settings of filesystem features on an unmounted device",
@@ -70,6 +103,11 @@ static const char * const tune_usage[] = {
 	OPTLINE("-x", "enable skinny metadata extent refs (mkfs: skinny-metadata)"),
 	OPTLINE("-n", "enable no-holes feature (mkfs: no-holes, more efficient sparse file representation)"),
 	OPTLINE("-S <0|1>", "set/unset seeding status of a device"),
+	OPTLINE("--convert-to-block-group-tree", "convert filesystem to track block groups in "
+			"the separate block-group-tree instead of extent tree (sets the incompat bit)"),
+	OPTLINE("--convert-from-block-group-tree",
+			"convert the block group tree back to extent tree (remove the incompat bit)"),
+	OPTLINE("--convert-to-free-space-tree", "convert filesystem to use free space tree (v2 cache)"),
 	"",
 	"UUID changes:",
 	OPTLINE("-u", "rewrite fsid, use a random one"),
@@ -84,7 +122,6 @@ static const char * const tune_usage[] = {
 	"",
 	"EXPERIMENTAL FEATURES:",
 	OPTLINE("--csum CSUM", "switch checksum for data and metadata to CSUM"),
-	OPTLINE("-b", "enable block group tree (mkfs: block-group-tree, for less mount time)"),
 #endif
 	NULL
 };
@@ -103,7 +140,9 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 	u64 seeding_value = 0;
 	int random_fsid = 0;
 	int change_metadata_uuid = 0;
+	bool to_extent_tree = false;
 	bool to_bg_tree = false;
+	bool to_fst = false;
 	int csum_type = -1;
 	char *new_fsid_str = NULL;
 	int ret;
@@ -113,27 +152,28 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 	btrfs_config_init();
 
 	while(1) {
-		enum { GETOPT_VAL_CSUM = GETOPT_VAL_FIRST };
+		enum { GETOPT_VAL_CSUM = GETOPT_VAL_FIRST,
+		       GETOPT_VAL_ENABLE_BLOCK_GROUP_TREE,
+		       GETOPT_VAL_DISABLE_BLOCK_GROUP_TREE,
+		       GETOPT_VAL_ENABLE_FREE_SPACE_TREE };
 		static const struct option long_options[] = {
 			{ "help", no_argument, NULL, GETOPT_VAL_HELP},
+			{ "convert-to-block-group-tree", no_argument, NULL,
+				GETOPT_VAL_ENABLE_BLOCK_GROUP_TREE},
+			{ "convert-from-block-group-tree", no_argument, NULL,
+				GETOPT_VAL_DISABLE_BLOCK_GROUP_TREE},
+			{ "convert-to-free-space-tree", no_argument, NULL,
+				GETOPT_VAL_ENABLE_FREE_SPACE_TREE},
 #if EXPERIMENTAL
 			{ "csum", required_argument, NULL, GETOPT_VAL_CSUM },
 #endif
 			{ NULL, 0, NULL, 0 }
 		};
-#if EXPERIMENTAL
-		int c = getopt_long(argc, argv, "S:rxfuU:nmM:b", long_options, NULL);
-#else
 		int c = getopt_long(argc, argv, "S:rxfuU:nmM:", long_options, NULL);
-#endif
 
 		if (c < 0)
 			break;
 		switch(c) {
-		case 'b':
-			btrfs_warn_experimental("Feature: conversion to block-group-tree");
-			to_bg_tree = true;
-			break;
 		case 'S':
 			seeding_flag = 1;
 			seeding_value = arg_strtou64(optarg);
@@ -167,6 +207,15 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 			ctree_flags |= OPEN_CTREE_IGNORE_FSID_MISMATCH;
 			change_metadata_uuid = 1;
 			break;
+		case GETOPT_VAL_ENABLE_BLOCK_GROUP_TREE:
+			to_bg_tree = true;
+			break;
+		case GETOPT_VAL_DISABLE_BLOCK_GROUP_TREE:
+			to_extent_tree = true;
+			break;
+		case GETOPT_VAL_ENABLE_FREE_SPACE_TREE:
+			to_fst = true;
+			break;
 #if EXPERIMENTAL
 		case GETOPT_VAL_CSUM:
 			btrfs_warn_experimental(
@@ -191,7 +240,8 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 		return 1;
 	}
 	if (!super_flags && !seeding_flag && !(random_fsid || new_fsid_str) &&
-	    !change_metadata_uuid && csum_type == -1 && !to_bg_tree) {
+	    !change_metadata_uuid && csum_type == -1 && !to_bg_tree &&
+	    !to_extent_tree && !to_fst) {
 		error("at least one option should be specified");
 		usage(&tune_cmd, 1);
 		return 1;
@@ -237,7 +287,12 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 		return 1;
 	}
 
-	if (to_bg_tree) {
+ 	if (to_bg_tree) {
+		if (to_extent_tree) {
+			error("option --convert-to-block-group-tree conflicts with --convert-from-block-group-tree");
+			ret = 1;
+			goto out;
+		}
 		if (btrfs_fs_compat_ro(root->fs_info, BLOCK_GROUP_TREE)) {
 			error("the filesystem already has block group tree feature");
 			ret = 1;
@@ -251,6 +306,35 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 		ret = convert_to_bg_tree(root->fs_info);
 		if (ret < 0) {
 			error("failed to convert the filesystem to block group tree feature");
+			goto out;
+		}
+		goto out;
+	}
+	if (to_fst) {
+		if (btrfs_fs_compat_ro(root->fs_info, FREE_SPACE_TREE_VALID)) {
+			error("filesystem already has free-space-tree feature");
+			ret = 1;
+			goto out;
+		}
+		ret = convert_to_fst(root->fs_info);
+		if (ret < 0)
+			error("failed to convert the filesystem to free-space-tree feature");
+		goto out;
+	}
+	if (to_extent_tree) {
+		if (to_bg_tree) {
+			error("option --convert-to-block-group-tree conflicts with --convert-from-block-group-tree");
+			ret = 1;
+			goto out;
+		}
+		if (!btrfs_fs_compat_ro(root->fs_info, BLOCK_GROUP_TREE)) {
+			error("filesystem doesn't have block-group-tree feature");
+			ret = 1;
+			goto out;
+		}
+		ret = convert_to_extent_tree(root->fs_info);
+		if (ret < 0) {
+			error("failed to convert the filesystem from block group tree feature");
 			goto out;
 		}
 		goto out;
@@ -289,7 +373,7 @@ int BOX_MAIN(btrfstune)(int argc, char *argv[])
 	if (csum_type != -1) {
 		/* TODO: check conflicting flags */
 		pr_verbose(LOG_DEFAULT, "Proceed to switch checksums\n");
-		ret = rewrite_checksums(root->fs_info, csum_type);
+		ret = btrfs_change_csum_type(root->fs_info, csum_type);
 	}
 
 	if (change_metadata_uuid) {

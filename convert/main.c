@@ -99,6 +99,7 @@
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
+#include "kernel-shared/file-item.h"
 #include "crypto/hash.h"
 #include "common/defs.h"
 #include "common/extent-cache.h"
@@ -181,7 +182,8 @@ static int csum_disk_extent(struct btrfs_trans_handle *trans,
 			    struct btrfs_root *root,
 			    u64 disk_bytenr, u64 num_bytes)
 {
-	u32 blocksize = root->fs_info->sectorsize;
+	struct btrfs_fs_info *fs_info = trans->fs_info;
+	u32 blocksize = fs_info->sectorsize;
 	u64 offset;
 	char *buffer;
 	int ret = 0;
@@ -190,14 +192,21 @@ static int csum_disk_extent(struct btrfs_trans_handle *trans,
 	if (!buffer)
 		return -ENOMEM;
 	for (offset = 0; offset < num_bytes; offset += blocksize) {
-		ret = read_disk_extent(root, disk_bytenr + offset,
-					blocksize, buffer);
+		u64 read_len = blocksize;
+
+		ret = read_data_from_disk(fs_info, buffer,
+					  disk_bytenr + offset, &read_len, 0);
 		if (ret)
 			break;
-		ret = btrfs_csum_file_block(trans,
-					    disk_bytenr + num_bytes,
-					    disk_bytenr + offset,
-					    buffer, blocksize);
+		if (read_len == 0) {
+			error("failed to read logical bytenr %llu",
+			      disk_bytenr + offset);
+			ret = -EIO;
+			break;
+		}
+		ret = btrfs_csum_file_block(trans, disk_bytenr + offset,
+					    BTRFS_EXTENT_CSUM_OBJECTID,
+					    fs_info->csum_type, buffer);
 		if (ret)
 			break;
 	}
@@ -358,7 +367,6 @@ static int migrate_one_reserved_range(struct btrfs_trans_handle *trans,
 	u64 hole_len;
 	struct cache_extent *cache;
 	struct btrfs_key key;
-	struct extent_buffer *eb;
 	int ret = 0;
 
 	/*
@@ -369,6 +377,8 @@ static int migrate_one_reserved_range(struct btrfs_trans_handle *trans,
 	 * migrate ranges that covered by old fs data.
 	 */
 	while (cur_off < range_end(range)) {
+		void *buf;
+
 		cache = search_cache_extent(used, cur_off);
 		if (!cache)
 			break;
@@ -390,25 +400,20 @@ static int migrate_one_reserved_range(struct btrfs_trans_handle *trans,
 		if (ret < 0)
 			break;
 
-		eb = malloc(sizeof(*eb) + cur_len);
-		if (!eb) {
+		buf = malloc(cur_len);
+		if (!buf) {
 			ret = -ENOMEM;
 			break;
 		}
 
-		ret = pread(fd, eb->data, cur_len, cur_off);
+		ret = pread(fd, buf, cur_len, cur_off);
 		if (ret < cur_len) {
 			ret = (ret < 0 ? ret : -EIO);
-			free(eb);
+			free(buf);
 			break;
 		}
-		eb->start = key.objectid;
-		eb->len = key.offset;
-		eb->fs_info = root->fs_info;
-
-		/* Write the data */
-		ret = write_and_map_eb(root->fs_info, eb);
-		free(eb);
+		ret = write_data_to_disk(root->fs_info, buf, key.objectid, key.offset);
+		free(buf);
 		if (ret < 0)
 			break;
 
@@ -1167,7 +1172,7 @@ static int do_convert(const char *devname, u32 convert_flags, u32 nodesize,
 	if (ret)
 		goto fail;
 
-	ASSERT(cctx.total_bytes != 0);
+	UASSERT(cctx.total_bytes != 0);
 	blocksize = cctx.blocksize;
 	if (blocksize < 4096) {
 		error("block size is too small: %u < 4096", blocksize);

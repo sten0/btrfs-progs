@@ -58,9 +58,10 @@ static void print_extents(struct extent_buffer *eb)
 
 	nr = btrfs_header_nritems(eb);
 	for (i = 0; i < nr; i++) {
-		next = read_tree_block(fs_info,
-				btrfs_node_blockptr(eb, i),
-				btrfs_node_ptr_generation(eb, i));
+		next = read_tree_block(fs_info, btrfs_node_blockptr(eb, i),
+				       btrfs_header_owner(eb),
+				       btrfs_node_ptr_generation(eb, i),
+				       btrfs_header_level(eb) - 1, NULL);
 		if (!extent_buffer_uptodate(next))
 			continue;
 		if (btrfs_is_leaf(next) && btrfs_header_level(eb) != 1) {
@@ -288,7 +289,7 @@ static int dump_print_tree_blocks(struct btrfs_fs_info *fs_info,
 			goto next;
 		}
 
-		eb = read_tree_block(fs_info, bytenr, 0);
+		eb = read_tree_block(fs_info, bytenr, 0, 0, 0, NULL);
 		if (!extent_buffer_uptodate(eb)) {
 			error("failed to read tree block %llu", bytenr);
 			ret = -EIO;
@@ -341,8 +342,12 @@ static int cmd_inspect_dump_tree(const struct cmd_struct *cmd,
 	 * Use NO_BLOCK_GROUPS here could also speedup open_ctree() and allow us
 	 * to inspect fs with corrupted extent tree blocks, and show as many good
 	 * tree blocks as possible.
+	 *
+	 * And we want to avoid tree-checker, which can rejects the target tree
+	 * block completely, while we may be debugging the problem.
 	 */
-	open_ctree_flags = OPEN_CTREE_PARTIAL | OPEN_CTREE_NO_BLOCK_GROUPS;
+	open_ctree_flags = OPEN_CTREE_PARTIAL | OPEN_CTREE_NO_BLOCK_GROUPS |
+			   OPEN_CTREE_SKIP_LEAF_ITEM_CHECKS;
 	cache_tree_init(&block_root);
 	optind = 0;
 	while (1) {
@@ -625,7 +630,8 @@ again:
 
 			offset = btrfs_item_ptr_offset(leaf, slot);
 			read_extent_buffer(leaf, &ri, offset, sizeof(ri));
-			buf = read_tree_block(info, btrfs_root_bytenr(&ri), 0);
+			buf = read_tree_block(info, btrfs_root_bytenr(&ri),
+					      key.objectid, 0, 0, NULL);
 			if (!extent_buffer_uptodate(buf))
 				goto next;
 			if (tree_id && found_key.objectid != tree_id) {

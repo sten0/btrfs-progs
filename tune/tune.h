@@ -17,6 +17,8 @@
 #ifndef __BTRFS_TUNE_H__
 #define __BTRFS_TUNE_H__
 
+#include <uuid/uuid.h>
+
 struct btrfs_root;
 struct btrfs_fs_info;
 
@@ -28,7 +30,7 @@ int change_uuid(struct btrfs_fs_info *fs_info, const char *new_fsid_str);
 int set_metadata_uuid(struct btrfs_root *root, const char *uuid_string);
 
 int convert_to_bg_tree(struct btrfs_fs_info *fs_info);
+int convert_to_extent_tree(struct btrfs_fs_info *fs_info);
 
-int rewrite_checksums(struct btrfs_fs_info *fs_info, int csum_type);
-
+int btrfs_change_csum_type(struct btrfs_fs_info *fs_info, u16 new_csum_type);
 #endif

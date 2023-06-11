@@ -34,11 +34,13 @@
 #include "kernel-lib/rbtree.h"
 #include "kernel-lib/rbtree_types.h"
 #include "kernel-lib/sizes.h"
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/transaction.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/extent_io.h"
+#include "kernel-shared/file-item.h"
 #include "crypto/crc32c.h"
 #include "crypto/hash.h"
 #include "common/internal.h"
@@ -54,7 +56,6 @@
 #include "cmds/commands.h"
 #include "image/metadump.h"
 #include "image/sanitize.h"
-#include "ioctl.h"
 
 #define MAX_WORKER_THREADS	(32)
 
@@ -474,7 +475,7 @@ static void metadump_destroy(struct metadump_struct *md, int num_threads)
 		free(name->sub);
 		free(name);
 	}
-	extent_io_tree_cleanup(&md->seen);
+	extent_io_tree_release(&md->seen);
 }
 
 static int metadump_init(struct metadump_struct *md, struct btrfs_root *root,
@@ -490,7 +491,7 @@ static int metadump_init(struct metadump_struct *md, struct btrfs_root *root,
 	memset(md, 0, sizeof(*md));
 	INIT_LIST_HEAD(&md->list);
 	INIT_LIST_HEAD(&md->ordered);
-	extent_io_tree_init(&md->seen);
+	extent_io_tree_init(NULL, &md->seen, 0);
 	md->root = root;
 	md->out = out;
 	md->pending_start = (u64)-1;
@@ -691,7 +692,7 @@ static int flush_pending(struct metadump_struct *md, int done)
 		if (start == BTRFS_SUPER_INFO_OFFSET) {
 			int fd = get_dev_fd(md->root);
 
-			ret = pread64(fd, async->buffer, size, start);
+			ret = pread(fd, async->buffer, size, start);
 			if (ret < size) {
 				free(async->buffer);
 				free(async);
@@ -706,7 +707,8 @@ static int flush_pending(struct metadump_struct *md, int done)
 			u64 this_read = min((u64)md->root->fs_info->nodesize,
 					size);
 
-			eb = read_tree_block(md->root->fs_info, start, 0);
+			eb = read_tree_block(md->root->fs_info, start, 0, 0, 0,
+					     NULL);
 			if (!extent_buffer_uptodate(eb)) {
 				free(async->buffer);
 				free(async);
@@ -783,11 +785,12 @@ static int copy_tree_blocks(struct btrfs_root *root, struct extent_buffer *eb,
 
 	bytenr = btrfs_header_bytenr(eb);
 	if (test_range_bit(&metadump->seen, bytenr,
-			   bytenr + fs_info->nodesize - 1, EXTENT_DIRTY, 1))
+			   bytenr + fs_info->nodesize - 1, EXTENT_DIRTY, 1,
+			   NULL))
 		return 0;
 
 	set_extent_dirty(&metadump->seen, bytenr,
-			 bytenr + fs_info->nodesize - 1);
+			 bytenr + fs_info->nodesize - 1, GFP_NOFS);
 
 	ret = add_extent(btrfs_header_bytenr(eb), fs_info->nodesize,
 			 metadump, 0);
@@ -809,7 +812,7 @@ static int copy_tree_blocks(struct btrfs_root *root, struct extent_buffer *eb,
 				continue;
 			ri = btrfs_item_ptr(eb, i, struct btrfs_root_item);
 			bytenr = btrfs_disk_root_bytenr(eb, ri);
-			tmp = read_tree_block(fs_info, bytenr, 0);
+			tmp = read_tree_block(fs_info, bytenr, 0, 0, 0, NULL);
 			if (!extent_buffer_uptodate(tmp)) {
 				error("unable to read log root block");
 				return -EIO;
@@ -820,7 +823,7 @@ static int copy_tree_blocks(struct btrfs_root *root, struct extent_buffer *eb,
 				return ret;
 		} else {
 			bytenr = btrfs_node_blockptr(eb, i);
-			tmp = read_tree_block(fs_info, bytenr, 0);
+			tmp = read_tree_block(fs_info, bytenr, 0, 0, 0, NULL);
 			if (!extent_buffer_uptodate(tmp)) {
 				error("unable to read log root block");
 				return -EIO;
@@ -1022,7 +1025,8 @@ static int create_metadump(const char *input, FILE *out, int num_threads,
 	int ret;
 	int err = 0;
 
-	root = open_ctree(input, 0, OPEN_CTREE_ALLOW_TRANSID_MISMATCH);
+	root = open_ctree(input, 0, OPEN_CTREE_ALLOW_TRANSID_MISMATCH |
+			  OPEN_CTREE_SKIP_LEAF_ITEM_CHECKS);
 	if (!root) {
 		error("open ctree failed");
 		return -EIO;
@@ -1366,7 +1370,7 @@ static void write_backup_supers(int fd, u8 *buf)
 			break;
 		btrfs_set_super_bytenr(super, bytenr);
 		csum_block(buf, BTRFS_SUPER_INFO_SIZE);
-		ret = pwrite64(fd, buf, BTRFS_SUPER_INFO_SIZE, bytenr);
+		ret = pwrite(fd, buf, BTRFS_SUPER_INFO_SIZE, bytenr);
 		if (ret < BTRFS_SUPER_INFO_SIZE) {
 			if (ret < 0)
 				error(
@@ -1399,7 +1403,7 @@ static int restore_one_work(struct mdrestore_struct *mdres,
 	int compress_method = mdres->compress_method;
 	int ret;
 
-	ASSERT(is_power_of_2(bufsize));
+	UASSERT(is_power_of_2(bufsize));
 
 	if (compress_method == COMPRESS_ZLIB) {
 		strm.zalloc = Z_NULL;
@@ -1487,12 +1491,12 @@ static int restore_one_work(struct mdrestore_struct *mdres,
 				else
 					bytenr = logical;
 
-				ret = pwrite64(outfd, buffer + offset, chunk_size, bytenr);
+				ret = pwrite(outfd, buffer + offset, chunk_size, bytenr);
 				if (ret != chunk_size)
 					goto write_error;
 
 				if (physical_dup)
-					ret = pwrite64(outfd, buffer + offset,
+					ret = pwrite(outfd, buffer + offset,
 						       chunk_size, physical_dup);
 				if (ret != chunk_size)
 					goto write_error;
@@ -2451,7 +2455,7 @@ static int fixup_device_size(struct btrfs_trans_handle *trans,
 	}
 	if (S_ISREG(buf.st_mode)) {
 		/* Don't forget to enlarge the real file */
-		ret = ftruncate64(out_fd, dev_size);
+		ret = ftruncate(out_fd, dev_size);
 		if (ret < 0) {
 			error("failed to enlarge result image: %m");
 			return -errno;
@@ -2695,7 +2699,7 @@ static int iter_tree_blocks(struct btrfs_fs_info *fs_info,
 				continue;
 			ri = btrfs_item_ptr(eb, i, struct btrfs_root_item);
 			bytenr = btrfs_disk_root_bytenr(eb, ri);
-			tmp = read_tree_block(fs_info, bytenr, 0);
+			tmp = read_tree_block(fs_info, bytenr, 0, 0, 0, NULL);
 			if (!extent_buffer_uptodate(tmp)) {
 				error("unable to read log root block");
 				return -EIO;
@@ -2706,7 +2710,7 @@ static int iter_tree_blocks(struct btrfs_fs_info *fs_info,
 				return ret;
 		} else {
 			bytenr = btrfs_node_blockptr(eb, i);
-			tmp = read_tree_block(fs_info, bytenr, 0);
+			tmp = read_tree_block(fs_info, bytenr, 0, 0, 0, NULL);
 			if (!extent_buffer_uptodate(tmp)) {
 				error("unable to read log root block");
 				return -EIO;
@@ -2795,7 +2799,7 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 
 		ocf.filename = target;
 		ocf.flags = OPEN_CTREE_WRITES | OPEN_CTREE_RESTORE |
-			    OPEN_CTREE_PARTIAL;
+			    OPEN_CTREE_PARTIAL | OPEN_CTREE_SKIP_LEAF_ITEM_CHECKS;
 		info = open_ctree_fs_info(&ocf);
 		if (!info) {
 			error("open ctree failed");
@@ -2861,7 +2865,8 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 					  OPEN_CTREE_PARTIAL |
 					  OPEN_CTREE_WRITES |
 					  OPEN_CTREE_NO_DEVICES |
-					  OPEN_CTREE_ALLOW_TRANSID_MISMATCH);
+					  OPEN_CTREE_ALLOW_TRANSID_MISMATCH |
+					  OPEN_CTREE_SKIP_LEAF_ITEM_CHECKS);
 		if (!root) {
 			error("open ctree failed in %s", target);
 			ret = -EIO;
@@ -2880,7 +2885,8 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 
 		if (!info) {
 			root = open_ctree_fd(fileno(out), target, 0,
-					     OPEN_CTREE_ALLOW_TRANSID_MISMATCH);
+					     OPEN_CTREE_ALLOW_TRANSID_MISMATCH |
+					     OPEN_CTREE_SKIP_LEAF_ITEM_CHECKS);
 			if (!root) {
 				error("open ctree failed in %s", target);
 				ret = -EIO;
@@ -2910,7 +2916,7 @@ static int restore_metadump(const char *input, FILE *out, int old_restore,
 			goto out;
 		}
 		if (S_ISREG(st.st_mode) && st.st_size < dev_size) {
-			ret = ftruncate64(fileno(out), dev_size);
+			ret = ftruncate(fileno(out), dev_size);
 			if (ret < 0) {
 				error(
 		"failed to enlarge result image file from %llu to %llu: %m",
@@ -3007,7 +3013,7 @@ static int update_disk_super_on_device(struct btrfs_fs_info *info,
 	memcpy(dev_item->fsid, fs_uuid, BTRFS_UUID_SIZE);
 	csum_block((u8 *)&disk_super, BTRFS_SUPER_INFO_SIZE);
 
-	ret = pwrite64(fp, &disk_super, BTRFS_SUPER_INFO_SIZE, BTRFS_SUPER_INFO_OFFSET);
+	ret = pwrite(fp, &disk_super, BTRFS_SUPER_INFO_SIZE, BTRFS_SUPER_INFO_OFFSET);
 	if (ret != BTRFS_SUPER_INFO_SIZE) {
 		if (ret < 0) {
 			errno = ret;
@@ -3223,7 +3229,8 @@ int BOX_MAIN(image)(int argc, char *argv[])
 		int i;
 
 		ocf.filename = target;
-		ocf.flags = OPEN_CTREE_PARTIAL | OPEN_CTREE_RESTORE;
+		ocf.flags = OPEN_CTREE_PARTIAL | OPEN_CTREE_RESTORE |
+			OPEN_CTREE_SKIP_LEAF_ITEM_CHECKS;
 		info = open_ctree_fs_info(&ocf);
 		if (!info) {
 			error("open ctree failed at %s", target);

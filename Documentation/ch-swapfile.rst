@@ -1,11 +1,14 @@
-A swapfile is file-backed memory that the system uses to temporarily offload
-the RAM.  It is supported since kernel 5.0. Use ``swapon(8)`` to activate the
-swapfile. There are some limitations of the implementation in BTRFS and Linux
-swap subsystem:
+A swapfile, when active, is a file-backed swap area.  It is supported since kernel 5.0.
+Use ``swapon(8)`` to activate it, until then (respectively again after deactivating it
+with ``swapoff(8)``) it's just a normal file (with NODATACOW set), for which the special
+restrictions for active swapfiles don't apply.
+
+There are some limitations of the implementation in BTRFS and Linux swap
+subsystem:
 
 * filesystem - must be only single device
 * filesystem - must have only *single* data profile
-* swapfile - the containing subvolume cannot be snapshotted
+* subvolume - cannot be snapshotted if it contains any active swapfiles
 * swapfile - must be preallocated (i.e. no holes)
 * swapfile - must be NODATACOW (i.e. also NODATASUM, no compression)
 
@@ -18,12 +21,14 @@ swap.
 With active swapfiles, the following whole-filesystem operations will skip
 swapfile extents or may fail:
 
-* balance - block groups with swapfile extents are skipped and reported, the
-  rest will be processed normally
+* balance - block groups with extents of any active swapfiles are skipped and
+  reported, the rest will be processed normally
 * resize grow - unaffected
-* resize shrink - works as long as the extents are outside of the shrunk range
-* device add - a new device does not interfere with existing swapfile and this
-  operation will work, though no new swapfile can be activated afterwards
+* resize shrink - works as long as the extents of any active swapfiles are
+  outside of the shrunk range
+* device add - if the new devices do not interfere with any already active swapfiles
+  this operation will work, though no new swapfile can be activated
+  afterwards
 * device delete - if the device has been added as above, it can be also deleted
 * device replace - ditto
 
@@ -47,14 +52,14 @@ Since version 6.1 it's possible to create the swapfile in a single command
 
 .. code-block:: bash
 
-        # btrfs filesystem mkswapfile swapfile
+        # btrfs filesystem mkswapfile --size 2G swapfile
         # swapon swapfile
 
 Please note that the UUID returned by the *mkswap* utility identifies the swap
 "filesystem" and because it's stored in a file, it's not generally visible and
 usable as an identifier unlike if it was on a block device.
 
-The file will appear in */proc/swaps*:
+Once activated the file will appear in */proc/swaps*:
 
 .. code-block:: none
 
@@ -63,7 +68,7 @@ The file will appear in */proc/swaps*:
         /path/swapfile    file          2097152        0         -2
 
 The swapfile can be created as one-time operation or, once properly created,
-activated on each boot by the **swapon -a** command (usually started by the
+activated on each boot by the :command:`swapon -a` command (usually started by the
 service manager). Add the following entry to */etc/fstab*, assuming the
 filesystem that provides the */path* has been already mounted at this point.
 Additional mount options relevant for the swapfile can be set too (like
@@ -73,6 +78,16 @@ priority, not the BTRFS mount options).
 
         /path/swapfile        none        swap        defaults      0 0
 
+From now on the subvolume with the active swapfile cannot be snapshotted until
+the swapfile is deactivated again by :command:`swapoff`. Then the swapfile is a
+regular file and the subvolume can be snapshotted again, though this would prevent
+another activation any swapfile that has been snapshotted. New swapfiles (not
+snapshotted) can be created and activated.
+
+Otherwise, an inactive swapfile does not affect the containing subvolume. Activation
+creates a temporary in-memory status and prevents some file operations, but is
+not stored permanently.
+
 Hibernation
 -----------
 
@@ -81,14 +96,14 @@ hibernation a resume offset must be written to file */sys/power/resume_offset*
 or the kernel command line parameter *resume_offset* must be set.
 
 The value is the physical offset on the device. Note that **this is not the same
-value that** ``filefrag`` **prints as physical offset!**
+value that** :command:`filefrag` **prints as physical offset!**
 
 Btrfs filesystem uses mapping between logical and physical addresses but here
 the physical can still map to one or more device-specific physical block
 addresses. It's the device-specific physical offset that is suitable as resume
 offset.
 
-Since version 6.1 there's a command ``btrfs inspect-internal map-swapfile`` that will
+Since version 6.1 there's a command :command:`btrfs inspect-internal map-swapfile` that will
 print the device physical offset and the adjusted value for */sys/power/resume_offset*.
 Note that the value is divided by page size, i.e. it's not the offset itself.
 
@@ -114,10 +129,10 @@ Troubleshooting
 ---------------
 
 If the swapfile activation fails please verify that you followed all the steps
-above or check the system log (e.g. ``dmesg`` or ``journalctl``) for more
+above or check the system log (e.g. :command:`dmesg` or :command:`journalctl`) for more
 information.
 
-Notably, the *swapon* utility exits with a message that does not say what
+Notably, the :command:`swapon` utility exits with a message that does not say what
 failed:
 
 .. code-block:: none

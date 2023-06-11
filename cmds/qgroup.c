@@ -29,6 +29,7 @@
 #include "kernel-lib/list.h"
 #include "kernel-lib/rbtree.h"
 #include "kernel-lib/rbtree_types.h"
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
 #include "common/open-utils.h"
 #include "common/utils.h"
@@ -39,7 +40,6 @@
 #include "common/messages.h"
 #include "cmds/commands.h"
 #include "cmds/qgroup.h"
-#include "ioctl.h"
 
 #define BTRFS_QGROUP_NFILTERS_INCREASE (2 * BTRFS_QGROUP_FILTER_MAX)
 #define BTRFS_QGROUP_NCOMPS_INCREASE (2 * BTRFS_QGROUP_COMP_MAX)
@@ -222,7 +222,7 @@ static void qgroup_setup_print_column(enum btrfs_qgroup_column_enum column)
 {
 	int i;
 
-	ASSERT(0 <= column && column <= BTRFS_QGROUP_ALL);
+	UASSERT(0 <= column && column <= BTRFS_QGROUP_ALL);
 
 	if (column < BTRFS_QGROUP_ALL) {
 		btrfs_qgroup_columns[column].need_print = 1;
@@ -289,7 +289,7 @@ static void print_qgroup_column_add_blank(enum btrfs_qgroup_column_enum column,
 		printf(" ");
 }
 
-void print_path_column(struct btrfs_qgroup *qgroup)
+static void print_path_column(struct btrfs_qgroup *qgroup)
 {
 	struct btrfs_qgroup_list *list = NULL;
 
@@ -332,7 +332,7 @@ static void print_qgroup_column(struct btrfs_qgroup *qgroup,
 	int unit_mode = btrfs_qgroup_columns[column].unit_mode;
 	int max_len = btrfs_qgroup_columns[column].max_len;
 
-	ASSERT(0 <= column && column < BTRFS_QGROUP_ALL);
+	UASSERT(0 <= column && column < BTRFS_QGROUP_ALL);
 
 	switch (column) {
 
@@ -617,9 +617,9 @@ static int qgroup_setup_comparer(struct btrfs_qgroup_comparer_set **comp_set,
 	struct btrfs_qgroup_comparer_set *set = *comp_set;
 	int size;
 
-	ASSERT(set != NULL);
-	ASSERT(comparer < BTRFS_QGROUP_COMP_MAX);
-	ASSERT(set->ncomps <= set->total);
+	UASSERT(set != NULL);
+	UASSERT(comparer < BTRFS_QGROUP_COMP_MAX);
+	UASSERT(set->ncomps <= set->total);
 
 	if (set->ncomps == set->total) {
 		void *tmp;
@@ -641,7 +641,7 @@ static int qgroup_setup_comparer(struct btrfs_qgroup_comparer_set **comp_set,
 		*comp_set = set;
 	}
 
-	ASSERT(set->comps[set->ncomps].comp_func == NULL);
+	UASSERT(set->comps[set->ncomps].comp_func == NULL);
 
 	set->comps[set->ncomps].comp_func = all_comp_funcs[comparer];
 	set->comps[set->ncomps].is_descending = is_descending;
@@ -807,12 +807,11 @@ static int update_qgroup_info(int fd, struct qgroup_lookup *qgroup_lookup, u64 q
 		return PTR_ERR(bq);
 
 	bq->info.generation = btrfs_stack_qgroup_info_generation(info);
-	bq->info.referenced = btrfs_stack_qgroup_info_referenced(info);
+	bq->info.referenced = btrfs_stack_qgroup_info_rfer(info);
 	bq->info.referenced_compressed =
-			btrfs_stack_qgroup_info_referenced_compressed(info);
-	bq->info.exclusive = btrfs_stack_qgroup_info_exclusive(info);
-	bq->info.exclusive_compressed =
-			btrfs_stack_qgroup_info_exclusive_compressed(info);
+		btrfs_stack_qgroup_info_rfer_cmpr(info);
+	bq->info.exclusive = btrfs_stack_qgroup_info_excl(info);
+	bq->info.exclusive_compressed = btrfs_stack_qgroup_info_excl_cmpr(info);
 
 	return 0;
 }
@@ -828,13 +827,10 @@ static int update_qgroup_limit(int fd, struct qgroup_lookup *qgroup_lookup,
 		return PTR_ERR(bq);
 
 	bq->limit.flags = btrfs_stack_qgroup_limit_flags(limit);
-	bq->limit.max_referenced =
-			btrfs_stack_qgroup_limit_max_referenced(limit);
-	bq->limit.max_exclusive =
-			btrfs_stack_qgroup_limit_max_exclusive(limit);
-	bq->limit.rsv_referenced =
-			btrfs_stack_qgroup_limit_rsv_referenced(limit);
-	bq->limit.rsv_exclusive = btrfs_stack_qgroup_limit_rsv_exclusive(limit);
+	bq->limit.max_referenced = btrfs_stack_qgroup_limit_max_rfer(limit);
+	bq->limit.max_exclusive = btrfs_stack_qgroup_limit_max_excl(limit);
+	bq->limit.rsv_referenced = btrfs_stack_qgroup_limit_rsv_rfer(limit);
+	bq->limit.rsv_exclusive = btrfs_stack_qgroup_limit_rsv_excl(limit);
 
 	return 0;
 }
@@ -1014,9 +1010,9 @@ static int qgroup_setup_filter(struct btrfs_qgroup_filter_set **filter_set,
 	struct btrfs_qgroup_filter_set *set = *filter_set;
 	int size;
 
-	ASSERT(set != NULL);
-	ASSERT(filter < BTRFS_QGROUP_FILTER_MAX);
-	ASSERT(set->nfilters <= set->total);
+	UASSERT(set != NULL);
+	UASSERT(filter < BTRFS_QGROUP_FILTER_MAX);
+	UASSERT(set->nfilters <= set->total);
 
 	if (set->nfilters == set->total) {
 		void *tmp;
@@ -1038,7 +1034,7 @@ static int qgroup_setup_filter(struct btrfs_qgroup_filter_set **filter_set,
 		*filter_set = set;
 	}
 
-	ASSERT(set->filters[set->nfilters].filter_func == NULL);
+	UASSERT(set->filters[set->nfilters].filter_func == NULL);
 	set->filters[set->nfilters].filter_func = all_filter_funcs[filter];
 	set->filters[set->nfilters].data = data;
 	set->nfilters++;
@@ -1114,7 +1110,7 @@ static void __update_columns_max_len(struct btrfs_qgroup *bq,
 	int len;
 	unsigned unit_mode = btrfs_qgroup_columns[column].unit_mode;
 
-	ASSERT(0 <= column && column < BTRFS_QGROUP_ALL);
+	UASSERT(0 <= column && column < BTRFS_QGROUP_ALL);
 
 	switch (column) {
 
@@ -1443,10 +1439,10 @@ static const struct rowspec qgroup_show_rowspec[] = {
 	{ .key = "qgroupid", .fmt = "qgroupid", .out_json = "qgroupid" },
 	{ .key = "referenced", .fmt = "%llu", .out_json = "referenced" },
 	{ .key = "exclusive", .fmt = "%llu", .out_json = "exclusive" },
-	{ .key = "max_referenced", .fmt = "size", .out_json = "max_referenced" },
+	{ .key = "max_referenced", .fmt = "%llu", .out_json = "max_referenced" },
 	/* Special value if limits not set. */
 	{ .key = "max_referenced-none", .fmt = "%s", .out_json = "max_referenced" },
-	{ .key = "max_exclusive", .fmt = "size", .out_json = "max_exclusive" },
+	{ .key = "max_exclusive", .fmt = "%llu", .out_json = "max_exclusive" },
 	/* Special value if limits not set. */
 	{ .key = "max_exclusive-none", .fmt = "%s", .out_json = "max_exclusive" },
 	{ .key = "path", .fmt = "str", .out_json = "path" },
@@ -1475,7 +1471,7 @@ static void print_all_qgroups_json(struct qgroup_lookup *qgroup_lookup)
 		fmt_print_start_group(&fctx, NULL, JSON_TYPE_MAP);
 
 		fmt_print(&fctx, "qgroupid",
-				btrfs_qgroup_level(qgroup->qgroupid),
+				(int)btrfs_qgroup_level(qgroup->qgroupid),
 				btrfs_qgroup_subvolid(qgroup->qgroupid));
 		fmt_print(&fctx, "referenced", qgroup->info.referenced);
 		if (qgroup->limit.flags & BTRFS_QGROUP_LIMIT_MAX_RFER)

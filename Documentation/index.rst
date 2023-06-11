@@ -8,13 +8,17 @@ Welcome to BTRFS documentation!
    :caption: Overview
 
    Introduction
+   Status
    man-index
    Administration
    Hardware
    CHANGES
    Feature-by-version
+   Kernel-by-version
+   Contributors
    Glossary
    INSTALL
+   Source-repositories
 
 .. toctree::
    :maxdepth: 1
@@ -46,10 +50,16 @@ Welcome to BTRFS documentation!
 
 .. toctree::
    :maxdepth: 1
-   :caption: Project information
+   :caption: Developer documentation
 
-   Source-repositories
-   Contributors
+   dev/Development-notes
+   dev/Developer-s-FAQ
+   dev/Experimental
+   dev/dev-btrfs-design
+   dev/dev-btrees
+   dev/On-disk-format
+   dev/dev-send-stream
+   btrfs-ioctl
 
 .. toctree::
    :maxdepth: 1
@@ -58,8 +68,4 @@ Welcome to BTRFS documentation!
    Quick-start
    Interoperability
    trouble-index
-   Experimental
-   btrfs-ioctl
    DocConventions
-   dev-send-stream
-   Kernel-by-version

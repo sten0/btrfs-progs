@@ -19,13 +19,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <uuid/uuid.h>
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/disk-io.h"
 #include "kernel-shared/extent_io.h"
 #include "kernel-shared/volumes.h"
 #include "common/defs.h"
 #include "common/messages.h"
-#include "ioctl.h"
+#include "tune/tune.h"
 
 static int change_fsid_prepare(struct btrfs_fs_info *fs_info, uuid_t new_fsid)
 {
@@ -111,7 +112,7 @@ static int change_extent_tree_uuid(struct btrfs_fs_info *fs_info, uuid_t new_fsi
 			goto next;
 
 		bytenr = key.objectid;
-		eb = read_tree_block(fs_info, bytenr, 0);
+		eb = read_tree_block(fs_info, bytenr, 0, 0, 0, NULL);
 		if (IS_ERR(eb)) {
 			error("failed to read tree block: %llu", bytenr);
 			ret = PTR_ERR(eb);

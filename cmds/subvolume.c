@@ -29,6 +29,7 @@
 #include <time.h>
 #include <uuid/uuid.h>
 #include "libbtrfsutil/btrfsutil.h"
+#include "kernel-shared/uapi/btrfs.h"
 #include "kernel-shared/ctree.h"
 #include "common/defs.h"
 #include "common/internal.h"
@@ -42,7 +43,6 @@
 #include "common/units.h"
 #include "cmds/commands.h"
 #include "cmds/qgroup.h"
-#include "ioctl.h"
 
 static int wait_for_subvolume_cleaning(int fd, size_t count, uint64_t *ids,
 				       int sleep_interval)
@@ -652,9 +652,11 @@ static int cmd_subvolume_snapshot(const struct cmd_struct *cmd, int argc, char *
 	strncpy_null(args.name, newname);
 
 	res = ioctl(fddst, BTRFS_IOC_SNAP_CREATE_V2, &args);
-
 	if (res < 0) {
-		error("cannot snapshot '%s': %m", subvol);
+		if (errno == ETXTBSY)
+			error("cannot snapshot '%s': source subvolume contains an active swapfile (%m)", subvol);
+		else
+			error("cannot snapshot '%s': %m", subvol);
 		goto out;
 	}
 

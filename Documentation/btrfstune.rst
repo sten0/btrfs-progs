@@ -9,7 +9,7 @@ SYNOPSIS
 DESCRIPTION
 -----------
 
-**btrfstune** can be used to enable, disable, or set various filesystem
+:command:`btrfstune` can be used to enable, disable, or set various filesystem
 parameters. The filesystem must be unmounted.
 
 The common use case is to enable features that were not enabled at mkfs time.
@@ -24,10 +24,23 @@ means.  Please refer to the *FILESYSTEM FEATURES* in :doc:`btrfs(5)<btrfs-man5>`
 OPTIONS
 -------
 
--b
-        (since kernel 6.1, needs experimental build of btrfs-progs)
-        Enable block group tree feature (greatly reduce mount time),
-        enabled by mkfs feature *block-group-tree*.
+--convert-to-block-group-tree
+        (since kernel 6.1)
+
+        Convert portions of extent tree that tracks block groups to a separate
+        block gruop tree. This greatly reduces mount time. Can be also enabled
+        at mkfs time.
+
+--convert-from-block-group-tree
+        (since kernel 6.1)
+
+        Convert block groups tracked in standalone block group tree back to
+        extent tree and remove 'block-group-tree' feature bit from the filesystem.
+
+--convert-to-free-space-tree
+        (since kernel 4.5)
+
+        Convert to free-space-tree feature (v2 of space cache).
 
 -f
         Allow dangerous changes, e.g. clear the seeding flag or change fsid.

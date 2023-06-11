@@ -21,6 +21,7 @@
 #include "kernel-shared/free-space-tree.h"
 #include "kernel-shared/volumes.h"
 #include "kernel-shared/transaction.h"
+#include "kernel-shared/file-item.h"
 #include "common/internal.h"
 #include "common/messages.h"
 #include "check/common.h"
@@ -35,7 +36,7 @@
  */
 #define NR_BLOCK_GROUP_CLUSTER		(16)
 
-static int clear_free_space_cache(void)
+int btrfs_clear_v1_cache(struct btrfs_fs_info *fs_info)
 {
 	struct btrfs_trans_handle *trans;
 	struct btrfs_block_group *bg_cache;
@@ -43,7 +44,7 @@ static int clear_free_space_cache(void)
 	u64 current = 0;
 	int ret = 0;
 
-	trans = btrfs_start_transaction(gfs_info->tree_root, 0);
+	trans = btrfs_start_transaction(fs_info->tree_root, 0);
 	if (IS_ERR(trans)) {
 		ret = PTR_ERR(trans);
 		errno = -ret;
@@ -53,7 +54,7 @@ static int clear_free_space_cache(void)
 
 	/* Clear all free space cache inodes and its extent data */
 	while (1) {
-		bg_cache = btrfs_lookup_first_block_group(gfs_info, current);
+		bg_cache = btrfs_lookup_first_block_group(fs_info, current);
 		if (!bg_cache)
 			break;
 		ret = btrfs_clear_free_space_cache(trans, bg_cache);
@@ -64,13 +65,13 @@ static int clear_free_space_cache(void)
 		nr_handled++;
 
 		if (nr_handled == NR_BLOCK_GROUP_CLUSTER) {
-			ret = btrfs_commit_transaction(trans, gfs_info->tree_root);
+			ret = btrfs_commit_transaction(trans, fs_info->tree_root);
 			if (ret < 0) {
 				errno = -ret;
 				error_msg(ERROR_MSG_START_TRANS, "%m");
 				return ret;
 			}
-			trans = btrfs_start_transaction(gfs_info->tree_root, 0);
+			trans = btrfs_start_transaction(fs_info->tree_root, 0);
 			if (IS_ERR(trans)) {
 				ret = PTR_ERR(trans);
 				errno = -ret;
@@ -81,8 +82,8 @@ static int clear_free_space_cache(void)
 		current = bg_cache->start + bg_cache->length;
 	}
 
-	btrfs_set_super_cache_generation(gfs_info->super_copy, (u64)-1);
-	ret = btrfs_commit_transaction(trans, gfs_info->tree_root);
+	btrfs_set_super_cache_generation(fs_info->super_copy, (u64)-1);
+	ret = btrfs_commit_transaction(trans, fs_info->tree_root);
 	if (ret < 0) {
 		errno = -ret;
 		error_msg(ERROR_MSG_START_TRANS, "%m");
@@ -90,16 +91,16 @@ static int clear_free_space_cache(void)
 	return ret;
 }
 
-int do_clear_free_space_cache(int clear_version)
+int do_clear_free_space_cache(struct btrfs_fs_info *fs_info, int clear_version)
 {
 	int ret = 0;
 
 	if (clear_version == 1) {
-		if (btrfs_fs_compat_ro(gfs_info, FREE_SPACE_TREE))
+		if (btrfs_fs_compat_ro(fs_info, FREE_SPACE_TREE))
 			warning(
 "free space cache v2 detected, use --clear-space-cache v2, proceeding with clearing v1");
 
-		ret = clear_free_space_cache();
+		ret = btrfs_clear_v1_cache(fs_info);
 		if (ret) {
 			error("failed to clear free space cache");
 			ret = 1;
@@ -107,13 +108,13 @@ int do_clear_free_space_cache(int clear_version)
 			printf("Free space cache cleared\n");
 		}
 	} else if (clear_version == 2) {
-		if (!btrfs_fs_compat_ro(gfs_info, FREE_SPACE_TREE)) {
+		if (!btrfs_fs_compat_ro(fs_info, FREE_SPACE_TREE)) {
 			printf("no free space cache v2 to clear\n");
 			ret = 0;
 			goto close_out;
 		}
 		printf("Clear free space cache v2\n");
-		ret = btrfs_clear_free_space_tree(gfs_info);
+		ret = btrfs_clear_free_space_tree(fs_info);
 		if (ret) {
 			error("failed to clear free space cache v2: %d", ret);
 			ret = 1;
@@ -127,6 +128,7 @@ close_out:
 
 static int check_free_space_tree(struct btrfs_root *root)
 {
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	struct btrfs_key key = { 0 };
 	struct btrfs_path path;
 	int ret = 0;
@@ -158,7 +160,7 @@ static int check_free_space_tree(struct btrfs_root *root)
 			goto out;
 		}
 
-		bg = btrfs_lookup_first_block_group(gfs_info, key.objectid);
+		bg = btrfs_lookup_first_block_group(fs_info, key.objectid);
 		if (!bg) {
 			fprintf(stderr,
 		"We have a space info key for a block group that doesn't exist\n");
@@ -187,7 +189,7 @@ static int check_free_space_trees(struct btrfs_root *root)
 	};
 	int ret = 0;
 
-	free_space_root = btrfs_global_root(gfs_info, &key);
+	free_space_root = btrfs_global_root(root->fs_info, &key);
 	while (1) {
 		ret = check_free_space_tree(free_space_root);
 		if (ret)
@@ -214,7 +216,7 @@ static int check_cache_range(struct btrfs_root *root,
 
 	for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++) {
 		bytenr = btrfs_sb_offset(i);
-		ret = btrfs_rmap_block(gfs_info,
+		ret = btrfs_rmap_block(root->fs_info,
 				       cache->start, bytenr,
 				       &logical, &nr, &stripe_len);
 		if (ret)
@@ -309,7 +311,7 @@ static int verify_space_cache(struct btrfs_root *root,
 
 	while (start < bg_end) {
 		ret = find_first_extent_bit(used, cache->start, &start, &end,
-					    EXTENT_DIRTY);
+					    EXTENT_DIRTY, NULL);
 		if (ret || start >= bg_end) {
 			ret = 0;
 			break;
@@ -321,7 +323,7 @@ static int verify_space_cache(struct btrfs_root *root,
 				return ret;
 		}
 		end = min(end, bg_end - 1);
-		clear_extent_dirty(used, start, end);
+		clear_extent_dirty(used, start, end, NULL);
 		start = end + 1;
 		last_end = start;
 	}
@@ -340,29 +342,30 @@ static int verify_space_cache(struct btrfs_root *root,
 	return ret;
 }
 
-static int check_space_cache(struct btrfs_root *root)
+static int check_space_cache(struct btrfs_root *root, struct task_ctx *task_ctx)
 {
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	struct extent_io_tree used;
 	struct btrfs_block_group *cache;
 	u64 start = BTRFS_SUPER_INFO_OFFSET + BTRFS_SUPER_INFO_SIZE;
 	int ret;
 	int error = 0;
 
-	extent_io_tree_init(&used);
-	ret = btrfs_mark_used_blocks(gfs_info, &used);
+	extent_io_tree_init(fs_info, &used, 0);
+	ret = btrfs_mark_used_blocks(fs_info, &used);
 	if (ret)
 		return ret;
 
 	while (1) {
-		g_task_ctx.item_count++;
-		cache = btrfs_lookup_first_block_group(gfs_info, start);
+		task_ctx->item_count++;
+		cache = btrfs_lookup_first_block_group(fs_info, start);
 		if (!cache)
 			break;
 
 		start = cache->start + cache->length;
 		if (!cache->free_space_ctl) {
 			if (btrfs_init_free_space_ctl(cache,
-						gfs_info->sectorsize)) {
+						fs_info->sectorsize)) {
 				ret = -ENOMEM;
 				break;
 			}
@@ -370,8 +373,8 @@ static int check_space_cache(struct btrfs_root *root)
 			btrfs_remove_free_space_cache(cache);
 		}
 
-		if (btrfs_fs_compat_ro(gfs_info, FREE_SPACE_TREE)) {
-			ret = exclude_super_stripes(gfs_info, cache);
+		if (btrfs_fs_compat_ro(fs_info, FREE_SPACE_TREE)) {
+			ret = exclude_super_stripes(fs_info, cache);
 			if (ret) {
 				errno = -ret;
 				fprintf(stderr,
@@ -379,8 +382,8 @@ static int check_space_cache(struct btrfs_root *root)
 				error++;
 				continue;
 			}
-			ret = load_free_space_tree(gfs_info, cache);
-			free_excluded_extents(gfs_info, cache);
+			ret = load_free_space_tree(fs_info, cache);
+			free_excluded_extents(fs_info, cache);
 			if (ret < 0) {
 				errno = -ret;
 				fprintf(stderr,
@@ -390,7 +393,7 @@ static int check_space_cache(struct btrfs_root *root)
 			}
 			error += ret;
 		} else {
-			ret = load_free_space_cache(gfs_info, cache);
+			ret = load_free_space_cache(fs_info, cache);
 			if (ret < 0)
 				error++;
 			if (ret <= 0)
@@ -404,38 +407,39 @@ static int check_space_cache(struct btrfs_root *root)
 			error++;
 		}
 	}
-	extent_io_tree_cleanup(&used);
+	extent_io_tree_release(&used);
 	return error ? -EINVAL : 0;
 }
 
 
-int validate_free_space_cache(struct btrfs_root *root)
+int validate_free_space_cache(struct btrfs_root *root, struct task_ctx *task_ctx)
 {
+	struct btrfs_fs_info *fs_info = root->fs_info;
 	int ret;
 
 	/*
 	 * If cache generation is between 0 and -1ULL, sb generation must be
 	 * equal to sb cache generation or the v1 space caches are outdated.
 	 */
-	if (btrfs_super_cache_generation(gfs_info->super_copy) != -1ULL &&
-	    btrfs_super_cache_generation(gfs_info->super_copy) != 0 &&
-	    btrfs_super_generation(gfs_info->super_copy) !=
-	    btrfs_super_cache_generation(gfs_info->super_copy)) {
+	if (btrfs_super_cache_generation(fs_info->super_copy) != -1ULL &&
+	    btrfs_super_cache_generation(fs_info->super_copy) != 0 &&
+	    btrfs_super_generation(fs_info->super_copy) !=
+	    btrfs_super_cache_generation(fs_info->super_copy)) {
 		printf(
 "cache and super generation don't match, space cache will be invalidated\n");
 		return 0;
 	}
 
-	ret = check_space_cache(root);
-	if (!ret && btrfs_fs_compat_ro(gfs_info, FREE_SPACE_TREE))
+	ret = check_space_cache(root, task_ctx);
+	if (!ret && btrfs_fs_compat_ro(fs_info, FREE_SPACE_TREE))
 		ret = check_free_space_trees(root);
-	if (ret && btrfs_fs_compat_ro(gfs_info, FREE_SPACE_TREE) &&
+	if (ret && btrfs_fs_compat_ro(fs_info, FREE_SPACE_TREE) &&
 	    opt_check_repair) {
-		ret = do_clear_free_space_cache(2);
+		ret = do_clear_free_space_cache(fs_info, 2);
 		if (ret)
 			goto out;
 
-		ret = btrfs_create_free_space_tree(gfs_info);
+		ret = btrfs_create_free_space_tree(fs_info);
 		if (ret)
 			error("couldn't repair freespace tree");
 	}
@@ -462,6 +466,7 @@ int truncate_free_ino_items(struct btrfs_root *root)
 	while (1) {
 		struct extent_buffer *leaf;
 		struct btrfs_file_extent_item *fi;
+		struct btrfs_root *csum_root;
 		struct btrfs_key found_key;
 		u8 found_type;
 
@@ -505,14 +510,15 @@ int truncate_free_ino_items(struct btrfs_root *root)
 			fi = btrfs_item_ptr(leaf, path.slots[0],
 					    struct btrfs_file_extent_item);
 			extent_type = btrfs_file_extent_type(leaf, fi);
-			ASSERT(extent_type == BTRFS_FILE_EXTENT_REG);
+			UASSERT(extent_type == BTRFS_FILE_EXTENT_REG);
 			extent_disk_bytenr = btrfs_file_extent_disk_bytenr(leaf, fi);
 			extent_num_bytes = btrfs_file_extent_disk_num_bytes (leaf, fi);
 			extent_offset = found_key.offset -
 					btrfs_file_extent_offset(leaf, fi);
-			ASSERT(extent_offset == 0);
-			ret = btrfs_free_extent(trans, root, extent_disk_bytenr,
-						extent_num_bytes, 0, root->objectid,
+			UASSERT(extent_offset == 0);
+			ret = btrfs_free_extent(trans, extent_disk_bytenr,
+						extent_num_bytes, 0,
+						root->objectid,
 						BTRFS_FREE_INO_OBJECTID, 0);
 			if (ret < 0) {
 				btrfs_abort_transaction(trans, ret);
@@ -520,7 +526,10 @@ int truncate_free_ino_items(struct btrfs_root *root)
 				goto out;
 			}
 
-			ret = btrfs_del_csums(trans, extent_disk_bytenr,
+			csum_root = btrfs_csum_root(trans->fs_info,
+						    extent_disk_bytenr);
+			ret = btrfs_del_csums(trans, csum_root,
+					      extent_disk_bytenr,
 					      extent_num_bytes);
 			if (ret < 0) {
 				btrfs_abort_transaction(trans, ret);
@@ -539,7 +548,7 @@ out:
 	return ret;
 }
 
-int clear_ino_cache_items(void)
+int clear_ino_cache_items(struct btrfs_fs_info *fs_info)
 {
 	int ret;
 	struct btrfs_path path;
@@ -550,7 +559,7 @@ int clear_ino_cache_items(void)
 	key.offset = 0;
 
 	btrfs_init_path(&path);
-	ret = btrfs_search_slot(NULL, gfs_info->tree_root, &key, &path,	0, 0);
+	ret = btrfs_search_slot(NULL, fs_info->tree_root, &key, &path,	0, 0);
 	if (ret < 0)
 		return ret;
 
@@ -563,7 +572,7 @@ int clear_ino_cache_items(void)
 			struct btrfs_root *root;
 
 			found_key.offset = (u64)-1;
-			root = btrfs_read_fs_root(gfs_info, &found_key);
+			root = btrfs_read_fs_root(fs_info, &found_key);
 			if (IS_ERR(root))
 				goto next;
 			ret = truncate_free_ino_items(root);
@@ -586,12 +595,12 @@ next:
 		if (key.objectid == BTRFS_FS_TREE_OBJECTID) {
 			key.objectid = BTRFS_FIRST_FREE_OBJECTID;
 			btrfs_release_path(&path);
-			ret = btrfs_search_slot(NULL, gfs_info->tree_root, &key,
+			ret = btrfs_search_slot(NULL, fs_info->tree_root, &key,
 						&path,	0, 0);
 			if (ret < 0)
 				return ret;
 		} else {
-			ret = btrfs_next_item(gfs_info->tree_root, &path);
+			ret = btrfs_next_item(fs_info->tree_root, &path);
 			if (ret < 0) {
 				goto out;
 			} else if (ret > 0) {
