@@ -93,7 +93,7 @@ Multi-Arch: same
 Section: python
 Depends: ${misc:Depends}, ${shlibs:Depends}, ${python3:Depends}
 Description: Checksumming Copy on Write Filesystem utilities (python3 bindings)
- Btrfs is a new copy on write filesystem for Linux aimed at implementing
+ Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
  administration.
  .
