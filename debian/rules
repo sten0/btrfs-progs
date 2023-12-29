@@ -42,6 +42,7 @@ override_dh_auto_install:
 override_dh_auto_test:
 
 override_dh_install:
+	UDEVDIR=`pkg-config udev --variable=udevdir` && dh_install -p btrfs-progs --autodest $${UDEVDIR#/}
 	dh_install
 	dh_missing --list-missing
 
