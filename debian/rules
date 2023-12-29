@@ -1,13 +1,11 @@
 #!/usr/bin/make -f
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
-include /usr/share/dpkg/buildtools.mk
+include /usr/share/dpkg/default.mk
 
 SHELL := sh -e
 
-CFLAGS := $(shell dpkg-buildflags --get CFLAGS) $(shell dpkg-buildflags --get CPPFLAGS)
-CFLAGS := $(patsubst -O2,-Os,$(CFLAGS))
-LDFLAGS := $(shell dpkg-buildflags --get LDFLAGS)
+CFLAGS := $(patsubst -O2,-Os,$(CFLAGS) $(CPPFLAGS))
 
 %:
 	dh ${@} --with bash-completion,python3
