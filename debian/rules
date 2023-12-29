@@ -1,12 +1,7 @@
 #!/usr/bin/make -f
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
-include /usr/share/dpkg/architecture.mk
-ifneq ($(DEB_HOST_GNU_TYPE),$(DEB_BUILD_GNU_TYPE))
-  CC := $(DEB_HOST_GNU_TYPE)-gcc
-else
-  CC := gcc
-endif
+include /usr/share/dpkg/buildtools.mk
 
 SHELL := sh -e
 
