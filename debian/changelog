@@ -1,3 +1,9 @@
+btrfs-progs (6.6.3-1.1~bpo12+1) UNRELEASED; urgency=medium
+
+  * Revert "Rename libraries for 64-bit time_t transition".
+
+ -- Nicholas D Steeves <sten@debian.org>  Mon, 01 Jul 2024 18:52:05 -0400
+
 btrfs-progs (6.6.3-1.1) unstable; urgency=medium
 
   * Non-maintainer upload.

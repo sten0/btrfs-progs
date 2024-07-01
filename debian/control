@@ -2,7 +2,7 @@ Source: btrfs-progs
 Section: admin
 Priority: optional
 Maintainer: Adam Borowski <kilobyte@angband.pl>
-Build-Depends: dpkg-dev (>= 1.22.5), debhelper-compat (= 13),
+Build-Depends: debhelper-compat (= 13),
                libext2fs-dev,
                pkg-config,
                libacl1-dev,
@@ -40,10 +40,7 @@ Description: Checksumming Copy on Write Filesystem utilities
  This package contains utilities (mkfs, fsck) used to work with btrfs
  and an utility (btrfs-convert) to make a btrfs filesystem from an ext3.
 
-Package: libbtrfs0t64
-Provides: ${t64:Provides}
-Replaces: libbtrfs0
-Breaks: libbtrfs0 (<< ${source:Version})
+Package: libbtrfs0
 Architecture: linux-any
 Multi-Arch: same
 Section: libs
@@ -59,7 +56,7 @@ Package: libbtrfs-dev
 Architecture: linux-any
 Multi-Arch: same
 Section: libdevel
-Depends: ${misc:Depends}, ${shlibs:Depends}, libbtrfs0t64 (= ${binary:Version})
+Depends: ${misc:Depends}, ${shlibs:Depends}, libbtrfs0 (= ${binary:Version})
 Description: Checksumming Copy on Write Filesystem utilities (development headers)
  Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
@@ -67,10 +64,7 @@ Description: Checksumming Copy on Write Filesystem utilities (development header
  .
  This package contains development headers for the libbtrfs library.
 
-Package: libbtrfsutil1t64
-Provides: ${t64:Provides}
-Replaces: libbtrfsutil1
-Breaks: libbtrfsutil1 (<< ${source:Version})
+Package: libbtrfsutil1
 Architecture: linux-any
 Multi-Arch: same
 Section: libs
@@ -86,7 +80,7 @@ Package: libbtrfsutil-dev
 Architecture: linux-any
 Multi-Arch: same
 Section: libdevel
-Depends: ${misc:Depends}, ${shlibs:Depends}, libbtrfsutil1t64 (= ${binary:Version})
+Depends: ${misc:Depends}, ${shlibs:Depends}, libbtrfsutil1 (= ${binary:Version})
 Description: Checksumming Copy on Write Filesystem utilities (util development headers)
  Btrfs is a copy on write filesystem for Linux aimed at implementing
  advanced features while focusing on fault tolerance, repair and easy
