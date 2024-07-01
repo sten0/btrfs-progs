@@ -5,7 +5,7 @@
  *
  * libbtrfsutil is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
+ * the Free Software Foundation, either version 2.1 of the License, or
  * (at your option) any later version.
  *
  * libbtrfsutil is distributed in the hope that it will be useful,
@@ -17,9 +17,9 @@
  * along with libbtrfsutil.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <errno.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <sys/ioctl.h>
 
 #include "btrfsutil_internal.h"

@@ -15,7 +15,6 @@
  */
 
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <sys/ioctl.h>
 #include <linux/major.h>
 #include <linux/kdev_t.h>
@@ -29,6 +28,8 @@
 #include <string.h>
 #include <errno.h>
 #include <ctype.h>
+#include <libgen.h>
+#include <limits.h>
 #include "common/path-utils.h"
 
 /*
@@ -49,10 +50,14 @@ int path_is_block_device(const char *path)
 }
 
 /*
- * check if given path is a mount point
- * return 1 if yes. 0 if no. -1 for error
+ * Check if given path is a mount point. (Note: a similar function also exists
+ * in libudev so it's been renamed to avoid clash.)
+ *
+ * Return: 1 if yes,
+ *         0 if no,
+ *        -1 for error
  */
-int path_is_mount_point(const char *path)
+int path_is_a_mount_point(const char *path)
 {
 	FILE *f;
 	struct mntent *mnt;
@@ -325,7 +330,7 @@ char *path_canonicalize(const char *path)
 		return strdup(path);
 	p = strrchr(canonical, '/');
 	if (p && strncmp(p, "/dm-", 4) == 0 && isdigit(*(p + 4))) {
-		char *dm = path_canonicalize(p + 1);
+		char *dm = path_canonicalize_dm_name(p + 1);
 
 		if (dm) {
 			free(canonical);
@@ -372,6 +377,39 @@ int path_is_dir(const char *path)
 		return -errno;
 
 	return !!S_ISDIR(st.st_mode);
+}
+
+/*
+ * Test if a path is recursively contained in parent.  Assumes parent and path
+ * are null terminated absolute paths.
+ *
+ * Returns:
+ *   0 - path not contained in parent
+ *   1 - path contained in parent
+ * < 0 - error
+ *
+ * e.g. (/, /foo) -> 1
+ *      (/foo, /) -> 0
+ *      (/foo, /foo/bar/baz) -> 1
+ */
+int path_is_in_dir(const char *parent, const char *path)
+{
+	char *tmp = strdup(path);
+	char *curr_dir = tmp;
+	int ret;
+
+	while (strcmp(parent, curr_dir) != 0) {
+		if (strcmp(curr_dir, "/") == 0) {
+			ret = 0;
+			goto out;
+		}
+		curr_dir = dirname(curr_dir);
+	}
+	ret = 1;
+
+out:
+	free(tmp);
+	return ret;
 }
 
 /*

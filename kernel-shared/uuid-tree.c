@@ -15,14 +15,20 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-#include <stdio.h>
-#include <stdlib.h>
-#include <uuid/uuid.h>
+
+#include "kerncompat.h"
 #include <sys/ioctl.h>
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+#include "kernel-lib/bitops.h"
+#include "kernel-shared/accessors.h"
+#include "kernel-shared/extent_io.h"
+#include "kernel-shared/uapi/btrfs.h"
+#include "kernel-shared/uapi/btrfs_tree.h"
 #include "kernel-shared/ctree.h"
 #include "kernel-shared/transaction.h"
-#include "kernel-shared/disk-io.h"
-#include "kernel-shared/print-tree.h"
+#include "common/messages.h"
 #include "common/utils.h"
 
 void btrfs_uuid_to_key(const u8 *uuid, struct btrfs_key *key)
@@ -108,4 +114,85 @@ int btrfs_lookup_uuid_received_subvol_item(int fd, const u8 *uuid,
 	return btrfs_uuid_tree_lookup_any(fd, uuid,
 					  BTRFS_UUID_KEY_RECEIVED_SUBVOL,
 					  subvol_id);
+}
+
+int btrfs_uuid_tree_remove(struct btrfs_trans_handle *trans, u8 *uuid, u8 type,
+		u64 subid)
+{
+	struct btrfs_fs_info *fs_info = trans->fs_info;
+	struct btrfs_root *uuid_root = fs_info->uuid_root;
+	int ret;
+	struct btrfs_path *path = NULL;
+	struct btrfs_key key;
+	struct extent_buffer *eb;
+	int slot;
+	unsigned long offset;
+	u32 item_size;
+	unsigned long move_dst;
+	unsigned long move_src;
+	unsigned long move_len;
+
+	if (!uuid_root) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	btrfs_uuid_to_key(uuid, &key);
+	key.type = type;
+
+	path = btrfs_alloc_path();
+	if (!path) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = btrfs_search_slot(trans, uuid_root, &key, path, -1, 1);
+	if (ret < 0) {
+		warning("error %d while searching for uuid item!", ret);
+		goto out;
+	}
+	if (ret > 0) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	eb = path->nodes[0];
+	slot = path->slots[0];
+	offset = btrfs_item_ptr_offset(eb, slot);
+	item_size = btrfs_item_size(eb, slot);
+	if (!IS_ALIGNED(item_size, sizeof(u64))) {
+		warning("uuid item with illegal size %u!", item_size);
+		ret = -ENOENT;
+		goto out;
+	}
+	while (item_size) {
+		__le64 read_subid;
+
+		read_extent_buffer(eb, &read_subid, offset, sizeof(read_subid));
+		if (le64_to_cpu(read_subid) == subid)
+			break;
+		offset += sizeof(read_subid);
+		item_size -= sizeof(read_subid);
+	}
+
+	if (!item_size) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	item_size = btrfs_item_size(eb, slot);
+	if (item_size == sizeof(subid)) {
+		ret = btrfs_del_item(trans, uuid_root, path);
+		goto out;
+	}
+
+	move_dst = offset;
+	move_src = offset + sizeof(subid);
+	move_len = item_size - (move_src - btrfs_item_ptr_offset(eb, slot));
+	memmove_extent_buffer(eb, move_dst, move_src, move_len);
+	btrfs_truncate_item(path, item_size - sizeof(subid), 1);
+
+out:
+	btrfs_free_path(path);
+	return ret;
 }

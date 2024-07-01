@@ -16,10 +16,15 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include "kerncompat.h"
+#include <errno.h>
+#include <string.h>
+#include "kernel-lib/bitops.h"
+#include "kernel-shared/accessors.h"
+#include "kernel-shared/extent_io.h"
+#include "kernel-shared/uapi/btrfs_tree.h"
 #include "kernel-shared/ctree.h"
-#include "kernel-shared/transaction.h"
 #include "kernel-shared/disk-io.h"
-#include "kernel-shared/print-tree.h"
 
 int btrfs_find_last_root(struct btrfs_root *root, u64 objectid,
 			struct btrfs_root_item *item, struct btrfs_key *key)
@@ -87,7 +92,7 @@ int btrfs_update_root(struct btrfs_trans_handle *trans, struct btrfs_root
 	l = path->nodes[0];
 	slot = path->slots[0];
 	ptr = btrfs_item_ptr_offset(l, slot);
-	old_len = btrfs_item_size_nr(l, slot);
+	old_len = btrfs_item_size(l, slot);
 
 	/*
 	 * If this is the first time we update the root item which originated
@@ -194,7 +199,6 @@ int btrfs_add_root_ref(struct btrfs_trans_handle *trans,
 	struct btrfs_root_ref *ref;
 	struct extent_buffer *leaf;
 	unsigned long ptr;
-
 
 	path = btrfs_alloc_path();
 	if (!path)
