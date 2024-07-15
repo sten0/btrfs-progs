@@ -1,3 +1,11 @@
+btrfs-progs (6.6.3-1.2~bpo12+1) UNRELEASED; urgency=medium
+
+  * Backport btrfs-progs to bookworm-backports:
+    - Revert "Rename libraries for 64-bit time_t transition"
+    - Revert "Switch Build-Depends from udev to systemd-dev"
+
+ -- Nicholas D Steeves <sten@debian.org>  Mon, 01 Jul 2024 18:52:05 -0400
+
 btrfs-progs (6.6.3-1.2) unstable; urgency=medium
 
   * Non-maintainer upload.
@@ -9,12 +17,6 @@ btrfs-progs (6.6.3-1.2) unstable; urgency=medium
   * Bump dependency on libext2fs-dev.
 
  -- Chris Hofstaedtler <zeha@debian.org>  Wed, 12 Jun 2024 21:22:17 +0200
-
-btrfs-progs (6.6.3-1.1~bpo12+1) UNRELEASED; urgency=medium
-
-  * Revert "Rename libraries for 64-bit time_t transition".
-
- -- Nicholas D Steeves <sten@debian.org>  Mon, 01 Jul 2024 18:52:05 -0400
 
 btrfs-progs (6.6.3-1.1) unstable; urgency=medium
 
