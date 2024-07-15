@@ -4,6 +4,7 @@ btrfs-progs (6.6.3-1.2~bpo12+1) UNRELEASED; urgency=medium
     - Revert "Rename libraries for 64-bit time_t transition"
     - Revert "Switch Build-Depends from udev to systemd-dev"
     - Revert "Install files into UsrMerged layout (DEP17 M2)"
+    - Revert "Change inode_includes to ext2fs_inode_includes"
 
  -- Nicholas D Steeves <sten@debian.org>  Mon, 01 Jul 2024 18:52:05 -0400
 
