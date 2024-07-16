@@ -7,7 +7,7 @@ btrfs-progs (6.6.3-1.2~bpo12+1) bookworm-backports; urgency=medium
     - Revert "Change inode_includes to ext2fs_inode_includes"
     - Revert "Bump dependency on libext2fs-dev".
 
- -- Nicholas D Steeves <sten@debian.org>  Mon, 15 Jul 2024 16:23:44 -0400
+ -- Nicholas D Steeves <sten@debian.org>  Mon, 15 Jul 2024 22:29:01 -0400
 
 btrfs-progs (6.6.3-1.2) unstable; urgency=medium
 
